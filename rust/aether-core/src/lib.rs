@@ -38,7 +38,7 @@ mod tests {
     use crate::ledger::{AetherLedger, SegmentStatus};
     use crate::rlnc::{RLNC_WINDOW, gf256_mul_acc};
     use crate::scheduler::{
-        BreakerState, LinkCircuitBreaker, LinkDispatchStats, SegmentLease, absorb_empty_right_of,
+        BreakerState, LinkDispatchStats, SegmentLease, absorb_empty_right_of,
         adaptive_bdp_segment_bytes, adjust_auto_speed_up, bisect_slowest_range,
         effective_worker_count, select_earliest_arrival_link, select_lowest_rtt_link,
         select_mirror_for_link,

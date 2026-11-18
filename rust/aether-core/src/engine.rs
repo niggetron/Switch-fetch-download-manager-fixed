@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+use futures_util::StreamExt;
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
 
@@ -25,7 +26,7 @@ use crate::diagnostics::{
 use crate::hls_dash::{is_adaptive_manifest_url, parse_dash_mpd, parse_hls_m3u8};
 use crate::ledger::{AetherLedger, SegmentStatus};
 use crate::scheduler::{
-    ActiveConnectionSnapshot, BreakerState, LinkCircuitBreaker, LinkDispatchStats,
+    ActiveConnectionSnapshot, LinkCircuitBreaker, LinkDispatchStats,
     absorb_empty_right_of, adaptive_bdp_segment_bytes, adjust_auto_speed_up,
     bisect_slowest_range, effective_worker_count, select_earliest_arrival_link,
     select_lowest_rtt_link, select_mirror_for_link,
@@ -35,7 +36,7 @@ use crate::storage_and_telemetry::{
     pwrite_all,
 };
 use crate::transport::{
-    ProxyOverride, TransportContext, build_wreq_link_client, fetch_h3_range_bytes,
+    TransportContext, build_wreq_link_client, fetch_h3_range_bytes,
     parse_content_disposition_filename, send_wreq_range_request, sniff_mime_from_magic,
 };
 
@@ -599,7 +600,7 @@ impl NativeEngine {
                         Ok(client) => {
                             let seg_t0 = Instant::now();
                             match send_wreq_range_request(&client, &mirror_url, range_hdr.as_deref()).await {
-                                Ok(mut resp) => {
+                                Ok(resp) => {
                                     let status = resp.status().as_u16();
                                     if status == 403 || status == 410 {
                                         Err(format!("TOKEN_EXPIRED:{status}"))
@@ -611,7 +612,15 @@ impl NativeEngine {
                                         let mut io_err: Option<String> = None;
 
                                         // Acquire 512 KiB slab under Semaphore(16) backpressure
-                                        while let Ok(Some(chunk)) = resp.chunk().await {
+                                        let mut stream = resp.bytes_stream();
+                                        while let Some(chunk_res) = stream.next().await {
+                                            let chunk = match chunk_res {
+                                                Ok(c) => c,
+                                                Err(e) => {
+                                                    io_err = Some(e.to_string());
+                                                    break;
+                                                }
+                                            };
                                             if h.cancelled.load(Ordering::Acquire) || h.paused.load(Ordering::Acquire) {
                                                 break;
                                             }
@@ -719,7 +728,9 @@ impl NativeEngine {
                             lg.states[seg_idx] = SegmentStatus::Done as u8;
                             let _ = lg.persist(&ledger_path, Some(&file_ref));
                             page.consumer_seq.fetch_add(1, Ordering::Relaxed);
-                            let _ = adjust_auto_speed_up(base_workers, 1, 8, 1.0, 1.1, 4.0, false);
+                            if is_flag_enabled(FLAG_AUTO_SPEED_UP) {
+                                let _ = adjust_auto_speed_up(base_workers, 1, 8, 1.0, 1.1, 4.0, false);
+                            }
                             brk_ref
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -826,7 +837,7 @@ impl NativeEngine {
         let client = build_wreq_link_client(local_ip, proxy_ov.as_ref(), profile)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-        let mut resp = send_wreq_range_request(&client, url, Some("bytes=0-16383"))
+        let resp = send_wreq_range_request(&client, url, Some("bytes=0-16383"))
             .await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
@@ -836,7 +847,10 @@ impl NativeEngine {
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
         let mut snippet = Vec::new();
-        while let Ok(Some(chunk)) = resp.chunk().await {
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk_res) = stream.next().await {
+            let chunk = chunk_res
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
             let take = chunk.len().min(16384usize.saturating_sub(snippet.len()));
             snippet.extend_from_slice(&chunk[..take]);
             if snippet.len() >= 16384 {

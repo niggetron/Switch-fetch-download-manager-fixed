@@ -27,6 +27,7 @@ use wreq::{Client as WreqClient, Proxy as WreqProxy};
 use wreq_util::Emulation;
 
 use crate::diagnostics::{FLAG_WREQ_EMULATION, is_flag_enabled, record_diag};
+#[cfg(target_os = "android")]
 use crate::storage_and_telemetry::live_telemetry_page;
 
 pub const BDP_RCVBUF_BYTES: usize = 6 * 1024 * 1024; // 6 MiB high-BDP 5G autotuning receive buffer

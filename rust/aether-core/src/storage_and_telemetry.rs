@@ -131,9 +131,17 @@ impl SlabLeaseGuard {
 
 impl Drop for SlabLeaseGuard {
     fn drop(&mut self) {
-        self.in_use_count
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| Some(v.saturating_sub(1)))
-            .ok();
+        loop {
+            let cur = self.in_use_count.load(Ordering::Relaxed);
+            if cur == 0
+                || self
+                    .in_use_count
+                    .compare_exchange_weak(cur, cur - 1, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                break;
+            }
+        }
         if let Some(mut buf) = self.buf.take() {
             buf.resize(SLAB_BYTES, 0);
             let _ = self.queue.push(buf);
