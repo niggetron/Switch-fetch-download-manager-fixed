@@ -343,7 +343,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeStopAria
 pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSlabStats<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
-) -> jlongArray<'local> {
+) -> jlongArray {
     let stats = catch_unwind(AssertUnwindSafe(|| {
         let eng = engine();
         let page = live_telemetry_page();
@@ -359,7 +359,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSlabStat
         .new_long_array(3)
         .expect("Failed to allocate JNI long array");
     let _ = env.set_long_array_region(&arr, 0, &stats);
-    arr
+    arr.into_raw()
 }
 
 #[unsafe(no_mangle)]

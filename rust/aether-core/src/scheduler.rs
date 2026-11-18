@@ -215,12 +215,16 @@ pub fn adjust_auto_speed_up(
 pub struct ActiveConnectionSnapshot {
     pub conn_id: String,
     pub task_id: String,
+    #[serde(rename = "url")]
     pub mirror_url: String,
+    #[serde(rename = "link_key_id")]
     pub link_key: String,
     pub protocol: String,
+    #[serde(rename = "socket_state")]
     pub state: String,
     pub range_start: u64,
     pub range_end: u64,
+    #[serde(rename = "bytes_received")]
     pub bytes_pulled: u64,
     pub speed_bps: u64,
     pub ttfb_ms: u64,

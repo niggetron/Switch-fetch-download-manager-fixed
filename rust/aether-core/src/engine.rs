@@ -425,7 +425,7 @@ impl NativeEngine {
             .unwrap_or(60_000);
         let seg_bytes = adaptive_bdp_segment_bytes(fastest_kbps);
         let ledger_path = PathBuf::from(&cfg.ledger_path);
-        let mut ledger = AetherLedger::load_or_create(&ledger_path, total_bytes, seg_bytes, &etag)
+        let ledger = AetherLedger::load_or_create(&ledger_path, total_bytes, seg_bytes, &etag)
             .unwrap_or_else(|_| AetherLedger::new(total_bytes, seg_bytes, &etag));
 
         let data_file = Arc::new(data_file);
@@ -665,6 +665,21 @@ impl NativeEngine {
 
                                                 let secs = seg_t0.elapsed().as_secs_f64().max(0.05);
                                                 let link_bps = ((seg_bytes_written as f64 * 8.0) / secs) as u64;
+                                                let speed_bytes_per_sec = (seg_bytes_written as f64 / secs) as u64;
+                                                eng.upsert_conn(ActiveConnectionSnapshot {
+                                                    conn_id: conn_id.clone(),
+                                                    task_id: tid.clone(),
+                                                    mirror_url: mirror_url.clone(),
+                                                    link_key: picked_key.clone(),
+                                                    protocol: if is_flag_enabled(FLAG_HTTP3_QUIC) { "H2/H3".into() } else { "H2 wreq".into() },
+                                                    state: "Streaming".into(),
+                                                    range_start: start,
+                                                    range_end: end,
+                                                    bytes_pulled: seg_bytes_written,
+                                                    speed_bps: speed_bytes_per_sec,
+                                                    ttfb_ms,
+                                                    blocked_reason: "NONE".into(),
+                                                });
                                                 if picked_key.starts_with("cell:") {
                                                     page.cell_goodput_bps.store(link_bps, Ordering::Release);
                                                 } else if picked_key.starts_with("eth:") {

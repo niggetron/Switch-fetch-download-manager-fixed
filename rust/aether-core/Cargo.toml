@@ -10,7 +10,7 @@ name = "aether_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rustix = { version = "0.38", features = ["fs", "io", "mm"] }
+rustix = { version = "0.38", features = ["fs"] }
 libc = "0.2"
 socket2 = "0.5"
 crossbeam-queue = "0.3"
@@ -19,7 +19,7 @@ url = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
-wreq = { version = "0.16", default-features = false, features = ["tokio-rt", "prefix-symbols", "socks", "stream"] }
+wreq = { version = "0.16", default-features = false, features = ["tokio-rt", "http2", "webpki-roots", "system-proxy", "charset", "prefix-symbols", "socks", "stream"] }
 wreq-util = "0.2"
 http = "1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
