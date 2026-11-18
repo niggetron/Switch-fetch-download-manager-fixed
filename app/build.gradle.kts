@@ -8,6 +8,12 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+// CI overrides: the GitHub Actions workflow passes these to bump the version and
+// restrict the build to arm64-v8a. Locally they are absent and the defaults below apply.
+val ciVersionCode = (findProperty("ciVersionCode") as String?)?.toIntOrNull() ?: 1
+val ciVersionName = (findProperty("ciVersionName") as String?) ?: "1.0"
+val ciAbiFilter = findProperty("ciAbiFilter") as String?
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -16,8 +22,11 @@ android {
     applicationId = "com.aistudio.aetherio.xkqmzp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = ciVersionCode
+    versionName = ciVersionName
+
+    // Restrict the APK to the requested ABI (e.g. arm64-v8a) when running in CI.
+    ciAbiFilter?.let { abi -> ndk { abiFilters.add(abi) } }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
