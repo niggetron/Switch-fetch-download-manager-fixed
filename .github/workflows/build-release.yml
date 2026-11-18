@@ -1,8 +1,8 @@
 name: Build & Publish Release APK
 
-# Builds the Pure Rust `libaether_core.so` (arm64-v8a) via cargo-ndk, runs Rust
-# & Android unit tests, packages the signed arm64-v8a release APK, and publishes
-# it to GitHub Releases on every push to main or manual workflow_dispatch.
+# Builds Pure Rust `libaether_core.so` (arm64-v8a) via cargo-ndk + Gradle buildRustCore,
+# compiles BoringSSL with ARMv8 hardware AES/SHA ASM (-DANDROID_ABI=arm64-v8a),
+# runs Rust & Android unit tests, verifies .so packaging, and publishes GitHub Release.
 on:
   push:
     branches: [main]
@@ -28,16 +28,32 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Install native cross-compile toolchain (BoringSSL / NDK deps)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build perl pkg-config libclang-dev
+
       - name: Set up Android NDK
         run: |
           NDK_VERSION="27.2.12479018"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" >/dev/null
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          NDK_DIR="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"
+          echo "ANDROID_ABI=arm64-v8a" >> "$GITHUB_ENV"
+          echo "CARGO_NDK_ANDROID_ABI=arm64-v8a" >> "$GITHUB_ENV"
+          echo "CMAKE_TOOLCHAIN_FILE=${NDK_DIR}/build/cmake/android.toolchain.cmake" >> "$GITHUB_ENV"
+          echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
 
       - name: Set up Rust (stable + aarch64-linux-android)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
 
       - name: Cache Rust cargo registry & target
         uses: actions/cache@v4
@@ -46,25 +62,31 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/aether-core/target
-          key: ${{ runner.os }}-cargo-ndk-${{ hashFiles('rust/aether-core/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-ndk-v8-${{ hashFiles('rust/aether-core/Cargo.toml', 'rust/aether-core/Cargo.lock') }}
 
-      - name: Install cargo-ndk
-        uses: taiki-e/install-action@cargo-ndk
+      - name: Verify bundled font assets & SIL OFL licenses
+        run: |
+          test -f app/src/main/res/font/space_grotesk.ttf
+          test -f app/src/main/res/font/inter.ttf
+          test -f app/src/main/res/font/jetbrains_mono.ttf
+          test -f app/src/main/assets/font_licenses.txt
 
-      - name: Run Rust host unit tests (aether-core)
+      - name: Run Rust host unit tests (aether-core v8.0)
         working-directory: rust/aether-core
         run: cargo test --lib
-
-      - name: Build libaether_core.so (arm64-v8a)
-        working-directory: rust/aether-core
-        run: |
-          cargo ndk -t arm64-v8a -p 24 -o ../../app/src/main/jniLibs build --release
-          ls -lh ../../app/src/main/jniLibs/arm64-v8a/libaether_core.so
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
+
+      - name: Build libaether_core.so (arm64-v8a) via Gradle cargo-ndk integration
+        env:
+          ANDROID_ABI: arm64-v8a
+          CARGO_NDK_CMAKE_TOOLCHAIN_FILE: ${{ env.ANDROID_NDK_HOME }}/build/cmake/android.toolchain.cmake
+        run: |
+          gradle :app:buildRustCore -PrequireRustBuild=true --stacktrace
+          ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so
 
       - name: Compute version
         id: ver
@@ -83,11 +105,12 @@ jobs:
           echo "KEY_PASSWORD=aetherio-ci" >> "$GITHUB_ENV"
 
       - name: Run Android Unit & Multi-Network Tests
-        run: gradle :app:testDebugUnitTest --stacktrace
+        run: gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace
 
       - name: Build arm64-v8a release APK
         run: |
           gradle :app:assembleRelease \
+            -PrequireRustBuild=true \
             -PciVersionCode=${{ steps.ver.outputs.version_code }} \
             -PciVersionName=${{ steps.ver.outputs.version_name }} \
             -PciAbiFilter=arm64-v8a \
@@ -115,5 +138,5 @@ jobs:
             "dist/AetherIO-v${VERSION}-arm64-v8a.apk" \
             --title "AetherIO v${VERSION}" \
             --latest \
-            --notes "$(printf 'Automated arm64-v8a release build with compiled Rust libaether_core.so\n\n- **Version name:** %s\n- **Version code:** %s\n- **Native core:** libaether_core.so (arm64-v8a, panic=unwind, memfd + pwrite + fallocate + AETHLDG1)\n- **Commit:** %s\n- **Branch:** %s\n' \
+            --notes "$(printf 'Automated arm64-v8a release build (AetherIO Engine v8.0)\n\n- **Version name:** %s\n- **Version code:** %s\n- **Native core:** libaether_core.so (arm64-v8a, panic=unwind, BoundedSlabPool Semaphore(16)+ArrayQueue, wreq prefix-symbols + quinn/h3 0-RTT, AETHLDG2 + memfd)\n- **Commit:** %s\n- **Branch:** %s\n' \
               "${VERSION}" "${{ github.run_number }}" "${{ github.sha }}" "${{ github.ref_name }}")"

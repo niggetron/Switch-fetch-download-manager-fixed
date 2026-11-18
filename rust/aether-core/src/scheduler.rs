@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 /// 1 MiB for slower Wi-Fi (< 50 Mbps), 4 MiB mid-band, 8 MiB for high-BDP 5G (> 120 Mbps)
 pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     let mbps = downstream_kbps as f64 / 1000.0;
@@ -26,7 +28,6 @@ pub enum BreakerState {
 }
 
 /// F7: 3-State Per-Link Circuit Breaker (Closed -> Open for 10s -> HalfOpen).
-/// Three consecutive errors or a >= 1,500 ms zero-byte stall trips the breaker.
 #[derive(Debug, Clone)]
 pub struct LinkCircuitBreaker {
     pub state: BreakerState,
@@ -115,7 +116,7 @@ pub fn select_earliest_arrival_link<'a>(
         .map(|c| c.link_id.as_str())
 }
 
-/// F5: Route HEAD / 1-1 probes strictly to the lowest-RTT healthy link.
+/// F5: Route HEAD / Range 0- Stream-0 probes strictly to the lowest-RTT healthy link.
 pub fn select_lowest_rtt_link<'a>(
     candidates: &'a [LinkDispatchStats],
     breakers: &mut HashMap<String, LinkCircuitBreaker>,
@@ -133,8 +134,7 @@ pub fn select_lowest_rtt_link<'a>(
         .map(|c| c.link_id.as_str())
 }
 
-/// F6: Immutable SegmentLease pinning stolen tails & retries strictly to the owning worker's link
-/// so per-link EWMA rates remain unpolluted.
+/// F6: Immutable SegmentLease pinning stolen tails & retries strictly to the owning worker's link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentLease {
     pub index: usize,
@@ -144,8 +144,7 @@ pub struct SegmentLease {
     pub is_tail_hedge: bool,
 }
 
-/// Open-ended right-neighbor absorption (`_emptyRightOf`) + `_splitSlowest`:
-/// Scans for an unstarted right-hand neighbor or bisects a lagging open-ended lease.
+/// Open-ended right-neighbor absorption (`_emptyRightOf`) on warm TLS sockets.
 pub fn absorb_empty_right_of(states: &mut [u8], from_index: usize) -> Option<usize> {
     for (idx, state) in states.iter_mut().enumerate().skip(from_index + 1) {
         if *state == 0 {
@@ -156,9 +155,40 @@ pub fn absorb_empty_right_of(states: &mut [u8], from_index: usize) -> Option<usi
     None
 }
 
-/// Bidirectional closed-loop autoSpeedUp controller (v3.0 + v7.1):
-/// Scales +2 workers when goodput improves >= 0.8 * workerRatio (or > 6% gain) with deltaRTT < 15ms;
-/// Scales -2 workers when deltaRTT > 35ms or server emits HTTP 429/503 throttling.
+/// `_splitSlowest`: Halves a lagging worker's active byte range `[current_pos .. end]` so a fast
+/// link takes `[mid + 1 .. end]` cleanly without dropping any downloaded prefix.
+pub fn bisect_slowest_range(current_pos: u64, end_inclusive: u64, min_split_bytes: u64) -> Option<(u64, u64)> {
+    if end_inclusive <= current_pos {
+        return None;
+    }
+    let remaining = end_inclusive - current_pos + 1;
+    if remaining < min_split_bytes.saturating_mul(2) {
+        return None;
+    }
+    let mid = current_pos + (remaining / 2);
+    Some((mid, end_inclusive))
+}
+
+/// Multi-Mirror URL selector: pairs Wi-Fi with Mirror 0 and Cellular/Ethernet with distinct mirrors
+/// to bypass per-IP CDN rate caps when bonding multiple links.
+pub fn select_mirror_for_link<'a>(urls: &'a [String], link_key: &str, seg_index: usize) -> &'a str {
+    if urls.is_empty() {
+        return "";
+    }
+    if urls.len() == 1 {
+        return urls[0].as_str();
+    }
+    let idx = if link_key.starts_with("cell:") {
+        1 % urls.len()
+    } else if link_key.starts_with("eth:") {
+        2 % urls.len()
+    } else {
+        seg_index % urls.len()
+    };
+    urls[idx].as_str()
+}
+
+/// Bidirectional closed-loop autoSpeedUp controller (v3.0 + v8.0).
 pub fn adjust_auto_speed_up(
     current_workers: usize,
     min_workers: usize,
@@ -180,7 +210,23 @@ pub fn adjust_auto_speed_up(
     current_workers.clamp(min_workers, max_workers)
 }
 
-/// Deterministic IoSubstrate trait for F10 host-side unit testing without physical hardware.
+/// Live Ketch-style per-connection descriptor serialized for the Connections Dashboard.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveConnectionSnapshot {
+    pub conn_id: String,
+    pub task_id: String,
+    pub mirror_url: String,
+    pub link_key: String,
+    pub protocol: String,
+    pub state: String,
+    pub range_start: u64,
+    pub range_end: u64,
+    pub bytes_pulled: u64,
+    pub speed_bps: u64,
+    pub ttfb_ms: u64,
+    pub blocked_reason: String,
+}
+
 pub trait IoSubstrate {
     fn preallocate(&mut self, len: u64) -> std::io::Result<()>;
     fn pwrite_extent(&mut self, offset: u64, data: &[u8]) -> std::io::Result<usize>;

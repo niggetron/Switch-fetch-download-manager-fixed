@@ -179,7 +179,7 @@ class MultiNetworkAndSchedulerTest {
             states = states,
         )
         val encoded = ledger.encode()
-        assertEquals(AetherBinaryLedger.HEADER_LEN + 4 + 4, encoded.size)
+        assertEquals(AetherBinaryLedger.HEADER_LEN_V2 + 4 + 4, encoded.size)
 
         val decoded = AetherBinaryLedger.decode(encoded)
         assertNotNull(decoded)
@@ -198,8 +198,128 @@ class MultiNetworkAndSchedulerTest {
 
         // Corrupted CRC must reject
         val corrupt = encoded.copyOf()
-        corrupt[AetherBinaryLedger.HEADER_LEN] = 99
+        corrupt[AetherBinaryLedger.HEADER_LEN_V2] = 99
         assertNull(AetherBinaryLedger.decode(corrupt))
+    }
+
+    @Test
+    fun `AETHLDG2 encodes slab digests, contiguous verified offset, and rolls back leased extents`() {
+        val digest = ByteArray(AetherBinaryLedger.SLAB_DIGEST_BYTES) { (it + 1).toByte() }
+        val ledger = AetherBinaryLedger(
+            totalLen = 8L * 1024L * 1024L,
+            segmentBytes = 4L * 1024L * 1024L,
+            validatorHash = AetherBinaryLedger.validatorHash("v8-etag"),
+            states = byteArrayOf(AetherBinaryLedger.STATE_DONE, AetherBinaryLedger.STATE_LEASED),
+            contiguousVerifiedOffset = 4L * 1024L * 1024L,
+            slabDigestsRaw = digest,
+        )
+        assertTrue(ledger.rollbackLeasedSegments())
+        assertEquals(AetherBinaryLedger.STATE_PENDING, ledger.states[1])
+
+        val decoded = AetherBinaryLedger.decode(ledger.encode())
+        assertNotNull(decoded)
+        assertEquals(4L * 1024L * 1024L, decoded!!.contiguousVerifiedOffset)
+        assertEquals(1, decoded.slabDigestCount)
+        assertArrayEquals(digest, decoded.slabDigestsRaw)
+    }
+
+    @Test
+    fun `dual-engine backend toggles support independent Rust and Kotlin OkHttp control`() {
+        val bothOnAuto = com.example.data.model.EngineSettings(
+            enableRustEngine = true,
+            enableKotlinOkHttpEngine = true,
+            preferredEngineBackend = com.example.data.model.EngineBackendPreference.AUTO_PREFER_RUST,
+        )
+        val resRustLoaded = com.example.engine.StoragePlacementHelper.selectBackend(bothOnAuto, nativeLoaded = true)
+        assertEquals(
+            com.example.engine.BackendSelectionResult.Selected(com.example.engine.ResolvedEngineBackend.RUST_LIBAETHER_CORE),
+            resRustLoaded,
+        )
+        val resRustMissingFallback = com.example.engine.StoragePlacementHelper.selectBackend(bothOnAuto, nativeLoaded = false)
+        assertEquals(
+            com.example.engine.BackendSelectionResult.Selected(com.example.engine.ResolvedEngineBackend.KOTLIN_OKHTTP),
+            resRustMissingFallback,
+        )
+
+        val onlyKotlin = bothOnAuto.copy(enableRustEngine = false)
+        assertTrue(
+            com.example.engine.StoragePlacementHelper.selectBackend(
+                onlyKotlin,
+                nativeLoaded = true,
+                overridePreference = com.example.data.model.EngineBackendPreference.FORCE_RUST_NATIVE,
+            ) is com.example.engine.BackendSelectionResult.Unavailable
+        )
+
+        val bothOff = bothOnAuto.copy(enableRustEngine = false, enableKotlinOkHttpEngine = false)
+        assertTrue(
+            com.example.engine.StoragePlacementHelper.selectBackend(bothOff, nativeLoaded = true)
+                is com.example.engine.BackendSelectionResult.Unavailable
+        )
+    }
+
+    @Test
+    fun `1 GiB direct MediaStore FD threshold and RFC 6266 Content-Disposition parser`() {
+        assertTrue(
+            com.example.engine.StoragePlacementHelper.shouldUseDirectMediaStoreFd(
+                totalBytes = 250L * 1024L * 1024L,
+                isSafDestination = false,
+            )
+        )
+        assertFalse(
+            com.example.engine.StoragePlacementHelper.shouldUseDirectMediaStoreFd(
+                totalBytes = com.example.data.model.MEDIASTORE_DIRECT_FD_THRESHOLD_BYTES,
+                isSafDestination = false,
+            )
+        )
+        assertFalse(
+            com.example.engine.StoragePlacementHelper.shouldUseDirectMediaStoreFd(
+                totalBytes = 100L * 1024L * 1024L,
+                isSafDestination = true,
+            )
+        )
+
+        assertEquals(
+            "ubuntu 26.04.iso",
+            com.example.engine.StoragePlacementHelper.parseContentDispositionFilename(
+                "attachment; filename=\"fallback.bin\"; filename*=UTF-8''ubuntu%2026.04.iso"
+            ),
+        )
+        assertEquals(
+            "archive.tar.zst",
+            com.example.engine.StoragePlacementHelper.parseContentDispositionFilename(
+                "attachment; filename=\"../../etc/archive.tar.zst\""
+            ),
+        )
+    }
+
+    @Test
+    fun `Ethernet hot-plug LinkKey, multi-mirror selection, and range bisection`() {
+        val eth = LinkKey.Ethernet("eth0")
+        assertTrue(eth.isEthernet)
+        assertFalse(eth.isCellular)
+        assertEquals("eth:eth0", eth.id)
+
+        val mirrors = listOf("https://m0.cdn/a.bin", "https://m1.cdn/a.bin", "https://m2.cdn/a.bin")
+        assertEquals("https://m0.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "wifi:wlan0", 0))
+        assertEquals("https://m1.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "cell:rmnet0", 0))
+        assertEquals("https://m2.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "eth:eth0", 0))
+
+        val bisected = LinkScheduler.bisectRange(0L, 4L * 1024L * 1024L - 1L)
+        assertNotNull(bisected)
+        assertEquals(2L * 1024L * 1024L, bisected!!.first)
+        assertEquals(4L * 1024L * 1024L - 1L, bisected.second)
+        assertNull(LinkScheduler.bisectRange(0L, 512L * 1024L))
+    }
+
+    @Test
+    fun `diagnostics redactor scrubs bearer tokens, cookies, and signed query params`() {
+        val raw = "GET https://cdn.example.com/file.bin?X-Amz-Signature=deadbeef&Expires=999 token:abc123 authorization:Basic_xyz"
+        val cleaned = com.example.engine.DiagnosticsCenter.redactSensitive(raw)
+        assertFalse(cleaned.contains("deadbeef"))
+        assertFalse(cleaned.contains("abc123"))
+        assertFalse(cleaned.contains("Basic_xyz"))
+        assertTrue(cleaned.contains("[REDACTED_SIGNED_PARAMS]"))
+        assertTrue(cleaned.contains("[REDACTED]"))
     }
 
     @Test

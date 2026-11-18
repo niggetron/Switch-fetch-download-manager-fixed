@@ -11,14 +11,29 @@ data class MemfdPageSnapshot(
     val totalExpected: Long,
     val goodputBps: Long,
     val stateFlags: Long,
+    val wifiGoodputBps: Long,
+    val cellGoodputBps: Long,
+    val ethGoodputBps: Long,
+    val ttfbMs: Long,
     val producerSeq: Long,
+    val wifiBytesTotal: Long,
+    val cellBytesTotal: Long,
+    val workerCountsPacked: Long,
+    val blockedReasonCode: Long,
+    val contiguousVerifiedOffset: Long,
+    val cellularQuotaRemaining: Long,
     val consumerSeq: Long,
-)
+) {
+    val totalWorkers: Int get() = (workerCountsPacked and 0xFFFFL).toInt()
+    val wifiWorkers: Int get() = ((workerCountsPacked ushr 16) and 0xFFFFL).toInt()
+    val cellWorkers: Int get() = ((workerCountsPacked ushr 32) and 0xFFFFL).toInt()
+    val ethWorkers: Int get() = ((workerCountsPacked ushr 48) and 0xFFFFL).toInt()
+}
 
 /**
  * Zero-JNI Read-Only Mmap Telemetry Reader backed by Rust `memfd_create()` +
  * `ParcelFileDescriptor.adoptFd(fd)` mapped READ_ONLY.
- * Polled at 2–4 Hz while UI is STARTED and 0 Hz on ON_STOP.
+ * Exact layout matches `TelemetryPage` in `rust/aether-core/src/storage_and_telemetry.rs`.
  */
 class MemfdTelemetryReader : AutoCloseable {
     private var pfd: ParcelFileDescriptor? = null
@@ -56,7 +71,17 @@ class MemfdTelemetryReader : AutoCloseable {
             totalExpected = buf.getLong(0x008),
             goodputBps = buf.getLong(0x010),
             stateFlags = buf.getLong(0x018),
+            wifiGoodputBps = buf.getLong(0x020),
+            cellGoodputBps = buf.getLong(0x028),
+            ethGoodputBps = buf.getLong(0x030),
+            ttfbMs = buf.getLong(0x038),
             producerSeq = buf.getLong(0x040),
+            wifiBytesTotal = buf.getLong(0x048),
+            cellBytesTotal = buf.getLong(0x050),
+            workerCountsPacked = buf.getLong(0x058),
+            blockedReasonCode = buf.getLong(0x060),
+            contiguousVerifiedOffset = buf.getLong(0x068),
+            cellularQuotaRemaining = buf.getLong(0x070),
             consumerSeq = buf.getLong(0x080),
         )
     }

@@ -1,0 +1,20 @@
+AetherIO Bundled Fonts — License & Attribution Verification
+=========================================================
+
+All typography assets in app/src/main/res/font/ are bundled locally offline
+(no runtime Google Fonts download dependency) under the SIL Open Font License 1.1:
+
+1. Space Grotesk (app/src/main/res/font/space_grotesk.ttf)
+   - Role: Display, section headings, hero throughput callouts
+   - License: SIL Open Font License, Version 1.1 (OFL-1.1)
+   - Copyright: Florian Karsten
+
+2. Inter (app/src/main/res/font/inter.ttf)
+   - Role: Body copy, settings descriptions, TalkBack labels, control captions
+   - License: SIL Open Font License, Version 1.1 (OFL-1.1)
+   - Copyright: Rasmus Andersson (The Inter Project Authors)
+
+3. JetBrains Mono (app/src/main/res/font/jetbrains_mono.ttf)
+   - Role: Tabular numerals (tnum) for Mbps, RTT, offsets, SHA-256/BLAKE3 digests
+   - License: SIL Open Font License, Version 1.1 (OFL-1.1)
+   - Copyright: JetBrains s.r.o.

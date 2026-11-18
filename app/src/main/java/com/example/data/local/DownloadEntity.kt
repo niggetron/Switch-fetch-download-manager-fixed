@@ -35,6 +35,14 @@ data class DownloadEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val completedAt: Long? = null,
+    // v8.0 dual-engine, multi-mirror, and per-link telemetry attribution columns
+    val mirrorUrls: String = "",
+    val engineBackendUsed: String = "",
+    val wifiBytes: Long = 0L,
+    val cellBytes: Long = 0L,
+    val maxCellularBytes: Long = 0L,
+    val browserProfile: String = "chrome134",
+    val protocolMode: String = "auto",
 ) {
     val statusEnum: DownloadStatus
         get() = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.QUEUED)
@@ -42,6 +50,15 @@ data class DownloadEntity(
     val routeModeEnum: NetworkRouteMode
         get() = runCatching { NetworkRouteMode.valueOf(routeMode) }
             .getOrDefault(NetworkRouteMode.AUTO_MULTIPATH)
+
+    val allUrls: List<String>
+        get() = buildList {
+            if (url.isNotBlank()) add(url.trim())
+            mirrorUrls.lines()
+                .map { it.trim() }
+                .filter { it.isNotBlank() && it != url.trim() }
+                .forEach { add(it) }
+        }
 
     val progressFraction: Float
         get() = when {

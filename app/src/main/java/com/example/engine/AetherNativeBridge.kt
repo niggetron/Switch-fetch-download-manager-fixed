@@ -1,14 +1,32 @@
 package com.example.engine
 
+import com.example.data.model.ActiveConnectionInfo
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class NativeTaskOutcome(
+    val taskId: String,
+    val state: String,
+    val fileName: String,
+    val mimeType: String,
+    val downloadedBytes: Long,
+    val totalBytes: Long,
+    val wifiBytes: Long,
+    val cellBytes: Long,
+    val sha256Hex: String,
+    val ttfbMs: Long,
+    val errorMessage: String,
+)
+
 /**
- * Tier-2 JNI Control Bridge to `libaether_core.so` (Rust `aether-core` v7.1).
+ * Tier-2 JNI Control Bridge to `libaether_core.so` (Rust `aether-core` v8.0).
  *
  * When `libaether_core.so` is packaged in `jniLibs/arm64-v8a/` (via `cargo-ndk` in CI or locally),
- * exposes BoundedSlabPool (8.0 MiB), memfd_create() telemetry page, per-LinkKey handle updates,
- * staged fd stream-copy, and BLAKE3/SHA-256 verification.
+ * exposes full Rust async engine (wreq prefix-symbols + quinn/h3 0-RTT), BoundedSlabPool (8.0 MiB),
+ * memfd_create() telemetry page, per-LinkKey handle/localIp updates, feature flags,
+ * Aria2 loopback JSON-RPC (:6800), and BLAKE3/SHA-256 verification.
  *
- * When running in Kotlin-only environments without `.so`, falls back gracefully to the
- * Kotlin DirectByteBuffer + FileChannel engine and reports the active backend transparently.
+ * Also co-exists seamlessly with Kotlin OkHttp engine for user-controlled A/B benchmarking.
  */
 object AetherNativeBridge {
     val isNativeLoaded: Boolean by lazy {
@@ -21,9 +39,9 @@ object AetherNativeBridge {
     val engineBackendLabel: String
         get() = if (isNativeLoaded) {
             runCatching { nativeEngineVersion() }
-                .getOrDefault("libaether_core.so v7.1 (Rust JNI Active)")
+                .getOrDefault("libaether_core.so v8.0 (Rust JNI Active)")
         } else {
-            "Kotlin DirectByteBuffer + FileChannel (libaether_core.so not bundled)"
+            "Kotlin OkHttp + DirectByteBuffer (libaether_core.so not bundled)"
         }
 
     fun updateLinkHandleSafe(
@@ -32,6 +50,7 @@ object AetherNativeBridge {
         downstreamKbps: Long,
         rttMs: Long,
         isCellular: Boolean,
+        localIp: String,
         proxyHost: String,
         proxyPort: Int,
     ) {
@@ -43,6 +62,7 @@ object AetherNativeBridge {
                 downstreamKbps = downstreamKbps,
                 rttMs = rttMs,
                 isCellular = isCellular,
+                localIp = localIp,
                 proxyHost = proxyHost,
                 proxyPort = proxyPort,
             )
@@ -52,6 +72,126 @@ object AetherNativeBridge {
     fun removeLinkSafe(linkKey: String) {
         if (!isNativeLoaded) return
         runCatching { nativeRemoveLink(linkKey) }
+    }
+
+    fun setFeatureFlagsSafe(mask: Int) {
+        if (!isNativeLoaded) return
+        runCatching { nativeSetFeatureFlags(mask) }
+    }
+
+    fun setThermalWorkerCapSafe(maxWorkers: Int) {
+        if (!isNativeLoaded) return
+        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 8)) }
+    }
+
+    fun startDownloadSafe(
+        taskId: String,
+        urls: List<String>,
+        outputPath: String,
+        ledgerPath: String,
+        directFd: Int,
+        maxWorkers: Int,
+        maxCellularBytes: Long,
+        browserProfile: String,
+        protocolMode: String,
+    ): Boolean {
+        if (!isNativeLoaded) return false
+        return runCatching {
+            nativeStartDownload(
+                taskId = taskId,
+                urlsNewlineSep = urls.joinToString("\n"),
+                outputPath = outputPath,
+                ledgerPath = ledgerPath,
+                directFd = directFd,
+                maxWorkers = maxWorkers.coerceIn(1, 8),
+                maxCellularBytes = maxCellularBytes,
+                browserProfile = browserProfile,
+                protocolMode = protocolMode,
+            )
+            true
+        }.getOrDefault(false)
+    }
+
+    fun pauseDownloadSafe(taskId: String) {
+        if (!isNativeLoaded) return
+        runCatching { nativePauseDownload(taskId) }
+    }
+
+    fun cancelDownloadSafe(taskId: String) {
+        if (!isNativeLoaded) return
+        runCatching { nativeCancelDownload(taskId) }
+    }
+
+    fun updateTaskUrlsSafe(taskId: String, urls: List<String>) {
+        if (!isNativeLoaded) return
+        runCatching { nativeUpdateTaskUrls(taskId, urls.joinToString("\n")) }
+    }
+
+    fun taskOutcomeSafe(taskId: String): NativeTaskOutcome? {
+        if (!isNativeLoaded) return null
+        val raw = runCatching { nativeTaskOutcomeJson(taskId) }.getOrNull() ?: return null
+        if (raw.isBlank() || raw == "{}") return null
+        return runCatching {
+            val obj = JSONObject(raw)
+            if (!obj.has("state")) return null
+            NativeTaskOutcome(
+                taskId = obj.optString("task_id", taskId),
+                state = obj.optString("state", ""),
+                fileName = obj.optString("file_name", ""),
+                mimeType = obj.optString("mime_type", "application/octet-stream"),
+                downloadedBytes = obj.optLong("downloaded_bytes", 0L),
+                totalBytes = obj.optLong("total_bytes", 0L),
+                wifiBytes = obj.optLong("wifi_bytes", 0L),
+                cellBytes = obj.optLong("cell_bytes", 0L),
+                sha256Hex = obj.optString("sha256_hex", ""),
+                ttfbMs = obj.optLong("ttfb_ms", 0L),
+                errorMessage = obj.optString("error_message", ""),
+            )
+        }.getOrNull()
+    }
+
+    fun connectionsListSafe(): List<ActiveConnectionInfo> {
+        if (!isNativeLoaded) return emptyList()
+        val raw = runCatching { nativeConnectionsJson() }.getOrNull() ?: return emptyList()
+        if (raw.isBlank() || raw == "[]") return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList(arr.length()) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    add(
+                        ActiveConnectionInfo(
+                            connId = o.optString("conn_id", "conn-$i"),
+                            taskId = o.optString("task_id", ""),
+                            url = o.optString("url", ""),
+                            linkKeyId = o.optString("link_key_id", "auto"),
+                            protocol = o.optString("protocol", "H2/wreq"),
+                            socketState = o.optString("socket_state", "Streaming"),
+                            ttfbMs = o.optLong("ttfb_ms", 0L),
+                            bytesReceived = o.optLong("bytes_received", 0L),
+                            speedBps = o.optLong("speed_bps", 0L),
+                            rangeStart = o.optLong("range_start", 0L),
+                            rangeEnd = o.optLong("range_end", 0L),
+                        )
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun diagnosticsLogSafe(): String {
+        if (!isNativeLoaded) return ""
+        return runCatching { nativeDiagnosticsLog() }.getOrDefault("")
+    }
+
+    fun startAria2RpcSafe(): String {
+        if (!isNativeLoaded) return ""
+        return runCatching { nativeStartAria2Rpc() }.getOrDefault("")
+    }
+
+    fun stopAria2RpcSafe() {
+        if (!isNativeLoaded) return
+        runCatching { nativeStopAria2Rpc() }
     }
 
     fun pauseQuotaGuardSafe() {
@@ -82,10 +222,32 @@ object AetherNativeBridge {
         downstreamKbps: Long,
         rttMs: Long,
         isCellular: Boolean,
+        localIp: String,
         proxyHost: String,
         proxyPort: Int,
     )
     external fun nativeRemoveLink(linkKey: String)
+    external fun nativeSetFeatureFlags(mask: Int)
+    external fun nativeSetThermalWorkerCap(maxWorkers: Int)
+    external fun nativeStartDownload(
+        taskId: String,
+        urlsNewlineSep: String,
+        outputPath: String,
+        ledgerPath: String,
+        directFd: Int,
+        maxWorkers: Int,
+        maxCellularBytes: Long,
+        browserProfile: String,
+        protocolMode: String,
+    )
+    external fun nativePauseDownload(taskId: String)
+    external fun nativeCancelDownload(taskId: String)
+    external fun nativeUpdateTaskUrls(taskId: String, urlsNewlineSep: String)
+    external fun nativeTaskOutcomeJson(taskId: String): String
+    external fun nativeConnectionsJson(): String
+    external fun nativeDiagnosticsLog(): String
+    external fun nativeStartAria2Rpc(): String
+    external fun nativeStopAria2Rpc()
     external fun nativeSlabStats(): LongArray
     external fun nativeCopyStagingToFd(stagingPath: String, destFd: Int): Boolean
     external fun nativePauseQuotaGuard()

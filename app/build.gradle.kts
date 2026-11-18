@@ -25,8 +25,9 @@ android {
     versionCode = ciVersionCode
     versionName = ciVersionName
 
-    // Restrict the APK to the requested ABI (e.g. arm64-v8a) when running in CI.
-    ciAbiFilter?.let { abi -> ndk { abiFilters.add(abi) } }
+    // Restrict APK native libraries to arm64-v8a by default (overridable via -PciAbiFilter).
+    val targetAbi = ciAbiFilter ?: "arm64-v8a"
+    ndk { abiFilters.add(targetAbi) }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -132,6 +133,7 @@ dependencies {
   implementation(libs.kotlinx.coroutines.core)
   // implementation(libs.logging.interceptor)
   // implementation(libs.moshi.kotlin)
+  implementation(libs.androidx.work.runtime.ktx)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   // implementation(libs.retrofit)
@@ -150,4 +152,50 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
+}
+
+val requireRustBuild = (findProperty("requireRustBuild") as String?)?.toBooleanStrictOrNull() ?: false
+val skipRustBuild = (findProperty("skipRustBuild") as String?)?.toBooleanStrictOrNull() ?: false
+val rustWorkingDir = rootProject.layout.projectDirectory.dir("rust/aether-core").asFile
+val jniLibsOutDir = layout.projectDirectory.dir("src/main/jniLibs").asFile.absolutePath
+
+val buildRustCore = tasks.register<Exec>("buildRustCore") {
+  group = "build"
+  description = "Compile Pure Rust libaether_core.so (arm64-v8a) via cargo-ndk for BoringSSL + QUIC"
+  workingDir = rustWorkingDir
+
+  val req = requireRustBuild
+  val skip = skipRustBuild
+
+  onlyIf {
+    if (skip) {
+      it.logger.lifecycle("Skipping buildRustCore (-PskipRustBuild=true).")
+      false
+    } else if (req) {
+      true
+    } else {
+      val pathEntries = (System.getenv("PATH") ?: "").split(File.pathSeparator) +
+        listOf("${System.getProperty("user.home")}/.cargo/bin")
+      val hasCargoNdk = pathEntries.any { dir ->
+        dir.isNotBlank() && File(dir, "cargo-ndk").canExecute()
+      }
+      if (!hasCargoNdk) {
+        it.logger.lifecycle("cargo-ndk not installed in sandbox; skipping native build (CI enforces -PrequireRustBuild=true).")
+      }
+      hasCargoNdk
+    }
+  }
+
+  environment("ANDROID_ABI", "arm64-v8a")
+  commandLine(
+    "cargo", "ndk",
+    "-t", "arm64-v8a",
+    "-p", "24",
+    "-o", jniLibsOutDir,
+    "build", "--release",
+  )
+}
+
+tasks.named("preBuild").configure {
+  dependsOn(buildRustCore)
 }

@@ -44,6 +44,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,11 +55,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.model.BrowserProfile
 import com.example.data.model.CuratedEndpoints
+import com.example.data.model.EngineBackendPreference
 import com.example.data.model.EngineSettings
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.NewDownloadRequest
+import com.example.data.model.ProtocolMode
 import com.example.engine.NetworkMatrixState
+import com.example.ui.components.StatusPill
 import com.example.ui.theme.LocalAetherColors
 import kotlin.math.roundToInt
 
@@ -75,11 +80,21 @@ fun NewDownloadSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var urlText by remember { mutableStateOf("") }
+    var mirrorUrlsText by remember { mutableStateOf("") }
     var fileNameText by remember { mutableStateOf("") }
     var expectedSha256 by remember { mutableStateOf("") }
     var routeMode by remember { mutableStateOf(defaultSettings.defaultRouteMode) }
     var workerCount by remember { mutableFloatStateOf(defaultSettings.maxConcurrentWorkers.toFloat()) }
+    var backendOverride by remember { mutableStateOf<EngineBackendPreference?>(null) }
+    var protocolMode by remember { mutableStateOf(defaultSettings.defaultProtocolMode) }
+    var browserProfile by remember { mutableStateOf(defaultSettings.defaultBrowserProfile) }
+    var cellularCapBytes by remember { mutableLongStateOf(defaultSettings.maxCellularBytesPerSession) }
     var safDestinationUri by remember { mutableStateOf<Uri?>(null) }
+
+    val isAdaptiveManifest = remember(urlText) {
+        val clean = urlText.substringBefore('?').lowercase()
+        clean.endsWith(".m3u8") || clean.endsWith(".mpd")
+    }
 
     val safCreateLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
@@ -108,16 +123,13 @@ fun NewDownloadSheet(
                     modifier = Modifier.size(22.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Launch Zero-Merge Pipeline",
-                    style = MaterialTheme.typography.titleLarge,
-                )
+                Text("Launch Zero-Merge Pipeline", style = MaterialTheme.typography.titleLarge)
             }
 
             OutlinedTextField(
                 value = urlText,
                 onValueChange = { urlText = it },
-                label = { Text("HTTP / HTTPS Download URL") },
+                label = { Text("Primary HTTP / HTTPS / HLS / DASH URL") },
                 placeholder = { Text("https://example.com/archive.tar.gz") },
                 singleLine = true,
                 modifier = Modifier
@@ -132,15 +144,25 @@ fun NewDownloadSheet(
                         },
                         modifier = Modifier.testTag("paste_url_button"),
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentPaste,
-                            contentDescription = "Paste URL from clipboard",
-                        )
+                        Icon(imageVector = Icons.Filled.ContentPaste, contentDescription = "Paste URL")
                     }
                 },
             )
 
-            // Curated Real HTTP Public Diagnostic Streams
+            if (isAdaptiveManifest) {
+                StatusPill(label = "HLS/DASH Adaptive Segment Extractor Armed", color = ext.cyan)
+            }
+
+            OutlinedTextField(
+                value = mirrorUrlsText,
+                onValueChange = { mirrorUrlsText = it },
+                label = { Text("Mirror URLs (optional, one per line for Wi-Fi vs 5G bonding)") },
+                placeholder = { Text("https://mirror2.example.com/file.bin") },
+                minLines = 1,
+                maxLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             Text(
                 text = "QUICK REAL-STREAM ENDPOINTS",
                 style = MaterialTheme.typography.labelSmall,
@@ -163,23 +185,11 @@ fun NewDownloadSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = sample.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                            Text(
-                                text = sample.subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Text(sample.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(sample.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = sample.approximateSizeLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = ext.cyan,
-                        )
+                        Text(sample.approximateSizeLabel, style = MaterialTheme.typography.labelMedium, color = ext.cyan)
                     }
                 }
             }
@@ -188,7 +198,7 @@ fun NewDownloadSheet(
                 value = fileNameText,
                 onValueChange = { fileNameText = it },
                 label = { Text("Output Filename (optional)") },
-                placeholder = { Text("Auto-detected from Content-Disposition or URL") },
+                placeholder = { Text("Auto-detected from RFC 6266 or URL") },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -201,32 +211,80 @@ fun NewDownloadSheet(
                 label = { Text("Expected SHA-256 Checksum (optional)") },
                 placeholder = { Text("64-char hex digest for S3 verification") },
                 singleLine = true,
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Outlined.VerifiedUser,
-                        contentDescription = null,
-                    )
-                },
+                leadingIcon = { Icon(Icons.Outlined.VerifiedUser, contentDescription = null) },
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // Route Mode Selector + Live Validated Link Telemetry
+            // Engine Backend A/B Selector
+            Text(
+                text = "ENGINE EXECUTION BACKEND (A/B BENCHMARK)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                FilterChip(
+                    selected = backendOverride == null,
+                    onClick = { backendOverride = null },
+                    label = { Text("Global (${defaultSettings.preferredEngineBackend.badge})") },
+                )
+                FilterChip(
+                    selected = backendOverride == EngineBackendPreference.FORCE_RUST_NATIVE,
+                    onClick = { backendOverride = EngineBackendPreference.FORCE_RUST_NATIVE },
+                    enabled = defaultSettings.enableRustEngine,
+                    label = { Text("Force Rust Native") },
+                )
+                FilterChip(
+                    selected = backendOverride == EngineBackendPreference.FORCE_KOTLIN_OKHTTP,
+                    onClick = { backendOverride = EngineBackendPreference.FORCE_KOTLIN_OKHTTP },
+                    enabled = defaultSettings.enableKotlinOkHttpEngine,
+                    label = { Text("Force Kotlin OkHttp") },
+                )
+            }
+
+            // Protocol & TLS Fingerprint Profile
+            Text(
+                text = "PROTOCOL & TLS FINGERPRINT PROFILE",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                ProtocolMode.entries.forEach { pm ->
+                    FilterChip(
+                        selected = protocolMode == pm,
+                        onClick = { protocolMode = pm },
+                        label = { Text(pm.label) },
+                    )
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                BrowserProfile.entries.forEach { bp ->
+                    FilterChip(
+                        selected = browserProfile == bp,
+                        onClick = { browserProfile = bp },
+                        label = { Text(bp.label) },
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "TRANSPORT & LINK POLICY",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("TRANSPORT & LINK POLICY", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     text = if (networkMatrix.activeValidatedLinks.isNotEmpty()) {
                         String.format("%.1f Mbps est.", networkMatrix.aggregateEstimatedMbps)
-                    } else {
-                        "No validated links"
-                    },
+                    } else "No validated links",
                     style = MaterialTheme.typography.labelSmall,
                     color = ext.emerald,
                 )
@@ -244,45 +302,37 @@ fun NewDownloadSheet(
                 }
             }
 
-            if (routeMode == NetworkRouteMode.AUTO_MULTIPATH || routeMode == NetworkRouteMode.CELLULAR_ONLY) {
-                Text(
-                    text = "Mobile data & battery notice: keeping cellular 5G/LTE radio active alongside Wi-Fi consumes metered cellular data and additional modem battery.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ext.amber,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(ext.amber.copy(alpha = 0.1f))
-                        .border(1.dp, ext.amber.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                )
-            }
-
-            // Concurrency Workers Slider
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = "Adaptive BDP Segment Workers",
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        text = "${workerCount.roundToInt()} parallel streams",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ext.emerald,
+            Text(
+                text = "PER-SESSION CELLULAR DATA CAP",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                listOf(
+                    0L to "Unlimited",
+                    250L * 1024L * 1024L to "250 MB",
+                    1024L * 1024L * 1024L to "1 GB",
+                    5L * 1024L * 1024L * 1024L to "5 GB",
+                ).forEach { (bytes, label) ->
+                    FilterChip(
+                        selected = cellularCapBytes == bytes,
+                        onClick = { cellularCapBytes = bytes },
+                        label = { Text(label) },
                     )
                 }
-                Slider(
-                    value = workerCount,
-                    onValueChange = { workerCount = it },
-                    valueRange = 1f..8f,
-                    steps = 6,
-                )
             }
 
-            // Destination Picker (App Vault vs Staged SAF Placement)
+            Column {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Adaptive BDP Segment Workers", style = MaterialTheme.typography.titleSmall)
+                    Text("${workerCount.roundToInt()} parallel streams", style = MaterialTheme.typography.labelMedium, color = ext.emerald)
+                }
+                Slider(value = workerCount, onValueChange = { workerCount = it }, valueRange = 1f..8f, steps = 6)
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -291,53 +341,37 @@ fun NewDownloadSheet(
                 OutlinedButton(
                     onClick = {
                         val suggested = fileNameText.ifBlank {
-                            urlText.substringBefore('?').substringAfterLast('/')
-                                .ifBlank { "aether_download.bin" }
+                            urlText.substringBefore('?').substringAfterLast('/').ifBlank { "aether_download.bin" }
                         }
                         safCreateLauncher.launch(suggested)
                     },
                     modifier = Modifier.weight(1f),
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.FolderOpen,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
+                    Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(if (safDestinationUri != null) "SAF Target Locked" else "Pick SAF File…")
                 }
                 if (safDestinationUri != null) {
-                    OutlinedButton(onClick = { safDestinationUri = null }) {
-                        Text("Use App Vault")
-                    }
+                    OutlinedButton(onClick = { safDestinationUri = null }) { Text("Use Vault") }
                 }
             }
-            Text(
-                text = if (safDestinationUri != null) {
-                    if (defaultSettings.stagedSafPlacement) {
-                        "Staged SAF URI: downloads & verifies locally before atomic transfer"
-                    } else {
-                        "Direct SAF URI: ${safDestinationUri.toString().take(48)}…"
-                    }
-                } else {
-                    "Default destination: App-Managed Downloads Vault (FileProvider ready)"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Box(modifier = Modifier.height(4.dp))
 
             Button(
                 onClick = {
+                    val mirrors = mirrorUrlsText.lines().map { it.trim() }.filter { it.isNotBlank() }
                     onLaunchDownload(
                         NewDownloadRequest(
                             url = urlText.trim(),
+                            mirrorUrls = mirrors,
                             customFileName = fileNameText.trim().takeIf { it.isNotBlank() },
                             expectedSha256 = expectedSha256.trim().takeIf { it.isNotBlank() },
                             routeMode = routeMode,
                             workers = workerCount.roundToInt(),
                             safUriString = safDestinationUri?.toString(),
+                            backendOverride = backendOverride,
+                            protocolMode = protocolMode,
+                            browserProfile = browserProfile,
+                            maxCellularBytes = cellularCapBytes,
                         )
                     )
                 },
@@ -347,11 +381,7 @@ fun NewDownloadSheet(
                     .height(52.dp)
                     .testTag("start_download_button"),
             ) {
-                Icon(
-                    imageVector = Icons.Filled.RocketLaunch,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
+                Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Arm Pipeline & Download")
             }

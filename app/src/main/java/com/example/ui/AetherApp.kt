@@ -110,6 +110,8 @@ fun AetherApp(viewModel: AetherViewModel) {
     val casTotalBytes by viewModel.casTotalBytes.collectAsStateWithLifecycle()
     val networkMatrix by viewModel.networkMatrix.collectAsStateWithLifecycle()
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
+    val diagnosticsPreview by viewModel.diagnosticsPreview.collectAsStateWithLifecycle()
+    val aria2Secret by viewModel.aria2Secret.collectAsStateWithLifecycle()
 
     // Lifecycle-aware 4 Hz active / 0 Hz ON_STOP telemetry polling
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
@@ -175,7 +177,7 @@ fun AetherApp(viewModel: AetherViewModel) {
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "v7.1",
+                                    text = "v8.0",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ext.cyan,
                                     modifier = Modifier
@@ -341,9 +343,14 @@ fun AetherApp(viewModel: AetherViewModel) {
                                     networkMatrix = networkMatrix,
                                     settings = settings,
                                     downloads = downloads,
+                                    fontLicenseAudit = viewModel.fontLicenseAudit,
+                                    diagnosticsPreview = diagnosticsPreview,
+                                    aria2Secret = aria2Secret,
                                     onUpdateSettings = viewModel::updateSettings,
                                     onRefreshNetwork = viewModel::refreshNetworkMatrix,
                                     onPruneCas = viewModel::pruneCasCache,
+                                    onCopyDiagnostics = viewModel::copyDiagnosticsToClipboard,
+                                    onCopyAria2Secret = viewModel::copyAria2SecretToClipboard,
                                 )
                             }
                         }

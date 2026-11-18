@@ -9,9 +9,12 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.data.model.BrowserProfile
+import com.example.data.model.EngineBackendPreference
 import com.example.data.model.EngineSettings
 import com.example.data.model.F2FS_SEGMENT_BYTES
 import com.example.data.model.NetworkRouteMode
+import com.example.data.model.ProtocolMode
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -37,6 +40,18 @@ class SettingsRepository(private val context: Context) {
         val CELL_PROXY_HOST = stringPreferencesKey("cell_proxy_host")
         val CELL_PROXY_PORT = intPreferencesKey("cell_proxy_port")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+
+        // Dual-engine A/B testing & v8.0 flags
+        val ENABLE_RUST_ENGINE = booleanPreferencesKey("enable_rust_engine")
+        val ENABLE_KOTLIN_OKHTTP = booleanPreferencesKey("enable_kotlin_okhttp_engine")
+        val PREFERRED_BACKEND = stringPreferencesKey("preferred_engine_backend")
+        val ENABLE_HTTP3_QUIC = booleanPreferencesKey("enable_http3_quic")
+        val ENABLE_WREQ_EMULATION = booleanPreferencesKey("enable_wreq_emulation")
+        val ENABLE_IO_URING_PROBE = booleanPreferencesKey("enable_io_uring_probe")
+        val ENABLE_ARIA2_RPC = booleanPreferencesKey("enable_aria2_rpc")
+        val MAX_CELLULAR_BYTES = longPreferencesKey("max_cellular_bytes_session")
+        val BROWSER_PROFILE = stringPreferencesKey("default_browser_profile")
+        val PROTOCOL_MODE = stringPreferencesKey("default_protocol_mode")
     }
 
     val settingsFlow: Flow<EngineSettings> = context.aetherDataStore.data.map { prefs ->
@@ -58,6 +73,22 @@ class SettingsRepository(private val context: Context) {
             themeMode = prefs[Keys.THEME_MODE]
                 ?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() }
                 ?: ThemeMode.DARK_OBSIDIAN,
+            enableRustEngine = prefs[Keys.ENABLE_RUST_ENGINE] ?: true,
+            enableKotlinOkHttpEngine = prefs[Keys.ENABLE_KOTLIN_OKHTTP] ?: true,
+            preferredEngineBackend = prefs[Keys.PREFERRED_BACKEND]
+                ?.let { runCatching { EngineBackendPreference.valueOf(it) }.getOrNull() }
+                ?: EngineBackendPreference.AUTO_PREFER_RUST,
+            enableHttp3Quic = prefs[Keys.ENABLE_HTTP3_QUIC] ?: true,
+            enableWreqEmulation = prefs[Keys.ENABLE_WREQ_EMULATION] ?: true,
+            enableIoUringProbe = prefs[Keys.ENABLE_IO_URING_PROBE] ?: false,
+            enableAria2Rpc = prefs[Keys.ENABLE_ARIA2_RPC] ?: false,
+            maxCellularBytesPerSession = (prefs[Keys.MAX_CELLULAR_BYTES] ?: 0L).coerceAtLeast(0L),
+            defaultBrowserProfile = prefs[Keys.BROWSER_PROFILE]
+                ?.let { runCatching { BrowserProfile.valueOf(it) }.getOrNull() }
+                ?: BrowserProfile.CHROME_134,
+            defaultProtocolMode = prefs[Keys.PROTOCOL_MODE]
+                ?.let { runCatching { ProtocolMode.valueOf(it) }.getOrNull() }
+                ?: ProtocolMode.AUTO_HYBRID,
         )
     }
 
@@ -79,6 +110,16 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.CELL_PROXY_HOST] = updated.cellularProxyHost.trim()
             prefs[Keys.CELL_PROXY_PORT] = updated.cellularProxyPort.coerceIn(1, 65535)
             prefs[Keys.THEME_MODE] = updated.themeMode.name
+            prefs[Keys.ENABLE_RUST_ENGINE] = updated.enableRustEngine
+            prefs[Keys.ENABLE_KOTLIN_OKHTTP] = updated.enableKotlinOkHttpEngine
+            prefs[Keys.PREFERRED_BACKEND] = updated.preferredEngineBackend.name
+            prefs[Keys.ENABLE_HTTP3_QUIC] = updated.enableHttp3Quic
+            prefs[Keys.ENABLE_WREQ_EMULATION] = updated.enableWreqEmulation
+            prefs[Keys.ENABLE_IO_URING_PROBE] = updated.enableIoUringProbe
+            prefs[Keys.ENABLE_ARIA2_RPC] = updated.enableAria2Rpc
+            prefs[Keys.MAX_CELLULAR_BYTES] = updated.maxCellularBytesPerSession.coerceAtLeast(0L)
+            prefs[Keys.BROWSER_PROFILE] = updated.defaultBrowserProfile.name
+            prefs[Keys.PROTOCOL_MODE] = updated.defaultProtocolMode.name
         }
     }
 }

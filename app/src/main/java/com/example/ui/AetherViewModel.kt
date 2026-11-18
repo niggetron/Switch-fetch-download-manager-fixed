@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -13,6 +16,8 @@ import com.example.data.model.FileCategory
 import com.example.data.model.NewDownloadRequest
 import com.example.data.model.TransferFilter
 import com.example.data.repository.StorageStats
+import com.example.engine.AetherNativeBridge
+import com.example.engine.DiagnosticsCenter
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
 import com.example.util.FileOpener
@@ -51,6 +56,16 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _telemetry = MutableStateFlow(telemetryLedger.sampleSnapshot(false))
     val telemetry: StateFlow<TelemetrySnapshot> = _telemetry.asStateFlow()
+
+    private val _diagnosticsPreview = MutableStateFlow("")
+    val diagnosticsPreview: StateFlow<String> = _diagnosticsPreview.asStateFlow()
+
+    private val _aria2Secret = MutableStateFlow(app.aria2RpcSecret)
+    val aria2Secret: StateFlow<String> = _aria2Secret.asStateFlow()
+
+    val fontLicenseAudit: String by lazy {
+        DiagnosticsCenter.verifyBundledFontLicenses(app)
+    }
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
@@ -94,7 +109,9 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                         entity.fileName.endsWith(".xz", true)
                     FileCategory.MEDIA -> entity.mimeType.startsWith("image/") ||
                         entity.mimeType.startsWith("video/") ||
-                        entity.mimeType.startsWith("audio/")
+                        entity.mimeType.startsWith("audio/") ||
+                        entity.fileName.endsWith(".m3u8", true) ||
+                        entity.fileName.endsWith(".mpd", true)
                     FileCategory.PACKAGES -> entity.fileName.endsWith(".bin", true) ||
                         entity.fileName.endsWith(".iso", true) ||
                         entity.fileName.endsWith(".apk", true) ||
@@ -132,9 +149,19 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         if (active) {
             if (telemetryPollJob?.isActive == true) return
             telemetryPollJob = viewModelScope.launch(Dispatchers.Default) {
+                var ticks = 0
                 while (isActive) {
                     val hasActive = downloads.value.any { it.statusEnum.isActive }
-                    _telemetry.value = telemetryLedger.sampleSnapshot(hasActive)
+                    val snap = telemetryLedger.sampleSnapshot(hasActive)
+                    _telemetry.value = snap
+                    if (ticks % 4 == 0) {
+                        _diagnosticsPreview.value = DiagnosticsCenter.exportReport(
+                            context = app,
+                            backendLabel = AetherNativeBridge.engineBackendLabel,
+                            telemetry = snap,
+                        )
+                    }
+                    ticks++
                     delay(250L)
                 }
             }
@@ -142,6 +169,26 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
             telemetryPollJob?.cancel()
             telemetryPollJob = null
         }
+    }
+
+    fun copyDiagnosticsToClipboard() {
+        val report = DiagnosticsCenter.exportReport(
+            context = app,
+            backendLabel = AetherNativeBridge.engineBackendLabel,
+            telemetry = _telemetry.value,
+        )
+        _diagnosticsPreview.value = report
+        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("AetherIO Diagnostics", report))
+        _snackbarEvents.tryEmit("Redacted diagnostics report copied to clipboard")
+    }
+
+    fun copyAria2SecretToClipboard() {
+        val secret = _aria2Secret.value
+        if (secret.isBlank()) return
+        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("Aria2 RPC Secret", "token:$secret"))
+        _snackbarEvents.tryEmit("Loopback RPC token copied to clipboard")
     }
 
     fun setTransferFilter(filter: TransferFilter) {
@@ -173,7 +220,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             engine.enqueue(request)
-            _snackbarEvents.tryEmit("Pipeline queued · Adaptive BDP ledger armed")
+            _snackbarEvents.tryEmit("Pipeline queued · Dual-engine scheduler armed")
         }
     }
 
@@ -219,7 +266,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             engine.updateExpiredUrlAndResume(id, clean)
-            _snackbarEvents.tryEmit("Signed URL refreshed · Resuming from bitfield")
+            _snackbarEvents.tryEmit("Signed URL refreshed · Resuming from AETHLDG2 ledger")
         }
     }
 
@@ -266,6 +313,8 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
             settingsRepo.update(transform)
             val updated = settingsRepo.current()
             networkMonitor.applyPolicy(updated)
+            app.syncAria2RpcState(updated.enableAria2Rpc)
+            _aria2Secret.value = app.aria2RpcSecret
         }
     }
 }

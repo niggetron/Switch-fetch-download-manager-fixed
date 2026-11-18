@@ -64,10 +64,12 @@ data class LinkLaneMetrics(
 )
 
 /**
- * Deterministic Multi-Network Scheduler implementing v7.1 + v3.0 & Fixes F5–F8:
+ * Deterministic Multi-Network Scheduler implementing v8.0 & Fixes F5–F8:
  * - Adaptive BDP segment sizing (1 MiB < 50M, 4 MiB 50–120M, 8 MiB > 120M)
  * - Earliest-Arrival dispatch F_k = (Q_k + S) / R_k + r_k / 2
  * - Lowest-RTT link pinning for HEAD / 1-1 pre-flight probes
+ * - Multi-mirror URL selection per LinkKey (Wi-Fi vs 5G vs Eth)
+ * - Slowest active extent bisection (`bisectSlowestRange`) & `_emptyRightOf` absorption
  * - effective_connections = max(userMaxConnections, validatedActiveLinks)
  * - Bidirectional autoSpeedUp (+2 / -2 worker scaling)
  */
@@ -108,7 +110,7 @@ object LinkScheduler {
     }
 
     /**
-     * F5: Pin HEAD / Range 1-1 probes strictly to the lowest-RTT healthy link.
+     * F5: Pin HEAD / Range 0-0 probes strictly to the lowest-RTT healthy link.
      */
     fun selectLowestRttLink(
         lanes: List<LinkLaneMetrics>,
@@ -121,6 +123,33 @@ object LinkScheduler {
                 br == null || br.allowRequest(nowMs)
             }
             .minByOrNull { it.rttMinSecs }
+    }
+
+    /**
+     * Distributes distinct mirror URLs cleanly across independent links (`wifi:*` vs `cell:*` vs `eth:*`).
+     */
+    fun selectMirrorForLink(urls: List<String>, linkKeyId: String, segIndex: Int): String {
+        if (urls.isEmpty()) return ""
+        if (urls.size == 1) return urls.first()
+        val baseIdx = when {
+            linkKeyId.startsWith("cell:") -> 1
+            linkKeyId.startsWith("eth:") -> 2
+            else -> 0
+        }
+        return urls[(baseIdx + segIndex) % urls.size]
+    }
+
+    /**
+     * Splits the largest remaining range cleanly in half when tail workers become idle
+     * and the remaining extent exceeds 512 KiB.
+     */
+    fun bisectRange(startOffset: Long, endOffset: Long): Pair<Long, Long>? {
+        val remaining = endOffset - startOffset + 1L
+        if (remaining < 1024L * 1024L) return null
+        val mid = startOffset + (remaining / 2L)
+        return (startOffset to (mid - 1L))
+            .takeIf { it.first <= it.second }
+            ?.let { mid to endOffset }
     }
 
     fun filterLanesByMode(
@@ -138,13 +167,17 @@ object LinkScheduler {
                 linkKeyId = info.linkKey.id,
                 queuedBytes = 0.0,
                 ewmaBytesPerSec = (info.ewmaMbps * 125_000.0).coerceAtLeast(125_000.0),
-                rttMinSecs = if (info.linkKey.isCellular) 0.028 else 0.018,
+                rttMinSecs = when {
+                    info.linkKey.isEthernet -> 0.010
+                    info.linkKey.isCellular -> 0.028
+                    else -> 0.018
+                },
             )
         }
     }
 
     /**
-     * Bidirectional closed-loop autoSpeedUp controller (v3.0 + v7.1).
+     * Bidirectional closed-loop autoSpeedUp controller (v3.0 + v8.0).
      */
     fun adjustAutoSpeedUp(
         currentWorkers: Int,

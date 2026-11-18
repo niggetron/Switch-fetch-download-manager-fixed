@@ -1,3 +1,6 @@
+//! Crash-safe AETHLDG2 binary ledger with per-512 KiB BLAKE3 digests,
+//! contiguous verified offset tracking, and strict fdatasync -> msync ordering.
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
@@ -6,9 +9,10 @@ use sha2::{Digest, Sha256};
 
 use crate::storage_and_telemetry::{flush_fdatasync, pwrite_all};
 
-pub const LEDGER_MAGIC: &[u8; 8] = b"AETHLDG1";
-pub const LEDGER_VERSION: u32 = 1;
-pub const LEDGER_HEADER_LEN: usize = 64; // 0x40 bytes before segment_states
+pub const LEDGER_MAGIC: &[u8; 8] = b"AETHLDG2";
+pub const LEDGER_VERSION: u32 = 2;
+pub const LEDGER_HEADER_LEN: usize = 72;
+pub const SLAB_DIGEST_BYTES: usize = 32; // BLAKE3 256-bit digest per 512 KiB slab
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,19 +32,29 @@ impl SegmentStatus {
     }
 }
 
-/// Crash-safe AETHLDG1 binary ledger (v7.1 Section 07 Table 7.1):
-/// 0x00 magic (8B), 0x08 version (4B) + pad (4B), 0x10 total_len (8B),
-/// 0x18 segment_bytes (8B), 0x20 segment_count (4B) + flags (4B),
-/// 0x28 validator_hash (8B) + reserved (16B),
-/// 0x40 segment_states (N bytes), 0x40+N crc32c (4B).
+/// Crash-safe AETHLDG2 binary ledger:
+/// 0x00 magic (8B "AETHLDG2")
+/// 0x08 version (4B = 2) + flags (4B)
+/// 0x10 total_len (8B)
+/// 0x18 segment_bytes (8B)
+/// 0x20 segment_count (4B) + slab_digest_count (4B)
+/// 0x28 validator_hash (8B)
+/// 0x30 contiguous_verified_offset (8B)
+/// 0x38 reserved (16B)
+/// 0x48 segment_states (segment_count bytes)
+/// 0x48+segment_count slab_blake3_digests (slab_digest_count * 32 bytes)
+/// tail crc32c (4B)
 #[derive(Debug, Clone)]
 pub struct AetherLedger {
     pub total_len: u64,
     pub segment_bytes: u64,
     pub segment_count: u32,
+    pub slab_digest_count: u32,
     pub flags: u32,
     pub validator_hash: [u8; 8],
+    pub contiguous_verified_offset: u64,
     pub states: Vec<u8>,
+    pub slab_blake3: Vec<[u8; SLAB_DIGEST_BYTES]>,
 }
 
 impl AetherLedger {
@@ -54,35 +68,54 @@ impl AetherLedger {
     }
 
     pub fn new(total_len: u64, segment_bytes: u64, etag_or_lastmod: &str) -> Self {
-        let seg = segment_bytes.max(1024 * 1024);
+        let seg = segment_bytes.max(512 * 1024);
         let count = if total_len == 0 {
             0
         } else {
             total_len.div_ceil(seg) as u32
         };
+        let slab_count = if total_len == 0 {
+            0
+        } else {
+            total_len.div_ceil(512 * 1024) as u32
+        };
         Self {
             total_len,
             segment_bytes: seg,
             segment_count: count,
+            slab_digest_count: slab_count,
             flags: 0,
             validator_hash: Self::compute_validator_hash(etag_or_lastmod),
+            contiguous_verified_offset: 0,
             states: vec![SegmentStatus::Pending as u8; count as usize],
+            slab_blake3: vec![[0u8; SLAB_DIGEST_BYTES]; slab_count as usize],
+        }
+    }
+
+    pub fn record_slab_digest(&mut self, slab_index: usize, digest: [u8; 32]) {
+        if slab_index < self.slab_blake3.len() {
+            self.slab_blake3[slab_index] = digest;
         }
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let body_len = LEDGER_HEADER_LEN + self.states.len();
+        let digests_len = self.slab_blake3.len() * SLAB_DIGEST_BYTES;
+        let body_len = LEDGER_HEADER_LEN + self.states.len() + digests_len;
         let mut buf = Vec::with_capacity(body_len + 4);
         buf.extend_from_slice(LEDGER_MAGIC);
         buf.extend_from_slice(&LEDGER_VERSION.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&self.flags.to_le_bytes());
         buf.extend_from_slice(&self.total_len.to_le_bytes());
         buf.extend_from_slice(&self.segment_bytes.to_le_bytes());
         buf.extend_from_slice(&self.segment_count.to_le_bytes());
-        buf.extend_from_slice(&self.flags.to_le_bytes());
+        buf.extend_from_slice(&(self.slab_blake3.len() as u32).to_le_bytes());
         buf.extend_from_slice(&self.validator_hash);
+        buf.extend_from_slice(&self.contiguous_verified_offset.to_le_bytes());
         buf.extend_from_slice(&[0u8; 16]);
         buf.extend_from_slice(&self.states);
+        for d in &self.slab_blake3 {
+            buf.extend_from_slice(d);
+        }
         let crc = crc32c::crc32c(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
         buf
@@ -99,36 +132,50 @@ impl AetherLedger {
         if version != LEDGER_VERSION {
             return None;
         }
+        let flags = u32::from_le_bytes(raw[12..16].try_into().ok()?);
         let total_len = u64::from_le_bytes(raw[16..24].try_into().ok()?);
         let segment_bytes = u64::from_le_bytes(raw[24..32].try_into().ok()?);
         let segment_count = u32::from_le_bytes(raw[32..36].try_into().ok()?);
-        let flags = u32::from_le_bytes(raw[36..40].try_into().ok()?);
+        let slab_digest_count = u32::from_le_bytes(raw[36..40].try_into().ok()?);
         let mut validator_hash = [0u8; 8];
         validator_hash.copy_from_slice(&raw[40..48]);
+        let contiguous_verified_offset = u64::from_le_bytes(raw[48..56].try_into().ok()?);
 
-        let expected_len = LEDGER_HEADER_LEN + segment_count as usize + 4;
+        let digests_offset = LEDGER_HEADER_LEN + segment_count as usize;
+        let digests_bytes = (slab_digest_count as usize).checked_mul(SLAB_DIGEST_BYTES)?;
+        let expected_len = digests_offset + digests_bytes + 4;
         if raw.len() != expected_len {
             return None;
         }
-        let body = &raw[..LEDGER_HEADER_LEN + segment_count as usize];
+        let body = &raw[..digests_offset + digests_bytes];
         let stored_crc = u32::from_le_bytes(raw[expected_len - 4..expected_len].try_into().ok()?);
         if crc32c::crc32c(body) != stored_crc {
             return None;
         }
 
-        // On crash recovery, revert any in-flight Leased (1) segments back to Pending (0)
-        let states = raw[LEDGER_HEADER_LEN..LEDGER_HEADER_LEN + segment_count as usize]
+        // Reset any crash-interrupted Leased (1) segments cleanly back to Pending (0)
+        let states = raw[LEDGER_HEADER_LEN..digests_offset]
             .iter()
             .map(|&s| if s == SegmentStatus::Done as u8 { s } else { SegmentStatus::Pending as u8 })
             .collect();
+
+        let mut slab_blake3 = Vec::with_capacity(slab_digest_count as usize);
+        for chunk in raw[digests_offset..digests_offset + digests_bytes].chunks_exact(SLAB_DIGEST_BYTES) {
+            let mut d = [0u8; SLAB_DIGEST_BYTES];
+            d.copy_from_slice(chunk);
+            slab_blake3.push(d);
+        }
 
         Some(Self {
             total_len,
             segment_bytes,
             segment_count,
+            slab_digest_count,
             flags,
             validator_hash,
+            contiguous_verified_offset,
             states,
+            slab_blake3,
         })
     }
 
@@ -152,24 +199,46 @@ impl AetherLedger {
             }
         }
         let fresh = Self::new(total_len, segment_bytes, etag_or_lastmod);
-        fresh.persist(path)?;
+        fresh.persist(path, None)?;
         Ok(fresh)
     }
 
+    /// Enforces strict flush ordering: fdatasync(data_fd) BEFORE ledger write + fdatasync/msync.
     #[cfg(unix)]
-    pub fn persist(&self, path: &Path) -> io::Result<()> {
+    pub fn persist(&self, path: &Path, data_file: Option<&File>) -> io::Result<()> {
+        if let Some(df) = data_file {
+            flush_fdatasync(df)?;
+        }
         let encoded = self.encode();
         let file = OpenOptions::new()
             .create(true)
+            .read(true)
             .write(true)
             .truncate(true)
             .open(path)?;
         pwrite_all(&file, &encoded, 0)?;
-        flush_fdatasync(&file)
+        flush_fdatasync(&file)?;
+        // Also flush an MS_SYNC mmap barrier when sized cleanly on disk
+        unsafe {
+            use std::os::fd::AsRawFd;
+            let mapped = libc::mmap(
+                std::ptr::null_mut(),
+                encoded.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            );
+            if mapped != libc::MAP_FAILED {
+                libc::msync(mapped, encoded.len(), libc::MS_SYNC);
+                libc::munmap(mapped, encoded.len());
+            }
+        }
+        Ok(())
     }
 
     #[cfg(not(unix))]
-    pub fn persist(&self, path: &Path) -> io::Result<()> {
+    pub fn persist(&self, path: &Path, _data_file: Option<&File>) -> io::Result<()> {
         std::fs::write(path, self.encode())
     }
 }

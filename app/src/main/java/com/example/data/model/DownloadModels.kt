@@ -3,6 +3,7 @@ package com.example.data.model
 import com.example.ui.theme.ThemeMode
 
 const val F2FS_SEGMENT_BYTES: Long = 4L * 1024L * 1024L // 4 MiB default adaptive BDP base
+const val MEDIASTORE_DIRECT_FD_THRESHOLD_BYTES: Long = 1L * 1024L * 1024L * 1024L // 1 GiB FUSE threshold
 
 enum class DownloadStatus {
     QUEUED,
@@ -34,6 +35,24 @@ enum class NetworkRouteMode(val label: String) {
     WIFI_ONLY("Wi-Fi Only"),
     CELLULAR_ONLY("5G / Cellular"),
     PROXY_SOCKS5("SOCKS5h Proxy"),
+}
+
+enum class EngineBackendPreference(val label: String, val badge: String) {
+    AUTO_PREFER_RUST("Auto (Prefer Rust)", "AUTO"),
+    FORCE_RUST_NATIVE("Rust libaether_core.so", "RUST"),
+    FORCE_KOTLIN_OKHTTP("Kotlin OkHttp Engine", "OKHTTP"),
+}
+
+enum class BrowserProfile(val wireId: String, val label: String) {
+    CHROME_134("chrome134", "Chrome 134"),
+    CHROME_131("chrome131", "Chrome 131"),
+    OKHTTP_5("okhttp5", "OkHttp 5"),
+}
+
+enum class ProtocolMode(val wireId: String, val label: String) {
+    AUTO_HYBRID("auto", "Auto H3 + wreq H2"),
+    WREQ_H2("wreq_h2", "wreq BoringSSL H2"),
+    H3_QUIC_0RTT("h3_quic", "HTTP/3 QUIC 0-RTT"),
 }
 
 enum class SegmentState(val code: Char) {
@@ -68,12 +87,13 @@ enum class TransferFilter(val label: String) {
 }
 
 /**
- * Logical Android network identity (Fix F3):
- * Keyed by transport + interface/subId rather than rotating raw networkHandle.
+ * Logical Android network identity (Fix F3 + Hot-Plug USB-C Ethernet):
+ * Keyed by transport + interface rather than rotating raw networkHandle.
  */
-sealed class LinkKey(val id: String, val isCellular: Boolean) {
-    data class Wifi(val iface: String) : LinkKey("wifi:$iface", false)
-    data class Cellular(val iface: String) : LinkKey("cell:$iface", true)
+sealed class LinkKey(val id: String, val isCellular: Boolean, val isEthernet: Boolean = false) {
+    data class Wifi(val iface: String) : LinkKey("wifi:$iface", isCellular = false, isEthernet = false)
+    data class Cellular(val iface: String) : LinkKey("cell:$iface", isCellular = true, isEthernet = false)
+    data class Ethernet(val iface: String) : LinkKey("eth:$iface", isCellular = false, isEthernet = true)
 
     override fun toString(): String = id
 }
@@ -83,6 +103,20 @@ enum class BreakerState {
     OPEN,
     HALF_OPEN,
 }
+
+data class ActiveConnectionInfo(
+    val connId: String,
+    val taskId: String,
+    val url: String,
+    val linkKeyId: String,
+    val protocol: String,
+    val socketState: String,
+    val ttfbMs: Long,
+    val bytesReceived: Long,
+    val speedBps: Long,
+    val rangeStart: Long,
+    val rangeEnd: Long,
+)
 
 data class EngineSettings(
     val maxConcurrentWorkers: Int = 4,
@@ -98,15 +132,43 @@ data class EngineSettings(
     val cellularProxyHost: String = "",
     val cellularProxyPort: Int = 1080,
     val themeMode: ThemeMode = ThemeMode.DARK_OBSIDIAN,
-)
+    // Dual-engine A/B toggles & v8.0 feature flags
+    val enableRustEngine: Boolean = true,
+    val enableKotlinOkHttpEngine: Boolean = true,
+    val preferredEngineBackend: EngineBackendPreference = EngineBackendPreference.AUTO_PREFER_RUST,
+    val enableHttp3Quic: Boolean = true,
+    val enableWreqEmulation: Boolean = true,
+    val enableIoUringProbe: Boolean = false,
+    val enableAria2Rpc: Boolean = false,
+    val maxCellularBytesPerSession: Long = 0L, // 0 = unlimited
+    val defaultBrowserProfile: BrowserProfile = BrowserProfile.CHROME_134,
+    val defaultProtocolMode: ProtocolMode = ProtocolMode.AUTO_HYBRID,
+) {
+    fun toNativeFeatureMask(): Int {
+        var mask = 0
+        if (retainCellularOnWifi && defaultRouteMode != NetworkRouteMode.WIFI_ONLY) mask = mask or (1 shl 0)
+        if (enableHttp3Quic) mask = mask or (1 shl 1)
+        if (enableWreqEmulation) mask = mask or (1 shl 2)
+        if (enableIoUringProbe) mask = mask or (1 shl 3)
+        if (enableAria2Rpc) mask = mask or (1 shl 4)
+        if (enableTailHedge) mask = mask or (1 shl 5)
+        if (enableAutoSpeedUp) mask = mask or (1 shl 6)
+        return mask
+    }
+}
 
 data class NewDownloadRequest(
     val url: String,
+    val mirrorUrls: List<String> = emptyList(),
     val customFileName: String? = null,
     val expectedSha256: String? = null,
     val routeMode: NetworkRouteMode = NetworkRouteMode.AUTO_MULTIPATH,
     val workers: Int = 4,
     val safUriString: String? = null,
+    val backendOverride: EngineBackendPreference? = null,
+    val protocolMode: ProtocolMode = ProtocolMode.AUTO_HYBRID,
+    val browserProfile: BrowserProfile = BrowserProfile.CHROME_134,
+    val maxCellularBytes: Long = 0L,
 )
 
 data class PublicTestEndpoint(

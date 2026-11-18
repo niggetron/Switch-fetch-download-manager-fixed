@@ -1,8 +1,8 @@
 [package]
 name = "aether-core"
-version = "7.1.0"
+version = "8.0.0"
 edition = "2024"
-description = "AetherIO Omega v7.1 Production Rust Data Plane: BoundedSlabPool, memfd telemetry, fallocate+pwrite+fdatasync, AETHLDG1 ledger, Earliest-Arrival multipath + CircuitBreaker, QUIC/H2 + socks5h"
+description = "AetherIO Engine v8.0 Production Pure Rust Data Plane: Semaphore BoundedSlabPool (8 MiB), real shared memfd telemetry, fallocate+pwrite+fdatasync, AETHLDG2 crash-safe ledger, wreq BoringSSL (prefix-symbols) + quinn/h3 0-RTT, multi-mirror Earliest-Arrival, HLS/DASH, Aria2 RPC"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -13,7 +13,15 @@ crate-type = ["cdylib", "rlib"]
 rustix = { version = "0.38", features = ["fs", "io", "mm"] }
 libc = "0.2"
 socket2 = "0.5"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }
+crossbeam-queue = "0.3"
+bytes = "1"
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
+wreq = { version = "0.16", default-features = false, features = ["tokio-rt", "prefix-symbols", "socks", "stream"] }
+wreq-util = "0.2"
+http = "1"
 hyper = { version = "1", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1", "http2"] }
 http-body-util = "0.1"
@@ -21,6 +29,8 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"] }
 webpki-roots = "0.26"
 quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
 blake3 = "1.5"
 sha2 = "0.10"
 crc32c = "0.6"

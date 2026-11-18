@@ -5,6 +5,8 @@ import com.example.data.local.AetherDatabase
 import com.example.data.preferences.SettingsRepository
 import com.example.data.repository.DownloadRepository
 import com.example.engine.AetherDownloadEngine
+import com.example.engine.AetherNativeBridge
+import com.example.engine.DiagnosticsCenter
 import com.example.engine.MemfdTelemetryReader
 import com.example.engine.NetworkMonitor
 import com.example.engine.SlabBufferPool
@@ -41,12 +43,33 @@ class AetherApplication : Application() {
         )
     }
 
+    @Volatile
+    var aria2RpcSecret: String = ""
+        private set
+
+    fun syncAria2RpcState(enabled: Boolean) {
+        if (enabled && AetherNativeBridge.isNativeLoaded) {
+            if (aria2RpcSecret.isBlank()) {
+                aria2RpcSecret = AetherNativeBridge.startAria2RpcSafe()
+                if (aria2RpcSecret.isNotBlank()) {
+                    DiagnosticsCenter.log("ARIA2_RPC", "Loopback 127.0.0.1:6800 armed with per-boot secret")
+                }
+            }
+        } else {
+            AetherNativeBridge.stopAria2RpcSafe()
+            aria2RpcSecret = ""
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         telemetryLedger.attachMemfdIfAvailable()
+        telemetryLedger.startCpuHeadroomMonitor(appScope)
         appScope.launch {
             val saved = settingsRepository.current()
             networkMonitor.start(saved)
+            downloadEngine.reconcileLedgersOnStartup()
+            syncAria2RpcState(saved.enableAria2Rpc)
         }
     }
 }

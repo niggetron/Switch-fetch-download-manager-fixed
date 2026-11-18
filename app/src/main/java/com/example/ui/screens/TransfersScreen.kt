@@ -11,6 +11,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -66,7 +68,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.DownloadEntity
@@ -75,7 +76,10 @@ import com.example.data.model.DownloadStatus
 import com.example.data.model.TransferFilter
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
+import com.example.engine.ResolvedEngineBackend
 import com.example.engine.TelemetrySnapshot
+import com.example.ui.components.KetchConnectionsInspectorCard
+import com.example.ui.components.PerNetworkLiveSpeedPanel
 import com.example.ui.components.SegmentBitfieldMatrix
 import com.example.ui.components.StatusPill
 import com.example.ui.components.ThroughputSparkline
@@ -124,7 +128,6 @@ fun TransfersScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Hero Telemetry Banner
         item(key = "hero_banner") {
             HeroTelemetryBanner(
                 telemetry = telemetry,
@@ -139,7 +142,15 @@ fun TransfersScreen(
             )
         }
 
-        // PAC Auto-Proxy Warning Banner (F9)
+        if (telemetry.activeConnections.isNotEmpty()) {
+            item(key = "ketch_connections_inspector") {
+                KetchConnectionsInspectorCard(
+                    connections = telemetry.activeConnections,
+                    activeEngineBadge = telemetry.activeEngineBadge,
+                )
+            }
+        }
+
         networkMatrix.pacWarningUrl?.let { pacUrl ->
             item(key = "pac_warning") {
                 Row(
@@ -167,7 +178,6 @@ fun TransfersScreen(
             }
         }
 
-        // Filter Strip
         item(key = "filter_strip") {
             Row(
                 modifier = Modifier
@@ -235,6 +245,7 @@ fun TransfersScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HeroTelemetryBanner(
     telemetry: TelemetrySnapshot,
@@ -259,19 +270,27 @@ private fun HeroTelemetryBanner(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
-                Text(
-                    text = if (telemetry.isMemfdMapped) "THROUGHPUT · MEMFD ZERO-JNI" else "THROUGHPUT PIPELINE",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ext.cyan,
-                )
-                Row(verticalAlignment = Alignment.Bottom) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = if (telemetry.isMemfdMapped) "MEMFD ZERO-JNI" else "THROUGHPUT PIPELINE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ext.cyan,
+                    )
+                    StatusPill(label = telemetry.activeEngineBadge, color = ext.emerald)
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.Center,
+                ) {
                     Text(
                         text = Formatters.formatSpeedMbps(telemetry.instantBps),
                         style = MonoHeroMetricStyle,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = Formatters.formatSpeedMBps(telemetry.instantBps),
                         style = MaterialTheme.typography.labelMedium,
@@ -309,24 +328,29 @@ private fun HeroTelemetryBanner(
             historyBps = telemetry.speedHistoryBps,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(54.dp),
+                .height(50.dp),
         )
 
-        // Per-LinkKey Interface & Circuit Breaker Pills
+        // Live Per-Network Wi-Fi / 5G / Eth Speed Bars
+        PerNetworkLiveSpeedPanel(
+            telemetry = telemetry,
+            networkMatrix = networkMatrix,
+        )
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            LinkEndpointPill(
-                title = "Wi-Fi",
-                endpoint = networkMatrix.wifiLink,
-            )
+            LinkEndpointPill(title = "Wi-Fi", endpoint = networkMatrix.wifiLink)
             LinkEndpointPill(
                 title = if (networkMatrix.cellularLeaseRequested) "5G/LTE (Leased)" else "5G/LTE",
                 endpoint = networkMatrix.cellularLink,
             )
+            networkMatrix.ethernetLink?.let { eth ->
+                LinkEndpointPill(title = "USB-C Eth", endpoint = eth)
+            }
         }
 
         Row(
@@ -334,19 +358,14 @@ private fun HeroTelemetryBanner(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TelemetryMiniCell(
-                label = "SLAB ARENA",
+                label = "SLAB POOL",
                 value = String.format("%.1f / 8.0 MB", telemetry.slabAllocatedMb.coerceAtLeast(0.5f)),
                 accent = ext.violet,
                 modifier = Modifier.weight(1f),
             )
             TelemetryMiniCell(
                 label = "LINKS",
-                value = when {
-                    networkMatrix.isMultipathReady -> "Wi-Fi + 5G"
-                    networkMatrix.wifiLink != null -> "Wi-Fi"
-                    networkMatrix.cellularLink != null -> "5G/LTE"
-                    else -> "Offline"
-                },
+                value = "${networkMatrix.activeValidatedLinks.size} Active",
                 accent = ext.emerald,
                 modifier = Modifier.weight(1f),
             )
@@ -415,6 +434,7 @@ private fun TelemetryMiniCell(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TransferItemCard(
     entity: DownloadEntity,
@@ -465,6 +485,12 @@ private fun TransferItemCard(
         DownloadStatus.CANCELLED -> "CANCELLED"
     }
 
+    val engineTag = when (entity.engineBackendUsed) {
+        ResolvedEngineBackend.RUST_LIBAETHER_CORE.id -> "RUST CORE"
+        ResolvedEngineBackend.KOTLIN_OKHTTP.id -> "OKHTTP"
+        else -> null
+    }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -510,11 +536,17 @@ private fun TransferItemCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(modifier = Modifier.height(3.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         StatusPill(label = statusLabel, color = statusColor)
+                        if (engineTag != null) {
+                            StatusPill(label = engineTag, color = ext.violet)
+                        }
+                        if (entity.allUrls.size > 1) {
+                            StatusPill(label = "${entity.allUrls.size} Mirrors", color = ext.amber)
+                        }
                         Text(
                             text = if (entity.totalBytes > 0L) {
                                 "${Formatters.formatBytes(entity.downloadedBytes)} / ${Formatters.formatBytes(entity.totalBytes)}"
@@ -538,7 +570,6 @@ private fun TransferItemCard(
                 }
             }
 
-            // Progress bar
             if (entity.statusEnum != DownloadStatus.COMPLETED) {
                 if (entity.totalBytes > 0L) {
                     LinearProgressIndicator(
@@ -561,7 +592,6 @@ private fun TransferItemCard(
                 }
             }
 
-            // Error or recovery banner
             entity.errorMessage?.let { msg ->
                 Text(
                     text = msg,
@@ -572,14 +602,13 @@ private fun TransferItemCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // 2 MB Segment Bitfield Grid
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                text = "${extentMb} MB F2FS EXTENT LEDGER",
+                                text = "${extentMb} MB AETHLDG2 LEDGER",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -595,21 +624,23 @@ private fun TransferItemCard(
                         )
                     }
 
-                    // Syscall & TTFB row
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
                             text = "TTFB: ${entity.ttfbMs} ms",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(
-                            text = "Batches: ${entity.syscallWriteBatches}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        if (entity.wifiBytes > 0L || entity.cellBytes > 0L) {
+                            Text(
+                                text = "Wi-Fi ${Formatters.formatBytes(entity.wifiBytes)} · 5G ${Formatters.formatBytes(entity.cellBytes)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = ext.cyan,
+                            )
+                        }
                         Text(
                             text = entity.routeModeEnum.label,
                             style = MaterialTheme.typography.labelMedium,
@@ -617,7 +648,6 @@ private fun TransferItemCard(
                         )
                     }
 
-                    // Contextual Action Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -753,12 +783,9 @@ private fun EmptyTransfersCard(onOpenNewDownload: () -> Unit) {
                 modifier = Modifier.size(28.dp),
             )
         }
+        Text(text = "Zero Active Pipelines", style = MaterialTheme.typography.titleLarge)
         Text(
-            text = "Zero Active Pipelines",
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Text(
-            text = "Add any HTTP/HTTPS URL or pick a diagnostic stream to run adaptive BDP aligned Wi-Fi + 5G downloads with zero post-download merge.",
+            text = "Add any HTTP/HTTPS/HLS/DASH URL or multi-mirror set to test Rust libaether_core.so or Kotlin OkHttp multi-network bonding.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -791,25 +818,14 @@ private fun DeleteDownloadDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.clickable { deleteBackingFile = !deleteBackingFile },
                 ) {
-                    Checkbox(
-                        checked = deleteBackingFile,
-                        onCheckedChange = { deleteBackingFile = it },
-                    )
+                    Checkbox(checked = deleteBackingFile, onCheckedChange = { deleteBackingFile = it })
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Also delete file from device storage")
                 }
             }
         },
-        confirmButton = {
-            Button(onClick = { onConfirm(deleteBackingFile) }) {
-                Text("Delete")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
+        confirmButton = { Button(onClick = { onConfirm(deleteBackingFile) }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -839,18 +855,11 @@ private fun RefreshSignedUrlDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onSubmit(newUrl) },
-                enabled = newUrl.isNotBlank(),
-            ) {
+            Button(onClick = { onSubmit(newUrl) }, enabled = newUrl.isNotBlank()) {
                 Text("Hot-Swap & Resume")
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
-            }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
