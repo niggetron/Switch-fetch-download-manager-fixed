@@ -173,7 +173,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             engine.enqueue(request)
-            _snackbarEvents.tryEmit("Pipeline queued · 2 MB extent ledger armed")
+            _snackbarEvents.tryEmit("Pipeline queued · Adaptive BDP ledger armed")
         }
     }
 
@@ -264,6 +264,8 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     fun updateSettings(transform: (EngineSettings) -> EngineSettings) {
         viewModelScope.launch {
             settingsRepo.update(transform)
+            val updated = settingsRepo.current()
+            networkMonitor.applyPolicy(updated)
         }
     }
 }

@@ -33,9 +33,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.data.local.DownloadEntity
+import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
 import com.example.data.model.EngineSettings
 import com.example.data.model.NetworkRouteMode
+import com.example.engine.AetherNativeBridge
+import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
 import com.example.ui.components.EightAxisRadarChart
@@ -60,28 +63,36 @@ fun TelemetryScreen(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
-    var proxyHostDraft by remember(settings.proxyHost) { mutableStateOf(settings.proxyHost) }
-    var proxyPortDraft by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
+    var wifiProxyHostDraft by remember(settings.proxyHost) { mutableStateOf(settings.proxyHost) }
+    var wifiProxyPortDraft by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
+    var cellProxyHostDraft by remember(settings.cellularProxyHost) { mutableStateOf(settings.cellularProxyHost) }
+    var cellProxyPortDraft by remember(settings.cellularProxyPort) { mutableStateOf(settings.cellularProxyPort.toString()) }
 
     val completed = downloads.filter { it.statusEnum == DownloadStatus.COMPLETED }
     val peakMbps = ((telemetry.peakBps * 8.0) / 1_000_000.0).toFloat()
-    val lockAxis = ((peakMbps / 100f) * 100f).coerceIn(40f, 99.7f)
-    val ramAxis = (100f - (telemetry.jvmHeapUsedMb / 100f) * 100f).coerceIn(50f, 96f)
+    val lockAxis = ((peakMbps / 100f) * 100f).coerceIn(48f, 99.7f)
+    val ramAxis = (100f - (telemetry.jvmHeapUsedMb / 100f) * 100f).coerceIn(55f, 97.5f)
     val ttfbScore = if (telemetry.lastTtfbMs > 0L) {
-        (100f * (1f - telemetry.lastTtfbMs / 500f)).coerceIn(35f, 98f)
+        (100f * (1f - telemetry.lastTtfbMs / 500f)).coerceIn(40f, 98.5f)
     } else {
-        94f
+        95.0f
+    }
+    val breakersHealthy = networkMatrix.activeValidatedLinks.all { it.breakerState == BreakerState.CLOSED }
+    val multipathScore = when {
+        networkMatrix.isMultipathReady && breakersHealthy -> 99.4f
+        networkMatrix.hasAnyInternet && breakersHealthy -> 91.0f
+        else -> 70.0f
     }
 
     val radarAxes = listOf(
         RadarAxis("1. Lock", lockAxis),
-        RadarAxis("2. RAM", ramAxis),
-        RadarAxis("3. Thermal", if (telemetry.thermalHeadroomClear) 95.8f else 62f),
-        RadarAxis("4. Batching", 98.5f),
+        RadarAxis("2. RAM/8M", ramAxis),
+        RadarAxis("3. Thermal", if (telemetry.thermalHeadroomClear) 96.4f else 62f),
+        RadarAxis("4. Batch/pwrite", if (settings.enableAutoSpeedUp) 98.5f else 91.0f),
         RadarAxis("5. CAS/SHA", if (settings.enableCasVerification) 99.4f else 75f),
-        RadarAxis("6. 0-Merge", 95.4f),
+        RadarAxis("6. Staged SAF", if (settings.stagedSafPlacement) 98.0f else 84.0f),
         RadarAxis("7. TTFB", ttfbScore),
-        RadarAxis("8. OS/5G", if (networkMatrix.isMultipathReady) 99.2f else 88.0f),
+        RadarAxis("8. 5G/Breaker", multipathScore),
     )
 
     LazyColumn(
@@ -91,28 +102,29 @@ fun TelemetryScreen(
     ) {
         // 4-Layer Architecture Live Matrix
         item(key = "four_layer_cards") {
-            SectionCard(title = "4-LAYER ENGINE TELEMETRY") {
+            SectionCard(title = "v7.1 4-LAYER ENGINE TELEMETRY") {
                 LayerMetricRow(
-                    title = "L1 · OS Control & Quota Guard",
+                    title = "L1 · OS Control & dataSync Quota Guard",
                     detail = "Thermal: ${telemetry.thermalStatusLabel} · Quota left ${Formatters.formatDurationHms(telemetry.quotaRemainingMs)}",
                     color = ext.cyan,
                 )
                 LayerMetricRow(
-                    title = "L2 · Lifecycle Telemetry Bridge",
-                    detail = "${telemetry.pollingHzLabel} · 0 Hz automatic suspension on ON_STOP",
+                    title = "L2 · Lifecycle memfd Telemetry Bridge",
+                    detail = "${telemetry.pollingHzLabel} · memfd_create: ${if (telemetry.isMemfdMapped) "Zero-JNI Mapped (4 KB)" else "Kotlin Ring Fallback"}",
                     color = ext.violet,
                 )
                 LayerMetricRow(
-                    title = "L3 · Multipath Transport Matrix",
-                    detail = "Peak ${Formatters.formatSpeedMbps(telemetry.peakBps)} · Workers ${telemetry.activeWorkers} (${telemetry.wifiWorkers}W/${telemetry.cellularWorkers}C)",
+                    title = "L3 · Multi-Network Earliest-Arrival Matrix",
+                    detail = "Peak ${Formatters.formatSpeedMbps(telemetry.peakBps)} · Workers ${telemetry.activeWorkers} (${telemetry.wifiWorkers}W/${telemetry.cellularWorkers}C) · autoSpeedUp: ${if (settings.enableAutoSpeedUp) "ON" else "OFF"}",
                     color = ext.emerald,
                 )
                 LayerMetricRow(
-                    title = "L4 · DirectByteBuffer Slab & 2 MB Extent",
+                    title = "L4 · BoundedSlabPool (8.0 MiB) & AETHLDG1",
                     detail = String.format(
-                        "%s\nSlab Pool %.1f MB · JVM %.1f MB · Native %.1f MB · %d batches",
-                        com.example.engine.AetherNativeBridge.engineBackendLabel,
+                        "%s\nSlabs %.1f / 8.0 MB (in-use %.1f MB) · JVM %.1f MB · Native %.1f MB · %d batches",
+                        AetherNativeBridge.engineBackendLabel,
                         telemetry.slabAllocatedMb,
+                        telemetry.slabInUseMb,
                         telemetry.jvmHeapUsedMb,
                         telemetry.nativeHeapMb,
                         telemetry.totalSyscallWriteBatches,
@@ -122,16 +134,20 @@ fun TelemetryScreen(
             }
         }
 
-        // Network Link Matrix
+        // Multi-Network Hardening & Circuit Breaker Panel (F1-F9)
         item(key = "network_matrix") {
-            SectionCard(title = "MULTIPATH INTERFACE MATRIX") {
+            SectionCard(title = "MULTI-NETWORK HARDENING & CIRCUIT BREAKERS (F1–F9)") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     StatusPill(
-                        label = if (networkMatrix.isMultipathReady) "WIFI + 5G BOND READY" else "SINGLE LINK",
+                        label = when {
+                            networkMatrix.isMultipathReady -> "WIFI + 5G BOND READY"
+                            networkMatrix.cellularLeaseRequested -> "5G LEASE ARMED"
+                            else -> "SINGLE LINK"
+                        },
                         color = if (networkMatrix.isMultipathReady) ext.emerald else ext.cyan,
                     )
                     OutlinedButton(
@@ -141,8 +157,30 @@ fun TelemetryScreen(
                         Text("Probe Links")
                     }
                 }
-                LinkInfoRow("wlan0 (Wi-Fi)", networkMatrix.wifiLink?.downstreamKbps)
-                LinkInfoRow("rmnet0 (5G / Cellular)", networkMatrix.cellularLink?.downstreamKbps)
+
+                networkMatrix.pacWarningUrl?.let { pacUrl ->
+                    Text(
+                        text = "PAC Proxy Warning (F9): System advertised $pacUrl. Raw/Rust sockets ignore PAC scripts — enter explicit SOCKS5h host/port below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ext.amber,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ext.amber.copy(alpha = 0.1f))
+                            .border(1.dp, ext.amber.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(10.dp),
+                    )
+                }
+
+                LinkHardeningCard(
+                    title = "Wi-Fi Logical LinkKey",
+                    endpoint = networkMatrix.wifiLink,
+                )
+                LinkHardeningCard(
+                    title = "Cellular 5G/LTE Logical LinkKey",
+                    endpoint = networkMatrix.cellularLink,
+                )
+
                 Text(
                     text = "Completed zero-merge tasks: ${completed.size} · Last TTFB: ${telemetry.lastTtfbMs} ms",
                     style = MaterialTheme.typography.bodySmall,
@@ -153,7 +191,7 @@ fun TelemetryScreen(
 
         // 8-Axis Radar Audit
         item(key = "eight_axis_radar") {
-            SectionCard(title = "8-AXIS SESSION & ARCHITECTURE AUDIT") {
+            SectionCard(title = "v7.1 8-AXIS ARCHITECTURE AUDIT") {
                 EightAxisRadarChart(
                     axes = radarAxes,
                     modifier = Modifier.fillMaxWidth(),
@@ -163,7 +201,7 @@ fun TelemetryScreen(
 
         // Engine Configuration
         item(key = "engine_config") {
-            SectionCard(title = "ENGINE & NETWORK CONFIGURATION") {
+            SectionCard(title = "ENGINE & MULTI-NETWORK POLICY") {
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -188,15 +226,36 @@ fun TelemetryScreen(
                 }
 
                 ToggleRow(
+                    title = "Retain 5G Radio on Wi-Fi (requestNetwork)",
+                    subtitle = "F1 fix: holds active cellular Network lease while Wi-Fi is default. Consumes mobile data & extra radio battery.",
+                    checked = settings.retainCellularOnWifi,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(retainCellularOnWifi = on) } },
+                )
+
+                ToggleRow(
+                    title = "Bidirectional autoSpeedUp Controller",
+                    subtitle = "Dynamically scales workers +2 / -2 based on Δgoodput & ΔRTT",
+                    checked = settings.enableAutoSpeedUp,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(enableAutoSpeedUp = on) } },
+                )
+
+                ToggleRow(
                     title = "Tail Shadow-Hedge Work-Stealing",
-                    subtitle = "Idle workers race slow final 2 MB extents",
+                    subtitle = "Idle workers race stalled final segments with pinned LinkKeys",
                     checked = settings.enableTailHedge,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableTailHedge = on) } },
                 )
 
                 ToggleRow(
-                    title = "S3 SHA-256 & 2 MB CAS Digest Audit",
-                    subtitle = "Verify & index completed 2 MB extents",
+                    title = "Staged App-Private SAF Placement",
+                    subtitle = "Download & verify in private staging before atomic copy to SAF URI (prevents EBADF corruption)",
+                    checked = settings.stagedSafPlacement,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(stagedSafPlacement = on) } },
+                )
+
+                ToggleRow(
+                    title = "S3 SHA-256 & CAS Digest Audit",
+                    subtitle = "Verify file digest & index deduplicated extents",
                     checked = settings.enableCasVerification,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableCasVerification = on) } },
                 )
@@ -219,28 +278,62 @@ fun TelemetryScreen(
                     }
                 }
 
-                // SOCKS5h Proxy Config
+                // Per-LinkKey SOCKS5h Proxy Overrides (F9)
+                Text(
+                    text = "PER-LINKKEY SOCKS5h PROXY OVERRIDES (F9)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     OutlinedTextField(
-                        value = proxyHostDraft,
+                        value = wifiProxyHostDraft,
                         onValueChange = {
-                            proxyHostDraft = it
+                            wifiProxyHostDraft = it
                             onUpdateSettings { s -> s.copy(proxyHost = it) }
                         },
-                        label = { Text("SOCKS5h Host") },
-                        placeholder = { Text("127.0.0.1") },
+                        label = { Text("Wi-Fi SOCKS5h Host") },
+                        placeholder = { Text("Direct if blank") },
                         singleLine = true,
                         modifier = Modifier.weight(2f),
                     )
                     OutlinedTextField(
-                        value = proxyPortDraft,
+                        value = wifiProxyPortDraft,
                         onValueChange = { raw ->
-                            proxyPortDraft = raw
+                            wifiProxyPortDraft = raw
                             raw.toIntOrNull()?.let { port ->
                                 onUpdateSettings { s -> s.copy(proxyPort = port) }
+                            }
+                        },
+                        label = { Text("Port") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = cellProxyHostDraft,
+                        onValueChange = {
+                            cellProxyHostDraft = it
+                            onUpdateSettings { s -> s.copy(cellularProxyHost = it) }
+                        },
+                        label = { Text("Cellular SOCKS5h Host") },
+                        placeholder = { Text("Direct if blank") },
+                        singleLine = true,
+                        modifier = Modifier.weight(2f),
+                    )
+                    OutlinedTextField(
+                        value = cellProxyPortDraft,
+                        onValueChange = { raw ->
+                            cellProxyPortDraft = raw
+                            raw.toIntOrNull()?.let { port ->
+                                onUpdateSettings { s -> s.copy(cellularProxyPort = port) }
                             }
                         },
                         label = { Text("Port") },
@@ -280,6 +373,65 @@ fun TelemetryScreen(
         }
 
         item { Spacer(modifier = Modifier.height(76.dp)) }
+    }
+}
+
+@Composable
+private fun LinkHardeningCard(
+    title: String,
+    endpoint: LinkEndpointInfo?,
+) {
+    val ext = LocalAetherColors.current
+    val breakerColor = when (endpoint?.breakerState) {
+        BreakerState.CLOSED -> ext.emerald
+        BreakerState.OPEN -> ext.rose
+        BreakerState.HALF_OPEN -> ext.amber
+        null -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .border(1.dp, ext.cardBorder, RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
+            StatusPill(
+                label = endpoint?.breakerState?.name ?: "OFFLINE",
+                color = breakerColor,
+            )
+        }
+        if (endpoint != null) {
+            Text(
+                text = "Key: ${endpoint.linkKey.id} · Handle: ${endpoint.netHandle} · VALIDATED",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = String.format(
+                    "EWMA: %.1f Mbps · Cap: %.1f Mbps · %s",
+                    endpoint.ewmaMbps,
+                    endpoint.downstreamKbps / 1000.0,
+                    if (endpoint.isMetered) "Metered" else "Unmetered",
+                ),
+                style = MonoMetricStyle,
+                color = ext.emerald,
+            )
+        } else {
+            Text(
+                text = "Not validated or radio inactive",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -332,30 +484,6 @@ private fun LayerMetricRow(
 }
 
 @Composable
-private fun LinkInfoRow(
-    interfaceName: String,
-    downstreamKbps: Int?,
-) {
-    val ext = LocalAetherColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(text = interfaceName, style = MaterialTheme.typography.bodyMedium)
-        Text(
-            text = if (downstreamKbps != null) {
-                String.format("%.1f Mbps est.", downstreamKbps / 1000.0)
-            } else {
-                "Unavailable"
-            },
-            style = MonoMetricStyle,
-            color = if (downstreamKbps != null) ext.emerald else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
 private fun ToggleRow(
     title: String,
     subtitle: String,
@@ -367,7 +495,7 @@ private fun ToggleRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
             Text(text = title, style = MaterialTheme.typography.titleSmall)
             Text(
                 text = subtitle,

@@ -1,159 +1,141 @@
-#![feature(allocator_api)]
-#![allow(internal_features)]
-
-//! Project AetherIO Omega v6.0 — Pure Rust 1.100.0 Zero-Copy Core (`libaether_core.so`)
+//! Project AetherIO Omega v7.1 — Production Pure Rust Data Plane (`libaether_core.so`)
 //!
-//! Layers 3 & 4:
-//! - `SlabArenaAlloc` (`std::alloc::Allocator` over 4 KB-aligned 16 MB virtual arena, 6.4 MB RSS)
-//! - `SingleIssuerToken` via `core::mem::conjure_zst()`
-//! - `DropGuard` lease rollback for 2 MB F2FS-aligned `io_uring` `WRITE_FIXED` extents
-//! - 4 KB cache-line isolated mmap telemetry page (`#[repr(C, align(64))]`)
-//! - Earliest-Arrival Wi-Fi + 5G multipath scheduler & 2 MB range bisection
-//! - `GF(2^8)` RLNC repair coding (`W = 16`)
-//! - FastCDC + BLAKE3 CAS chunk deduplication
-//! - JNI bridge (`AetherNativeBridge`) for Tier-1 Kotlin Control Shell
+//! Compiles on 100% stable Rust (`edition = "2024"`, `panic = "unwind"`).
+//! - Thread-safe `BoundedSlabPool` (16 x 512 KiB = 8.0 MiB) with RAII `SlabLeaseGuard`
+//! - Zero-JNI 4,096-byte `memfd_create()` cache-line isolated `TelemetryPage`
+//! - Android seccomp-safe `fallocate` + `pwrite` + `fdatasync` (+ `io_uring` ENOSYS probe)
+//! - Crash-safe `AETHLDG1` binary ledger with CRC32C checksum
+//! - Logical `LinkKey` handle rotation + `android_setsocknetwork` + `socks5h://` (`ATYP=0x03`)
+//! - Earliest-Arrival multipath dispatch + pinned `SegmentLease` + 3-state `LinkCircuitBreaker`
+//! - `GF(2^8)` dual-LUT RLNC (`W = 16`) + FastCDC / BLAKE3 / SHA-256 verification
 
 pub mod cas;
 pub mod jni_bridge;
+pub mod ledger;
 pub mod rlnc;
 pub mod scheduler;
-pub mod telemetry;
-
-use std::alloc::{AllocError, Allocator, Layout};
-use std::cell::UnsafeCell;
-use std::mem::{DropGuard, conjure_zst};
-use std::ptr::NonNull;
-
-pub const ARENA_BYTES: usize = 16 * 1024 * 1024; // 16 MB Virtual Arena (6.4 MB Active RSS via MADV_FREE)
-pub const F2FS_SECTION_BYTES: usize = 2 * 1024 * 1024; // 2 MB = 0x200000
-pub const F2FS_SECTION_MASK: u64 = 0x001F_FFFF; // 2 MB F2FS Physical Flash Section Alignment
-
-#[repr(transparent)]
-pub struct SingleIssuerToken(());
-
-#[inline(always)]
-pub fn issue_reactor_token() -> Result<SingleIssuerToken, !> {
-    // Safety: Invoked exclusively on the ADPF-pinned single-issuer `io_uring` worker thread
-    Ok(unsafe { conjure_zst::<SingleIssuerToken>() })
-}
-
-#[repr(C, align(4096))]
-pub struct PageAlignedArena(pub [u8; ARENA_BYTES]);
-
-pub struct SlabArenaAlloc {
-    backing: UnsafeCell<PageAlignedArena>,
-    cursor: UnsafeCell<usize>,
-}
-
-impl SlabArenaAlloc {
-    pub const fn new_zeroed() -> Self {
-        Self {
-            backing: UnsafeCell::new(PageAlignedArena([0u8; ARENA_BYTES])),
-            cursor: UnsafeCell::new(0),
-        }
-    }
-
-    pub fn used_bytes(&self) -> usize {
-        unsafe { *self.cursor.get() }
-    }
-
-    pub fn reset(&self) {
-        unsafe {
-            *self.cursor.get() = 0;
-        }
-    }
-}
-
-unsafe impl Sync for SlabArenaAlloc {}
-
-unsafe impl Allocator for &SlabArenaAlloc {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        unsafe {
-            let cur = *self.cursor.get();
-            let align = layout.align().max(4096);
-            let start = (cur + align - 1) & !(align - 1);
-            let next = start.checked_add(layout.size()).ok_or(AllocError)?;
-            if next > ARENA_BYTES {
-                return Err(AllocError);
-            }
-            *self.cursor.get() = next;
-            Ok(NonNull::slice_from_raw_parts(
-                NonNull::new_unchecked(self.backing.get().cast::<u8>().add(start)),
-                layout.size(),
-            ))
-        }
-    }
-
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _layout: Layout) {}
-}
-
-/// Commits an exact 2 MB F2FS-aligned extent using a `DropGuard`-protected lease
-/// over `SlabArenaAlloc` so aborted transfers roll back cleanly without leaking offsets.
-pub fn commit_2mb_f2fs_extent(
-    ring: &mut io_uring::IoUring,
-    arena: &SlabArenaAlloc,
-    ledger: &UnsafeCell<u64>,
-    fd: i32,
-    offset: u64,
-    payload: &[u8],
-) -> Result<u64, &'static str> {
-    if (offset & F2FS_SECTION_MASK) != 0 {
-        return Err("Offset is not 2 MB F2FS section-aligned");
-    }
-    if payload.len() > F2FS_SECTION_BYTES {
-        return Err("Payload exceeds 2 MB F2FS extent size");
-    }
-
-    let saved_cursor = arena.used_bytes();
-    let _rollback = DropGuard::new(saved_cursor, |prev| unsafe {
-        *arena.cursor.get() = prev;
-    });
-
-    let mut slab: Vec<u8, &SlabArenaAlloc> = Vec::with_capacity_in(F2FS_SECTION_BYTES, arena);
-    slab.extend_from_slice(payload);
-
-    let write_e = io_uring::opcode::Write::new(
-        io_uring::types::Fd(fd),
-        slab.as_ptr(),
-        slab.len() as u32,
-    )
-    .offset(offset)
-    .build()
-    .user_data(offset);
-
-    unsafe {
-        ring.submission()
-            .push(&write_e)
-            .map_err(|_| "io_uring SQ full")?;
-    }
-    ring.submit_and_wait(1)
-        .map_err(|_| "io_uring_enter write failed")?;
-
-    let cqe = ring
-        .completion()
-        .next()
-        .ok_or("Missing io_uring completion")?;
-    if cqe.result() < 0 {
-        return Err("Kernel write CQE error");
-    }
-
-    let committed = unsafe { ledger.as_mut_unchecked() };
-    *committed += cqe.result() as u64;
-    Ok(*committed)
-}
+pub mod storage_and_telemetry;
+pub mod transport;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::time::{Duration, Instant};
+
+    use crate::cas::{blake3_digest_hex, sha256_digest_hex};
+    use crate::ledger::{AetherLedger, SegmentStatus};
+    use crate::rlnc::{RLNC_WINDOW, gf256_mul_acc};
+    use crate::scheduler::{
+        BreakerState, LinkCircuitBreaker, LinkDispatchStats, SegmentLease,
+        absorb_empty_right_of, adaptive_bdp_segment_bytes, adjust_auto_speed_up,
+        effective_worker_count, select_earliest_arrival_link, select_lowest_rtt_link,
+    };
+    use crate::storage_and_telemetry::{BoundedSlabPool, MAX_SLABS, SLAB_BYTES, TelemetryPage};
+    use std::collections::HashMap;
 
     #[test]
-    fn slab_arena_aligns_to_4k_and_bounds_16mb() {
-        let arena = SlabArenaAlloc::new_zeroed();
-        let mut buf: Vec<u8, &SlabArenaAlloc> = Vec::with_capacity_in(F2FS_SECTION_BYTES, &arena);
-        buf.push(0xAA);
-        assert_eq!(buf.as_ptr() as usize % 4096, 0);
-        assert_eq!(arena.used_bytes(), F2FS_SECTION_BYTES);
-        arena.reset();
-        assert_eq!(arena.used_bytes(), 0);
+    fn telemetry_page_is_exact_4096_bytes() {
+        assert_eq!(core::mem::size_of::<TelemetryPage>(), 4096);
+    }
+
+    #[test]
+    fn bounded_slab_pool_returns_buffer_on_drop() {
+        let pool = BoundedSlabPool::new();
+        assert_eq!(pool.allocated_bytes(), (MAX_SLABS * SLAB_BYTES) as u64);
+        {
+            let _guard = pool.acquire_guard();
+            assert_eq!(pool.in_use_bytes(), SLAB_BYTES as u64);
+        }
+        assert_eq!(pool.in_use_bytes(), 0);
+    }
+
+    #[test]
+    fn aethldg1_binary_ledger_roundtrip_and_crash_lease_rollback() {
+        let mut ledger = AetherLedger::new(10 * 1024 * 1024, 4 * 1024 * 1024, "etag-v1");
+        assert_eq!(ledger.segment_count, 3);
+        ledger.states[0] = SegmentStatus::Done as u8;
+        ledger.states[1] = SegmentStatus::Leased as u8; // Simulate mid-flight crash
+        let bytes = ledger.encode();
+        let decoded = AetherLedger::decode(&bytes).expect("valid AETHLDG1 ledger");
+        assert_eq!(decoded.states[0], SegmentStatus::Done as u8);
+        assert_eq!(decoded.states[1], SegmentStatus::Pending as u8); // Reverted cleanly
+        assert_eq!(decoded.states[2], SegmentStatus::Pending as u8);
+    }
+
+    #[test]
+    fn earliest_arrival_and_circuit_breaker_behave_deterministically() {
+        let mut breakers = HashMap::new();
+        let now = Instant::now();
+        let links = vec![
+            LinkDispatchStats {
+                link_id: "wifi:wlan0".into(),
+                queued_bytes: 0.0,
+                ewma_bytes_per_sec: 4_125_000.0, // ~33 Mbps
+                rtt_min_secs: 0.018,
+            },
+            LinkDispatchStats {
+                link_id: "cell:rmnet0".into(),
+                queued_bytes: 0.0,
+                ewma_bytes_per_sec: 20_412_500.0, // ~163.3 Mbps
+                rtt_min_secs: 0.028,
+            },
+        ];
+
+        // Earliest arrival selects 5G for a 4 MiB block
+        let picked = select_earliest_arrival_link(&links, &mut breakers, 4_194_304.0, now);
+        assert_eq!(picked, Some("cell:rmnet0"));
+
+        // HEAD probe selects lowest RTT (Wi-Fi 18 ms)
+        let probe = select_lowest_rtt_link(&links, &mut breakers, now);
+        assert_eq!(probe, Some("wifi:wlan0"));
+
+        // Trip 5G breaker -> falls back to Wi-Fi immediately
+        breakers
+            .get_mut("cell:rmnet0")
+            .unwrap()
+            .record_error_or_stall(now, true);
+        assert_eq!(
+            breakers["cell:rmnet0"].state,
+            BreakerState::Open
+        );
+        let fallback = select_earliest_arrival_link(&links, &mut breakers, 4_194_304.0, now);
+        assert_eq!(fallback, Some("wifi:wlan0"));
+
+        // After cooldown -> HalfOpen allows probe
+        let later = now + Duration::from_secs(11);
+        assert!(breakers.get_mut("cell:rmnet0").unwrap().allow_request(later));
+        assert_eq!(breakers["cell:rmnet0"].state, BreakerState::HalfOpen);
+    }
+
+    #[test]
+    fn adaptive_bdp_worker_scaling_and_neighbor_absorption() {
+        assert_eq!(adaptive_bdp_segment_bytes(33_000), 1024 * 1024);
+        assert_eq!(adaptive_bdp_segment_bytes(163_300), 8 * 1024 * 1024);
+        assert_eq!(effective_worker_count(1, 2), 2); // F8 fix
+
+        let mut states = vec![2u8, 1u8, 0u8, 0u8];
+        assert_eq!(absorb_empty_right_of(&mut states, 1), Some(2));
+        assert_eq!(states[2], 1);
+
+        assert_eq!(adjust_auto_speed_up(4, 2, 8, 50.0, 60.0, 8.0, false), 6);
+        assert_eq!(adjust_auto_speed_up(6, 2, 8, 60.0, 60.0, 42.0, false), 4);
+        let lease = SegmentLease {
+            index: 2,
+            start: 0,
+            end: 1023,
+            pinned_link: "cell:rmnet0".into(),
+            is_tail_hedge: true,
+        };
+        assert_eq!(lease.pinned_link, "cell:rmnet0");
+    }
+
+    #[test]
+    fn rlnc_and_hashes_work() {
+        let mut dst = [0u8; RLNC_WINDOW];
+        let src = [0x5Au8; RLNC_WINDOW];
+        gf256_mul_acc(&mut dst, &src, 0x07);
+        assert!(dst.iter().any(|&b| b != 0));
+        assert_eq!(blake3_digest_hex(b"aether").len(), 64);
+        assert_eq!(sha256_digest_hex(b"aether").len(), 64);
+        let _ = LinkCircuitBreaker::new(Duration::from_secs(10));
     }
 }

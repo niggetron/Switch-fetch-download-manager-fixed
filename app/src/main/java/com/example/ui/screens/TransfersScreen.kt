@@ -70,8 +70,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.DownloadEntity
+import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
 import com.example.data.model.TransferFilter
+import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
 import com.example.ui.components.SegmentBitfieldMatrix
@@ -135,6 +137,34 @@ fun TransfersScreen(
                 onPauseAll = onPauseAll,
                 onResumeAll = onResumeAll,
             )
+        }
+
+        // PAC Auto-Proxy Warning Banner (F9)
+        networkMatrix.pacWarningUrl?.let { pacUrl ->
+            item(key = "pac_warning") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ext.amber.copy(alpha = 0.12f))
+                        .border(1.dp, ext.amber.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Bolt,
+                        contentDescription = null,
+                        tint = ext.amber,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = "PAC proxy detected ($pacUrl). Configure explicit SOCKS5h host/port in Engine settings to route over this proxy.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = ext.amber,
+                    )
+                }
+            }
         }
 
         // Filter Strip
@@ -231,7 +261,7 @@ private fun HeroTelemetryBanner(
         ) {
             Column {
                 Text(
-                    text = "THROUGHPUT PIPELINE",
+                    text = if (telemetry.isMemfdMapped) "THROUGHPUT · MEMFD ZERO-JNI" else "THROUGHPUT PIPELINE",
                     style = MaterialTheme.typography.labelSmall,
                     color = ext.cyan,
                 )
@@ -282,13 +312,30 @@ private fun HeroTelemetryBanner(
                 .height(54.dp),
         )
 
+        // Per-LinkKey Interface & Circuit Breaker Pills
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            LinkEndpointPill(
+                title = "Wi-Fi",
+                endpoint = networkMatrix.wifiLink,
+            )
+            LinkEndpointPill(
+                title = if (networkMatrix.cellularLeaseRequested) "5G/LTE (Leased)" else "5G/LTE",
+                endpoint = networkMatrix.cellularLink,
+            )
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             TelemetryMiniCell(
                 label = "SLAB ARENA",
-                value = String.format("%.1f MB", telemetry.slabAllocatedMb.coerceAtLeast(0.25f)),
+                value = String.format("%.1f / 8.0 MB", telemetry.slabAllocatedMb.coerceAtLeast(0.5f)),
                 accent = ext.violet,
                 modifier = Modifier.weight(1f),
             )
@@ -311,6 +358,30 @@ private fun HeroTelemetryBanner(
             )
         }
     }
+}
+
+@Composable
+private fun LinkEndpointPill(
+    title: String,
+    endpoint: LinkEndpointInfo?,
+) {
+    val ext = LocalAetherColors.current
+    val (label, color) = if (endpoint == null) {
+        "$title · Offline" to MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        val br = when (endpoint.breakerState) {
+            BreakerState.CLOSED -> "CLOSED"
+            BreakerState.OPEN -> "OPEN"
+            BreakerState.HALF_OPEN -> "HALF-OPEN"
+        }
+        val c = when (endpoint.breakerState) {
+            BreakerState.CLOSED -> ext.emerald
+            BreakerState.OPEN -> ext.rose
+            BreakerState.HALF_OPEN -> ext.amber
+        }
+        "${endpoint.interfaceName} · ${String.format("%.0f", endpoint.ewmaMbps)}M · $br" to c
+    }
+    StatusPill(label = label, color = color)
 }
 
 @Composable
@@ -358,6 +429,7 @@ private fun TransferItemCard(
 ) {
     val ext = LocalAetherColors.current
     var expanded by remember { mutableStateOf(entity.statusEnum.isActive || entity.statusEnum.isIssue) }
+    val extentMb = (entity.segmentSizeBytes / (1024L * 1024L)).coerceAtLeast(1L)
 
     val statusColor = when (entity.statusEnum) {
         DownloadStatus.COMPLETED -> ext.emerald
@@ -379,7 +451,7 @@ private fun TransferItemCard(
     val statusLabel = when (entity.statusEnum) {
         DownloadStatus.QUEUED -> "QUEUED"
         DownloadStatus.PROBING_0RTT -> "0-RTT PROBE"
-        DownloadStatus.STREAMING -> "2M STREAMING"
+        DownloadStatus.STREAMING -> "${extentMb}M STREAMING"
         DownloadStatus.WORK_STEALING -> "TAIL HEDGE"
         DownloadStatus.VERIFYING_BAO -> "S3 SHA-256"
         DownloadStatus.PAUSED -> "PAUSED"
@@ -507,7 +579,7 @@ private fun TransferItemCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                text = "2 MB F2FS EXTENT LEDGER",
+                                text = "${extentMb} MB F2FS EXTENT LEDGER",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -686,7 +758,7 @@ private fun EmptyTransfersCard(onOpenNewDownload: () -> Unit) {
             style = MaterialTheme.typography.titleLarge,
         )
         Text(
-            text = "Add any HTTP/HTTPS URL or pick a diagnostic stream to run 2 MB aligned parallel downloads with zero post-download merge.",
+            text = "Add any HTTP/HTTPS URL or pick a diagnostic stream to run adaptive BDP aligned Wi-Fi + 5G downloads with zero post-download merge.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -754,7 +826,7 @@ private fun RefreshSignedUrlDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Paste a fresh signed CDN URL to resume ${entity.fileName} from exact 2 MB committed extents.",
+                    text = "Paste a fresh signed CDN URL to resume ${entity.fileName} from exact committed extents.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(

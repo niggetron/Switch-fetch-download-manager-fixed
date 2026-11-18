@@ -175,7 +175,7 @@ fun AetherApp(viewModel: AetherViewModel) {
                                     fontWeight = FontWeight.Bold,
                                 )
                                 Text(
-                                    text = "v6.0",
+                                    text = "v7.1",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ext.cyan,
                                     modifier = Modifier
@@ -354,6 +354,7 @@ fun AetherApp(viewModel: AetherViewModel) {
             if (showNewDownloadSheet) {
                 NewDownloadSheet(
                     defaultSettings = settings,
+                    networkMatrix = networkMatrix,
                     onDismiss = { showNewDownloadSheet = false },
                     onLaunchDownload = { req ->
                         viewModel.enqueueDownload(req)

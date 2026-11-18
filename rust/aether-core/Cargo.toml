@@ -1,8 +1,8 @@
 [package]
 name = "aether-core"
-version = "6.0.0"
+version = "7.1.0"
 edition = "2024"
-description = "AetherIO Omega v6.0 Zero-Copy Pure Rust Transport, RLNC, and io_uring Storage Core"
+description = "AetherIO Omega v7.1 Production Rust Data Plane: BoundedSlabPool, memfd telemetry, fallocate+pwrite+fdatasync, AETHLDG1 ledger, Earliest-Arrival multipath + CircuitBreaker, QUIC/H2 + socks5h"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -10,20 +10,25 @@ name = "aether_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Core zero-copy Linux / Android kernel bindings
-rustix = { version = "1.0", features = ["fs", "mm", "net", "process"] }
-io-uring = "0.7"
-blake3 = "1.6"
+rustix = { version = "0.38", features = ["fs", "io", "mm"] }
+libc = "0.2"
+socket2 = "0.5"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "client", "client-legacy", "http1", "http2"] }
+http-body-util = "0.1"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12", "ring"] }
+webpki-roots = "0.26"
+quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"] }
+blake3 = "1.5"
+sha2 = "0.10"
+crc32c = "0.6"
 jni = "0.21"
-
-# Multipath QUIC & TLS transport (noq v1.1.0 + aws-lc-rs per Blueprint Tier 3)
-# Enable when building with full network target toolchain:
-# noq = "1.1.0"
-# aws-lc-rs = "1.12"
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = "symbols"

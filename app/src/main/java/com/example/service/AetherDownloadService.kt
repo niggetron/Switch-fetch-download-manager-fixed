@@ -7,12 +7,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.example.AetherApplication
 import com.example.MainActivity
 import com.example.R
+import com.example.engine.AetherNativeBridge
 import com.example.util.Formatters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +30,7 @@ class AetherDownloadService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,12 +55,20 @@ class AetherDownloadService : Service() {
             }
         }
 
+        // Fix F4: Restore persisted network selection & cellular lease inside onStartCommand
+        // before starting/resuming transfers so service restarts never revert to default routing.
+        serviceScope.launch {
+            val savedSettings = app.settingsRepository.current()
+            app.networkMonitor.start(savedSettings)
+        }
+
+        acquireWifiHighPerfLock()
         app.telemetryLedger.markFgsSessionStarted()
         val notification = buildNotification(
             activeCount = 1,
             speedBps = 0L,
             progressPercent = 0,
-            subtitle = "Initializing zero-merge pipeline…",
+            subtitle = "Initializing AETHLDG1 pipeline…",
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -75,8 +86,10 @@ class AetherDownloadService : Service() {
 
     override fun onTimeout(startId: Int, fgsType: Int) {
         val app = application as AetherApplication
+        AetherNativeBridge.pauseQuotaGuardSafe()
         serviceScope.launch {
             app.downloadEngine.checkpointForQuotaGuard()
+            showQuotaResumeNotification()
             stopForegroundAndSelf()
         }
     }
@@ -98,7 +111,9 @@ class AetherDownloadService : Service() {
                 val snapshot = app.telemetryLedger.sampleSnapshot(hasActiveDownloads = true)
                 // R3 Quota Guard: proactively checkpoint 30s before 6-hour dataSync cap
                 if (snapshot.quotaActiveSession && snapshot.quotaRemainingMs < 30_000L) {
+                    AetherNativeBridge.pauseQuotaGuardSafe()
                     app.downloadEngine.checkpointForQuotaGuard()
+                    showQuotaResumeNotification()
                     stopForegroundAndSelf()
                     break
                 }
@@ -123,9 +138,52 @@ class AetherDownloadService : Service() {
         }
     }
 
+    private fun acquireWifiHighPerfLock() {
+        if (wifiLock?.isHeld == true) return
+        runCatching {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiLock = wm.createWifiLock(mode, "AetherIO:HighPerfTransfer").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+    }
+
+    private fun releaseWifiLock() {
+        runCatching {
+            if (wifiLock?.isHeld == true) wifiLock?.release()
+        }
+        wifiLock = null
+    }
+
+    private fun showQuotaResumeNotification() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val openIntent = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("AetherIO Quota Guard Checkpointed")
+            .setContentText("AETHLDG1 ledger synced safely. Tap to resume byte-exact.")
+            .setAutoCancel(true)
+            .setContentIntent(openIntent)
+            .build()
+        nm.notify(NOTIFICATION_ID + 1, notif)
+    }
+
     private fun stopForegroundAndSelf() {
         val app = application as AetherApplication
         app.telemetryLedger.markFgsSessionStopped()
+        releaseWifiLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -176,6 +234,9 @@ class AetherDownloadService : Service() {
     }
 
     override fun onDestroy() {
+        val app = application as AetherApplication
+        app.networkMonitor.releaseCellularLease()
+        releaseWifiLock()
         serviceScope.cancel()
         super.onDestroy()
     }

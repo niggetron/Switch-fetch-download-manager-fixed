@@ -27,21 +27,24 @@ data class TelemetrySnapshot(
     val quotaRemainingMs: Long = DATA_SYNC_QUOTA_MS,
     val quotaActiveSession: Boolean = false,
     val pollingHzLabel: String = "4 Hz Active",
+    val isNativeRustActive: Boolean = false,
+    val isMemfdMapped: Boolean = false,
 )
 
 /**
- * Cache-line style atomic telemetry bridge.
- * Sampled by UI only when lifecycle is >= STARTED (4 Hz active, 0 Hz on ON_STOP).
+ * Cache-line aligned telemetry aggregator.
+ * When `libaether_core.so` is loaded, attaches zero-JNI `memfd_create()` page via
+ * `MemfdTelemetryReader`. Polled at 4 Hz while UI is STARTED and 0 Hz on ON_STOP.
  */
 class TelemetryLedger(
     context: Context,
     private val slabPool: SlabBufferPool,
+    private val memfdReader: MemfdTelemetryReader = MemfdTelemetryReader(),
 ) {
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
     private val bytesWindow = AtomicLong(0L)
     private val lastWindowCheckMs = AtomicLong(System.currentTimeMillis())
-    private val lastInstantBps = AtomicLong(0L)
     private val peakBps = AtomicLong(0L)
     private val activeWorkers = AtomicInteger(0)
     private val wifiWorkers = AtomicInteger(0)
@@ -52,6 +55,10 @@ class TelemetryLedger(
 
     private val historyLock = Any()
     private val speedRing = ArrayDeque<Long>(60)
+
+    fun attachMemfdIfAvailable() {
+        memfdReader.attachIfNativeAvailable()
+    }
 
     fun recordBytesWritten(bytes: Long) {
         if (bytes > 0) bytesWindow.addAndGet(bytes)
@@ -94,12 +101,12 @@ class TelemetryLedger(
         val prev = lastWindowCheckMs.getAndSet(now)
         val dtMs = (now - prev).coerceAtLeast(100L)
         val windowBytes = bytesWindow.getAndSet(0L)
-        val bps = if (hasActiveDownloads || windowBytes > 0) {
-            (windowBytes * 1000L) / dtMs
-        } else {
-            0L
+        val memfdSnap = memfdReader.readSnapshot()
+        val bps = when {
+            memfdSnap != null && memfdSnap.goodputBps > 0L -> memfdSnap.goodputBps / 8L
+            hasActiveDownloads || windowBytes > 0 -> (windowBytes * 1000L) / dtMs
+            else -> 0L
         }
-        lastInstantBps.set(bps)
         peakBps.updateAndGet { maxOf(it, bps) }
 
         val historyCopy = synchronized(historyLock) {
@@ -111,8 +118,18 @@ class TelemetryLedger(
         val rt = Runtime.getRuntime()
         val jvmUsedMb = (rt.totalMemory() - rt.freeMemory()) / (1024f * 1024f)
         val nativeMb = Debug.getNativeHeapAllocatedSize() / (1024f * 1024f)
-        val slabAllocMb = slabPool.allocatedBytes() / (1024f * 1024f)
-        val slabInUseMb = slabPool.inUseBytes() / (1024f * 1024f)
+
+        val nativeStats = AetherNativeBridge.slabStatsSafe()
+        val slabAllocMb = if (nativeStats != null && nativeStats.size >= 2 && nativeStats[0] > 0L) {
+            nativeStats[0] / (1024f * 1024f)
+        } else {
+            slabPool.allocatedBytes() / (1024f * 1024f)
+        }
+        val slabInUseMb = if (nativeStats != null && nativeStats.size >= 2) {
+            nativeStats[1] / (1024f * 1024f)
+        } else {
+            slabPool.inUseBytes() / (1024f * 1024f)
+        }
 
         val (thermalLabel, thermalOk) = readThermalStatus()
         val sessionStart = quotaSessionStartMs.get()
@@ -133,13 +150,15 @@ class TelemetryLedger(
             slabInUseMb = slabInUseMb,
             jvmHeapUsedMb = jvmUsedMb,
             nativeHeapMb = nativeMb,
-            totalSyscallWriteBatches = totalSyscallWriteBatches.get(),
+            totalSyscallWriteBatches = memfdSnap?.consumerSeq ?: totalSyscallWriteBatches.get(),
             lastTtfbMs = lastTtfbMs.get(),
             thermalStatusLabel = thermalLabel,
             thermalHeadroomClear = thermalOk,
             quotaRemainingMs = remaining,
             quotaActiveSession = sessionStart > 0L,
             pollingHzLabel = if (hasActiveDownloads) "4 Hz Active" else "Idle (0-Alloc)",
+            isNativeRustActive = AetherNativeBridge.isNativeLoaded,
+            isMemfdMapped = memfdReader.isMapped,
         )
     }
 

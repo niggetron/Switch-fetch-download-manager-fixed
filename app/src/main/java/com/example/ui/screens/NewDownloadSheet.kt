@@ -58,6 +58,7 @@ import com.example.data.model.CuratedEndpoints
 import com.example.data.model.EngineSettings
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.NewDownloadRequest
+import com.example.engine.NetworkMatrixState
 import com.example.ui.theme.LocalAetherColors
 import kotlin.math.roundToInt
 
@@ -65,6 +66,7 @@ import kotlin.math.roundToInt
 @Composable
 fun NewDownloadSheet(
     defaultSettings: EngineSettings,
+    networkMatrix: NetworkMatrixState,
     onDismiss: () -> Unit,
     onLaunchDownload: (NewDownloadRequest) -> Unit,
 ) {
@@ -208,12 +210,27 @@ fun NewDownloadSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // Route Mode Selector
-            Text(
-                text = "TRANSPORT & LINK POLICY",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Route Mode Selector + Live Validated Link Telemetry
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "TRANSPORT & LINK POLICY",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (networkMatrix.activeValidatedLinks.isNotEmpty()) {
+                        String.format("%.1f Mbps est.", networkMatrix.aggregateEstimatedMbps)
+                    } else {
+                        "No validated links"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ext.emerald,
+                )
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -227,6 +244,20 @@ fun NewDownloadSheet(
                 }
             }
 
+            if (routeMode == NetworkRouteMode.AUTO_MULTIPATH || routeMode == NetworkRouteMode.CELLULAR_ONLY) {
+                Text(
+                    text = "Mobile data & battery notice: keeping cellular 5G/LTE radio active alongside Wi-Fi consumes metered cellular data and additional modem battery.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ext.amber,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ext.amber.copy(alpha = 0.1f))
+                        .border(1.dp, ext.amber.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                )
+            }
+
             // Concurrency Workers Slider
             Column {
                 Row(
@@ -234,7 +265,7 @@ fun NewDownloadSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
-                        text = "2 MB Segment Workers",
+                        text = "Adaptive BDP Segment Workers",
                         style = MaterialTheme.typography.titleSmall,
                     )
                     Text(
@@ -251,7 +282,7 @@ fun NewDownloadSheet(
                 )
             }
 
-            // Destination Picker (App Vault vs SAF ParcelFileDescriptor)
+            // Destination Picker (App Vault vs Staged SAF Placement)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -283,7 +314,11 @@ fun NewDownloadSheet(
             }
             Text(
                 text = if (safDestinationUri != null) {
-                    "SAF URI: ${safDestinationUri.toString().take(48)}…"
+                    if (defaultSettings.stagedSafPlacement) {
+                        "Staged SAF URI: downloads & verifies locally before atomic transfer"
+                    } else {
+                        "Direct SAF URI: ${safDestinationUri.toString().take(48)}…"
+                    }
                 } else {
                     "Default destination: App-Managed Downloads Vault (FileProvider ready)"
                 },
@@ -318,7 +353,7 @@ fun NewDownloadSheet(
                     modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Arm 2 MB Pipeline & Download")
+                Text("Arm Pipeline & Download")
             }
         }
     }

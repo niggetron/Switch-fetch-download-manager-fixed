@@ -2,7 +2,7 @@ package com.example.data.model
 
 import com.example.ui.theme.ThemeMode
 
-const val F2FS_SEGMENT_BYTES: Long = 2L * 1024L * 1024L // 2 MB = 0x200000
+const val F2FS_SEGMENT_BYTES: Long = 4L * 1024L * 1024L // 4 MiB default adaptive BDP base
 
 enum class DownloadStatus {
     QUEUED,
@@ -30,7 +30,7 @@ enum class DownloadStatus {
 }
 
 enum class NetworkRouteMode(val label: String) {
-    AUTO_MULTIPATH("Multipath Auto"),
+    AUTO_MULTIPATH("Wi-Fi + 5G Bond"),
     WIFI_ONLY("Wi-Fi Only"),
     CELLULAR_ONLY("5G / Cellular"),
     PROXY_SOCKS5("SOCKS5h Proxy"),
@@ -67,14 +67,36 @@ enum class TransferFilter(val label: String) {
     ISSUES("Recovery"),
 }
 
+/**
+ * Logical Android network identity (Fix F3):
+ * Keyed by transport + interface/subId rather than rotating raw networkHandle.
+ */
+sealed class LinkKey(val id: String, val isCellular: Boolean) {
+    data class Wifi(val iface: String) : LinkKey("wifi:$iface", false)
+    data class Cellular(val iface: String) : LinkKey("cell:$iface", true)
+
+    override fun toString(): String = id
+}
+
+enum class BreakerState {
+    CLOSED,
+    OPEN,
+    HALF_OPEN,
+}
+
 data class EngineSettings(
     val maxConcurrentWorkers: Int = 4,
     val segmentSizeBytes: Long = F2FS_SEGMENT_BYTES,
     val enableTailHedge: Boolean = true,
+    val enableAutoSpeedUp: Boolean = true,
     val enableCasVerification: Boolean = true,
+    val stagedSafPlacement: Boolean = true,
+    val retainCellularOnWifi: Boolean = true,
     val defaultRouteMode: NetworkRouteMode = NetworkRouteMode.AUTO_MULTIPATH,
     val proxyHost: String = "",
     val proxyPort: Int = 1080,
+    val cellularProxyHost: String = "",
+    val cellularProxyPort: Int = 1080,
     val themeMode: ThemeMode = ThemeMode.DARK_OBSIDIAN,
 )
 
@@ -106,7 +128,7 @@ object CuratedEndpoints {
         ),
         PublicTestEndpoint(
             title = "Cloudflare 25 MB Multi-Extent",
-            subtitle = "13 x 2 MB F2FS extents · Ideal for work-steal",
+            subtitle = "Adaptive BDP extents · Ideal for Wi-Fi + 5G bonding",
             url = "https://speed.cloudflare.com/__down?bytes=26214400",
             fileName = "cloudflare_25mb_extent.bin",
             approximateSizeLabel = "25.0 MB",

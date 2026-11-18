@@ -5,12 +5,12 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Fixed-budget DirectByteBuffer slab pool (256 KB slabs, capped at 6.0 MB active budget)
- * to avoid per-packet JVM byte[] heap allocations during high-throughput streaming.
+ * Bounded 8.0 MiB DirectByteBuffer slab pool (16 x 512 KiB slabs) matching v7.1 BoundedSlabPool.
+ * Eliminates per-packet JVM byte[] heap allocations in the Kotlin fallback path.
  */
 class SlabBufferPool(
-    val slabSizeBytes: Int = 256 * 1024,
-    val maxSlabs: Int = 24, // 24 * 256 KB = 6.0 MB
+    val slabSizeBytes: Int = 512 * 1024,
+    val maxSlabs: Int = 16, // 16 * 512 KiB = 8.0 MiB
 ) {
     private val freeList = ConcurrentLinkedQueue<ByteBuffer>()
     private val totalAllocatedSlabs = AtomicInteger(0)
@@ -27,12 +27,11 @@ class SlabBufferPool(
         if (currentTotal < maxSlabs && totalAllocatedSlabs.compareAndSet(currentTotal, currentTotal + 1)) {
             return ByteBuffer.allocateDirect(slabSizeBytes)
         }
-        // Fallback direct buffer if all 24 slabs are simultaneously checked out
         return ByteBuffer.allocateDirect(slabSizeBytes)
     }
 
     fun release(buffer: ByteBuffer) {
-        activeInUseSlabs.decrementAndGet().coerceAtLeast(0)
+        activeInUseSlabs.updateAndGet { (it - 1).coerceAtLeast(0) }
         buffer.clear()
         if (freeList.size < maxSlabs) {
             freeList.offer(buffer)

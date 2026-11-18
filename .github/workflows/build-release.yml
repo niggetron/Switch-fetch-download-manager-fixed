@@ -1,8 +1,8 @@
 name: Build & Publish Release APK
 
-# Builds an arm64-v8a release APK on every push to main and publishes it to the
-# Releases tab with an automatically bumped version name (base from
-# app/build.gradle.kts, e.g. "1.0" -> "1.0.<run number>").
+# Builds the Pure Rust `libaether_core.so` (arm64-v8a) via cargo-ndk, runs Rust
+# & Android unit tests, packages the signed arm64-v8a release APK, and publishes
+# it to GitHub Releases on every push to main or manual workflow_dispatch.
 on:
   push:
     branches: [main]
@@ -28,6 +28,39 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Set up Android NDK
+        run: |
+          NDK_VERSION="27.2.12479018"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" >/dev/null
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Set up Rust (stable + aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/aether-core/target
+          key: ${{ runner.os }}-cargo-ndk-${{ hashFiles('rust/aether-core/Cargo.toml') }}
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@cargo-ndk
+
+      - name: Run Rust host unit tests (aether-core)
+        working-directory: rust/aether-core
+        run: cargo test --lib
+
+      - name: Build libaether_core.so (arm64-v8a)
+        working-directory: rust/aether-core
+        run: |
+          cargo ndk -t arm64-v8a -p 24 -o ../../app/src/main/jniLibs build --release
+          ls -lh ../../app/src/main/jniLibs/arm64-v8a/libaether_core.so
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -36,7 +69,7 @@ jobs:
       - name: Compute version
         id: ver
         run: |
-          BASE="$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | tail -n1)"
+          BASE="$(grep -oP 'ciVersionName.*?\?:\s*"\K[^"]+' app/build.gradle.kts | head -n1)"
           BASE="${BASE:-1.0}"
           VERSION="${BASE}.${GITHUB_RUN_NUMBER}"
           echo "version_name=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -49,6 +82,9 @@ jobs:
           echo "STORE_PASSWORD=aetherio-ci" >> "$GITHUB_ENV"
           echo "KEY_PASSWORD=aetherio-ci" >> "$GITHUB_ENV"
 
+      - name: Run Android Unit & Multi-Network Tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
       - name: Build arm64-v8a release APK
         run: |
           gradle :app:assembleRelease \
@@ -57,14 +93,18 @@ jobs:
             -PciAbiFilter=arm64-v8a \
             --stacktrace
 
-      - name: Stage APK for release
+      - name: Verify libaether_core.so is packaged in APK & Stage Release
         run: |
           VERSION="${{ steps.ver.outputs.version_name }}"
           mkdir -p dist
           APK="$(ls app/build/outputs/apk/release/*release*.apk 2>/dev/null | head -n1)"
           if [ -z "$APK" ]; then echo "::error::No release APK found"; exit 1; fi
+          unzip -l "$APK" | grep "lib/arm64-v8a/libaether_core.so" || {
+            echo "::error::libaether_core.so missing from packaged APK!";
+            exit 1;
+          }
           cp "$APK" "dist/AetherIO-v${VERSION}-arm64-v8a.apk"
-          ls -la dist
+          ls -lh dist
 
       - name: Publish to GitHub Releases
         env:
@@ -75,5 +115,5 @@ jobs:
             "dist/AetherIO-v${VERSION}-arm64-v8a.apk" \
             --title "AetherIO v${VERSION}" \
             --latest \
-            --notes "$(printf 'Automated arm64-v8a release build\n\n- **Version name:** %s\n- **Version code:** %s\n- **Commit:** %s\n- **Branch:** %s\n' \
+            --notes "$(printf 'Automated arm64-v8a release build with compiled Rust libaether_core.so\n\n- **Version name:** %s\n- **Version code:** %s\n- **Native core:** libaether_core.so (arm64-v8a, panic=unwind, memfd + pwrite + fallocate + AETHLDG1)\n- **Commit:** %s\n- **Branch:** %s\n' \
               "${VERSION}" "${{ github.run_number }}" "${{ github.sha }}" "${{ github.ref_name }}")"
