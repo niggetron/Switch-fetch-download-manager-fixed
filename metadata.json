@@ -1,0 +1,6 @@
+{
+  "name": "AetherIO",
+  "description": "High-speed multi-segment download manager and file downloader with 2 MB aligned zero-merge storage, multipath network telemetry, and fault-tolerant OS recovery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

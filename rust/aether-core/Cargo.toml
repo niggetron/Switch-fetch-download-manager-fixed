@@ -1,0 +1,29 @@
+[package]
+name = "aether-core"
+version = "6.0.0"
+edition = "2024"
+description = "AetherIO Omega v6.0 Zero-Copy Pure Rust Transport, RLNC, and io_uring Storage Core"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "aether_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Core zero-copy Linux / Android kernel bindings
+rustix = { version = "1.0", features = ["fs", "mm", "net", "process"] }
+io-uring = "0.7"
+blake3 = "1.6"
+jni = "0.21"
+
+# Multipath QUIC & TLS transport (noq v1.1.0 + aws-lc-rs per Blueprint Tier 3)
+# Enable when building with full network target toolchain:
+# noq = "1.1.0"
+# aws-lc-rs = "1.12"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

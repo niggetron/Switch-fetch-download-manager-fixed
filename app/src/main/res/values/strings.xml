@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">AetherIO</string>
+    <string name="notification_channel_transfers_name">Active Transfers</string>
+    <string name="notification_channel_transfers_desc">Real-time progress and Quota Guard status for AetherIO downloads</string>
+    <string name="nav_transfers">Transfers</string>
+    <string name="nav_files">Files</string>
+    <string name="nav_telemetry">Engine</string>
+    <string name="action_new_download">New Download</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_open_file">Open</string>
+    <string name="action_share_file">Share</string>
+    <string name="action_refresh_url">Update URL</string>
+    <string name="action_regrant_saf">Re-Grant SAF</string>
+    <string name="action_prune_cache">Prune CAS</string>
+    <string name="empty_transfers_title">Zero Active Pipelines</string>
+    <string name="empty_transfers_subtitle">Add a direct HTTP/HTTPS file URL or pick a diagnostic test stream to launch 2 MB aligned zero-merge transfers.</string>
+    <string name="empty_files_title">No Downloaded Files</string>
+    <string name="empty_files_subtitle">Completed downloads committed through the 2 MB extent engine will appear here with SHA-256 verification.</string>
+</resources>
