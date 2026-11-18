@@ -209,5 +209,25 @@ mod tests {
         gf256_mul_acc(&mut dst, &[0x5Au8; RLNC_WINDOW], 0x07);
         assert!(dst.iter().any(|&b| b != 0));
         assert_eq!(blake3_digest_hex(b"aether").len(), 64);
+
+        let snap = crate::scheduler::ActiveConnectionSnapshot {
+            conn_id: "t1-w0".into(),
+            task_id: "t1".into(),
+            mirror_url: "https://cdn.example.com/a.bin".into(),
+            link_key: "cell:rmnet0".into(),
+            protocol: "H2/H3".into(),
+            state: "Streaming".into(),
+            range_start: 0,
+            range_end: 1023,
+            bytes_pulled: 512,
+            speed_bps: 1024,
+            ttfb_ms: 22,
+            blocked_reason: "NONE".into(),
+        };
+        let json = serde_json::to_string(&snap).expect("serialize ActiveConnectionSnapshot");
+        assert!(json.contains("\"url\":\"https://cdn.example.com/a.bin\""));
+        assert!(json.contains("\"link_key_id\":\"cell:rmnet0\""));
+        assert!(json.contains("\"socket_state\":\"Streaming\""));
+        assert!(json.contains("\"bytes_received\":512"));
     }
 }

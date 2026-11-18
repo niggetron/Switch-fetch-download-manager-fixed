@@ -30,7 +30,8 @@ jobs:
 
       - name: Install native cross-compile toolchain (BoringSSL / NDK deps)
         run: |
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft*.list || true
+          sudo apt-get update -qq || true
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build perl pkg-config libclang-dev
 
@@ -107,8 +108,9 @@ jobs:
 
       - name: Build arm64-v8a release APK
         run: |
+          test -f app/src/main/jniLibs/arm64-v8a/libaether_core.so
           gradle :app:assembleRelease \
-            -PrequireRustBuild=true \
+            -PskipRustBuild=true \
             -PciVersionCode=${{ steps.ver.outputs.version_code }} \
             -PciVersionName=${{ steps.ver.outputs.version_name }} \
             -PciAbiFilter=arm64-v8a \

@@ -197,18 +197,61 @@ impl NativeEngine {
             .insert(ev.task_id.clone(), ev);
     }
 
-    fn upsert_conn(&self, snap: ActiveConnectionSnapshot) {
+    pub fn upsert_conn(&self, snap: ActiveConnectionSnapshot) {
         self.connections
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .insert(snap.conn_id.clone(), snap);
+        self.sync_telemetry_from_connections();
     }
 
-    fn remove_conn(&self, conn_id: &str) {
+    pub fn remove_conn(&self, conn_id: &str) {
         self.connections
             .write()
             .unwrap_or_else(|p| p.into_inner())
             .remove(conn_id);
+        self.sync_telemetry_from_connections();
+    }
+
+    pub fn sync_telemetry_from_connections(&self) {
+        let guard = self.connections.read().unwrap_or_else(|p| p.into_inner());
+        let mut wifi_bps_bits = 0u64;
+        let mut cell_bps_bits = 0u64;
+        let mut eth_bps_bits = 0u64;
+        let mut wifi_w = 0u64;
+        let mut cell_w = 0u64;
+        let mut eth_w = 0u64;
+
+        for conn in guard.values() {
+            let bits_per_sec = conn.speed_bps.saturating_mul(8);
+            if conn.link_key.starts_with("cell:") {
+                cell_bps_bits = cell_bps_bits.saturating_add(bits_per_sec);
+                cell_w += 1;
+            } else if conn.link_key.starts_with("eth:") {
+                eth_bps_bits = eth_bps_bits.saturating_add(bits_per_sec);
+                eth_w += 1;
+            } else {
+                wifi_bps_bits = wifi_bps_bits.saturating_add(bits_per_sec);
+                wifi_w += 1;
+            }
+        }
+        let total_w = wifi_w + cell_w + eth_w;
+        let packed_workers = ((eth_w & 0xFFFF) << 48)
+            | ((cell_w & 0xFFFF) << 32)
+            | ((wifi_w & 0xFFFF) << 16)
+            | (total_w & 0xFFFF);
+
+        let page = live_telemetry_page();
+        page.wifi_goodput_bps.store(wifi_bps_bits, Ordering::Release);
+        page.cell_goodput_bps.store(cell_bps_bits, Ordering::Release);
+        page.eth_goodput_bps.store(eth_bps_bits, Ordering::Release);
+        page.goodput_bps.store(
+            wifi_bps_bits
+                .saturating_add(cell_bps_bits)
+                .saturating_add(eth_bps_bits),
+            Ordering::Release,
+        );
+        page.worker_counts_packed.store(packed_workers, Ordering::Release);
     }
 
     async fn run_download_task(
@@ -413,9 +456,6 @@ impl NativeEngine {
                 ttfb_ms,
                 error_message: e.to_string(),
             });
-            if cfg.direct_fd >= 0 {
-                std::mem::forget(data_file);
-            }
             return;
         }
 
@@ -429,11 +469,35 @@ impl NativeEngine {
         let ledger = AetherLedger::load_or_create(&ledger_path, total_bytes, seg_bytes, &etag)
             .unwrap_or_else(|_| AetherLedger::new(total_bytes, seg_bytes, &etag));
 
+        // Account for already-Done segments when resuming from an AETHLDG2 checkpoint
+        let resumed_bytes: u64 = ledger
+            .states
+            .iter()
+            .enumerate()
+            .filter(|&(_, &s)| s == SegmentStatus::Done as u8)
+            .map(|(idx, _)| {
+                let s = idx as u64 * ledger.segment_bytes;
+                let e = (s + ledger.segment_bytes - 1).min(total_bytes.saturating_sub(1));
+                if total_bytes > 0 && e >= s {
+                    e - s + 1
+                } else {
+                    0
+                }
+            })
+            .sum();
+
+        page.total_written.store(resumed_bytes, Ordering::Release);
+        page.contiguous_verified_offset
+            .store(ledger.contiguous_verified_offset, Ordering::Release);
+
         let data_file = Arc::new(data_file);
         let verifier = Arc::new(Mutex::new(ContiguousSha256Verifier::new(total_bytes)));
-        let written_total = Arc::new(AtomicU64::new(0));
+        let written_total = Arc::new(AtomicU64::new(resumed_bytes));
         let wifi_bytes_total = Arc::new(AtomicU64::new(0));
         let cell_bytes_total = Arc::new(AtomicU64::new(0));
+        let token_expired_flag = Arc::new(AtomicBool::new(false));
+        let last_error_msg = Arc::new(Mutex::new(None::<String>));
+        let seg_retries = Arc::new(Mutex::new(HashMap::<usize, u32>::new()));
 
         // Notify Kotlin Stream 0 metadata resolved
         self.set_outcome(TaskOutcomeEvent {
@@ -441,7 +505,7 @@ impl NativeEngine {
             state: "STREAMING".into(),
             file_name: file_name.clone(),
             mime_type: mime_type.clone(),
-            downloaded_bytes: 0,
+            downloaded_bytes: resumed_bytes,
             total_bytes,
             wifi_bytes: 0,
             cell_bytes: 0,
@@ -470,6 +534,7 @@ impl NativeEngine {
             let eng = self.clone();
             let h = handle.clone();
             let ledger_ref = ledger_arc.clone();
+            let ldg_path = ledger_path.clone();
             let file_ref = data_file.clone();
             let ver_ref = verifier.clone();
             let brk_ref = breakers_arc.clone();
@@ -477,14 +542,22 @@ impl NativeEngine {
             let w_tot = written_total.clone();
             let wifi_tot = wifi_bytes_total.clone();
             let cell_tot = cell_bytes_total.clone();
+            let tok_exp_ref = token_expired_flag.clone();
+            let err_msg_ref = last_error_msg.clone();
+            let retries_ref = seg_retries.clone();
             let tid = task_id.clone();
+            let fname_ref = file_name.clone();
+            let mime_ref = mime_type.clone();
             let profile = cfg.browser_profile.clone();
             let max_cell = cfg.max_cellular_bytes;
 
             worker_handles.push(tokio::spawn(async move {
                 let conn_id = format!("{tid}-w{worker_idx}");
                 loop {
-                    if h.cancelled.load(Ordering::Acquire) || h.paused.load(Ordering::Acquire) {
+                    if h.cancelled.load(Ordering::Acquire)
+                        || h.paused.load(Ordering::Acquire)
+                        || tok_exp_ref.load(Ordering::Acquire)
+                    {
                         break;
                     }
 
@@ -504,7 +577,6 @@ impl NativeEngine {
                     let seg_idx = match claimed_idx {
                         Some(i) => i,
                         None => {
-                            // Try _splitSlowest check cleanly
                             let can_split = {
                                 let rngs = rng_ref.lock().unwrap_or_else(|p| p.into_inner());
                                 rngs.values().any(|&(s, e)| bisect_slowest_range(s, e, SLAB_BYTES as u64).is_some())
@@ -643,16 +715,25 @@ impl NativeEngine {
                                                     io_err = Some(e.to_string());
                                                     break;
                                                 }
-                                                let _ = ver_ref.lock().unwrap_or_else(|p| p.into_inner()).record_and_advance(
-                                                    cursor,
-                                                    &slab.as_slice()[..take],
-                                                    Some(&file_ref),
-                                                );
+                                                if let Ok(verified_off) = ver_ref
+                                                    .lock()
+                                                    .unwrap_or_else(|p| p.into_inner())
+                                                    .record_and_advance(
+                                                        cursor,
+                                                        &slab.as_slice()[..take],
+                                                        Some(&file_ref),
+                                                    )
+                                                {
+                                                    page.contiguous_verified_offset
+                                                        .store(verified_off, Ordering::Release);
+                                                }
 
                                                 {
                                                     let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
                                                     let slab_idx = (cursor / SLAB_BYTES as u64) as usize;
                                                     lg.record_slab_digest(slab_idx, slab_b3);
+                                                    lg.contiguous_verified_offset =
+                                                        page.contiguous_verified_offset.load(Ordering::Relaxed);
                                                 }
 
                                                 cursor += take as u64;
@@ -662,18 +743,19 @@ impl NativeEngine {
                                                 let tot = w_tot.fetch_add(take as u64, Ordering::Relaxed) + take as u64;
                                                 page.total_written.store(tot, Ordering::Release);
                                                 page.producer_seq.fetch_add(1, Ordering::Relaxed);
-                                                if picked_key.starts_with("cell:") {
+                                                let (wb, cb) = if picked_key.starts_with("cell:") {
                                                     let cb = cell_tot.fetch_add(take as u64, Ordering::Relaxed) + take as u64;
                                                     page.cell_bytes_total.store(cb, Ordering::Release);
                                                     let rem = max_cell.saturating_sub(cb);
                                                     page.cellular_quota_remaining.store(rem, Ordering::Release);
+                                                    (wifi_tot.load(Ordering::Relaxed), cb)
                                                 } else {
                                                     let wb = wifi_tot.fetch_add(take as u64, Ordering::Relaxed) + take as u64;
                                                     page.wifi_bytes_total.store(wb, Ordering::Release);
-                                                }
+                                                    (wb, cell_tot.load(Ordering::Relaxed))
+                                                };
 
                                                 let secs = seg_t0.elapsed().as_secs_f64().max(0.05);
-                                                let link_bps = ((seg_bytes_written as f64 * 8.0) / secs) as u64;
                                                 let speed_bytes_per_sec = (seg_bytes_written as f64 / secs) as u64;
                                                 eng.upsert_conn(ActiveConnectionSnapshot {
                                                     conn_id: conn_id.clone(),
@@ -689,17 +771,20 @@ impl NativeEngine {
                                                     ttfb_ms,
                                                     blocked_reason: "NONE".into(),
                                                 });
-                                                if picked_key.starts_with("cell:") {
-                                                    page.cell_goodput_bps.store(link_bps, Ordering::Release);
-                                                } else if picked_key.starts_with("eth:") {
-                                                    page.eth_goodput_bps.store(link_bps, Ordering::Release);
-                                                } else {
-                                                    page.wifi_goodput_bps.store(link_bps, Ordering::Release);
-                                                }
-                                                let agg = page.wifi_goodput_bps.load(Ordering::Relaxed)
-                                                    + page.cell_goodput_bps.load(Ordering::Relaxed)
-                                                    + page.eth_goodput_bps.load(Ordering::Relaxed);
-                                                page.goodput_bps.store(agg, Ordering::Release);
+
+                                                eng.set_outcome(TaskOutcomeEvent {
+                                                    task_id: tid.clone(),
+                                                    state: "STREAMING".into(),
+                                                    file_name: fname_ref.clone(),
+                                                    mime_type: mime_ref.clone(),
+                                                    downloaded_bytes: tot,
+                                                    total_bytes,
+                                                    wifi_bytes: wb,
+                                                    cell_bytes: cb,
+                                                    sha256_hex: String::new(),
+                                                    ttfb_ms,
+                                                    error_message: String::new(),
+                                                });
                                             }
                                             if io_err.is_some() {
                                                 break;
@@ -722,11 +807,17 @@ impl NativeEngine {
 
                     match res {
                         Ok(_) => {
+                            if h.cancelled.load(Ordering::Acquire) || h.paused.load(Ordering::Acquire) {
+                                let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
+                                lg.states[seg_idx] = SegmentStatus::Pending as u8;
+                                let _ = lg.persist(&ldg_path, Some(&file_ref));
+                                break;
+                            }
                             // Fix #6: Strict fdatasync(data_fd) BEFORE marking Done & msyncing ledger
                             let _ = flush_fdatasync(&file_ref);
                             let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
                             lg.states[seg_idx] = SegmentStatus::Done as u8;
-                            let _ = lg.persist(&ledger_path, Some(&file_ref));
+                            let _ = lg.persist(&ldg_path, Some(&file_ref));
                             page.consumer_seq.fetch_add(1, Ordering::Relaxed);
                             if is_flag_enabled(FLAG_AUTO_SPEED_UP) {
                                 let _ = adjust_auto_speed_up(base_workers, 1, 8, 1.0, 1.1, 4.0, false);
@@ -740,8 +831,11 @@ impl NativeEngine {
                         }
                         Err(err) => {
                             record_diag("SEG_ERR", &format!("Segment {seg_idx} on {picked_key}: {err}"));
-                            let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
-                            lg.states[seg_idx] = SegmentStatus::Pending as u8;
+                            {
+                                let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
+                                lg.states[seg_idx] = SegmentStatus::Pending as u8;
+                                let _ = lg.persist(&ldg_path, Some(&file_ref));
+                            }
                             brk_ref
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -749,8 +843,21 @@ impl NativeEngine {
                                 .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(10)))
                                 .record_error_or_stall(Instant::now(), true);
                             if err.starts_with("TOKEN_EXPIRED") {
+                                tok_exp_ref.store(true, Ordering::Release);
+                                *err_msg_ref.lock().unwrap_or_else(|p| p.into_inner()) = Some(err);
                                 break;
                             }
+                            let attempts = {
+                                let mut rmap = retries_ref.lock().unwrap_or_else(|p| p.into_inner());
+                                let c = rmap.entry(seg_idx).or_insert(0);
+                                *c += 1;
+                                *c
+                            };
+                            *err_msg_ref.lock().unwrap_or_else(|p| p.into_inner()) = Some(err);
+                            if attempts >= 4 {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(150)).await;
                         }
                     }
                 }
@@ -770,20 +877,29 @@ impl NativeEngine {
 
         let paused = handle.paused.load(Ordering::Acquire);
         let cancelled = handle.cancelled.load(Ordering::Acquire);
-        let final_state = if cancelled {
-            "CANCELLED"
-        } else if paused {
-            "PAUSED"
-        } else {
-            let _ = std::fs::remove_file(&ledger_path);
-            "COMPLETED"
+        let token_expired = token_expired_flag.load(Ordering::Acquire);
+        let all_segments_done = {
+            let lg = ledger_arc.lock().unwrap_or_else(|p| p.into_inner());
+            lg.states.is_empty() || lg.states.iter().all(|&s| s == SegmentStatus::Done as u8)
         };
+        let last_err = last_error_msg
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .unwrap_or_default();
 
-        if cfg.direct_fd >= 0 {
-            if let Ok(raw_f) = Arc::try_unwrap(data_file) {
-                std::mem::forget(raw_f);
-            }
-        }
+        let (final_state, final_err) = if cancelled {
+            ("CANCELLED", String::new())
+        } else if paused {
+            ("PAUSED", String::new())
+        } else if token_expired {
+            ("TOKEN_EXPIRED", if last_err.is_empty() { "HTTP 403/410 signed token expired".into() } else { last_err })
+        } else if all_segments_done {
+            let _ = std::fs::remove_file(&ledger_path);
+            ("COMPLETED", String::new())
+        } else {
+            ("FAILED", if last_err.is_empty() { "Transfer incomplete — tap to resume from AETHLDG2 checkpoint".into() } else { last_err })
+        };
 
         self.set_outcome(TaskOutcomeEvent {
             task_id: task_id.clone(),
@@ -796,7 +912,7 @@ impl NativeEngine {
             cell_bytes: cell_bytes_total.load(Ordering::Acquire),
             sha256_hex: final_sha,
             ttfb_ms,
-            error_message: String::new(),
+            error_message: final_err,
         });
         self.tasks
             .lock()
