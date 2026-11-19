@@ -13,11 +13,14 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import com.example.data.model.EngineSettings
 import com.example.engine.DiagnosticsCenter
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
 import com.example.ui.components.PerNetworkLiveSpeedPanel
+import com.example.ui.components.PerNetworkSpeedometerCluster
 import com.example.ui.screens.TelemetryScreen
 import com.example.ui.theme.AetherTheme
 import org.junit.Assert.assertEquals
@@ -115,17 +118,57 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `telemetry screen displays dual-engine individual toggles`() {
+    fun `per-network radial speedometer cluster renders Wi-Fi 5G and Ethernet dials`() {
+        composeRule.setContent {
+            AetherTheme {
+                PerNetworkSpeedometerCluster(
+                    telemetry = TelemetrySnapshot(
+                        wifiBps = 5_000_000L, // 40.0 Mbps
+                        cellBps = 12_500_000L, // 100 Mbps
+                        ethBps = 25_000_000L, // 200 Mbps
+                        wifiPeakBps = 6_250_000L,
+                        cellPeakBps = 15_000_000L,
+                        ethPeakBps = 30_000_000L,
+                        wifiWorkers = 2,
+                        cellularWorkers = 2,
+                        ethWorkers = 2,
+                    ),
+                    networkMatrix = NetworkMatrixState(),
+                    useMBpsUnit = false,
+                    onToggleUnit = {},
+                    onResetPeaks = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("per_network_speedometer_cluster").assertIsDisplayed()
+        composeRule.onNodeWithTag("speedometer_wifi").assertIsDisplayed()
+        composeRule.onNodeWithTag("speedometer_cellular").assertIsDisplayed()
+        composeRule.onNodeWithTag("speedometer_ethernet").assertIsDisplayed()
+        composeRule.onNodeWithTag("speed_unit_toggle_transfers").assertIsDisplayed()
+    }
+
+    @Test
+    fun `telemetry screen displays per-network speedometers and dual-engine toggles`() {
         composeRule.setContent {
             AetherTheme {
                 TelemetryScreen(
-                    telemetry = TelemetrySnapshot(),
+                    telemetry = TelemetrySnapshot(
+                        instantBps = 17_500_000L,
+                        peakBps = 25_000_000L,
+                        wifiBps = 5_000_000L,
+                        cellBps = 12_500_000L,
+                        rustPeakBps = 25_000_000L,
+                        kotlinPeakBps = 18_000_000L,
+                    ),
                     networkMatrix = NetworkMatrixState(),
                     settings = EngineSettings(),
                     downloads = emptyList(),
                     fontLicenseAudit = "SIL OFL 1.1 Verified (3/3 local .ttf)",
                     diagnosticsPreview = "Diagnostics ready",
                     aria2Secret = "deadbeef",
+                    useMBpsSpeedUnit = false,
+                    onToggleSpeedUnit = {},
+                    onResetPeaks = {},
                     onUpdateSettings = {},
                     onRefreshNetwork = {},
                     onPruneCas = {},
@@ -134,13 +177,21 @@ class ExampleRobolectricTest {
                 )
             }
         }
+        composeRule.onNodeWithTag("full_speedometer_dashboard").assertIsDisplayed()
+        composeRule.onNodeWithTag("speedometer_aggregate").assertIsDisplayed()
+        composeRule.onNodeWithTag("engine_speedometer_wifi").assertIsDisplayed()
+        composeRule.onNodeWithTag("engine_speedometer_cell").assertIsDisplayed()
+        composeRule.onNodeWithTag("telemetry_lazy_column")
+            .performScrollToNode(hasTestTag("toggle_rust_engine"))
         composeRule.onNodeWithTag("toggle_rust_engine").assertIsDisplayed()
         composeRule.onNodeWithTag("toggle_kotlin_engine").assertIsDisplayed()
     }
 
     @Test
-    fun `formatters render speed and bytes accurately`() {
+    fun `formatters render speed units and bytes accurately`() {
         assertEquals("10.0 Mbps", Formatters.formatSpeedMbps(1_250_000L))
+        assertEquals("1.00 MB/s", Formatters.formatSpeed(1024L * 1024L, useMBps = true))
+        assertEquals("10.0 Mbps", Formatters.formatSpeed(1_250_000L, useMBps = false))
         assertEquals("2.00 MB", Formatters.formatBytes(2L * 1024L * 1024L))
     }
 }

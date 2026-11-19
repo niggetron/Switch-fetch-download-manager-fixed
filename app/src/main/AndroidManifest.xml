@@ -41,6 +41,11 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
         <receiver
             android:name=".service.BootLedgerReconcileReceiver"
             android:exported="false">

@@ -42,7 +42,7 @@ class AetherDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ensureChannel()
+        ensureChannel(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -125,7 +125,10 @@ class AetherDownloadService : Service() {
                     break
                 }
 
-                val snapshot = app.telemetryLedger.sampleSnapshot(hasActiveDownloads = true)
+                val snapshot = app.telemetryLedger.sampleSnapshotIfStale(
+                    hasActiveDownloads = true,
+                    maxAgeMs = 600L,
+                )
                 // R3 Quota Guard: proactively checkpoint 30s before 6-hour dataSync cap
                 if (snapshot.quotaActiveSession && snapshot.quotaRemainingMs < 30_000L) {
                     AetherNativeBridge.pauseQuotaGuardSafe()
@@ -144,6 +147,7 @@ class AetherDownloadService : Service() {
                 val splitText = buildString {
                     if (snapshot.wifiBps > 0L) append("W:${Formatters.formatSpeedMbps(snapshot.wifiBps)} ")
                     if (snapshot.cellBps > 0L) append("5G:${Formatters.formatSpeedMbps(snapshot.cellBps)} ")
+                    if (snapshot.ethBps > 0L) append("ETH:${Formatters.formatSpeedMbps(snapshot.ethBps)} ")
                 }.trim()
                 val subtitle = if (splitText.isNotEmpty()) {
                     "$titleFile · $speedText ($splitText) · ${snapshot.activeWorkers}W"
@@ -245,20 +249,6 @@ class AetherDownloadService : Service() {
             .build()
     }
 
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.notification_channel_transfers_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = getString(R.string.notification_channel_transfers_desc)
-            }
-            nm.createNotificationChannel(channel)
-        }
-    }
-
     override fun onDestroy() {
         val app = application as AetherApplication
         app.networkMonitor.releaseCellularLease()
@@ -273,6 +263,20 @@ class AetherDownloadService : Service() {
         const val ACTION_START = "com.example.action.START_ENGINE"
         const val ACTION_PAUSE_ALL = "com.example.action.PAUSE_ALL"
         const val ACTION_STOP = "com.example.action.STOP_ENGINE"
+
+        fun ensureChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    context.getString(R.string.notification_channel_transfers_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = context.getString(R.string.notification_channel_transfers_desc)
+                }
+                nm.createNotificationChannel(channel)
+            }
+        }
 
         fun isIgnoringBatteryOptimizations(context: Context): Boolean {
             val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager

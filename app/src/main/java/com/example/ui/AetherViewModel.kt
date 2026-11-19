@@ -63,6 +63,9 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     private val _aria2Secret = MutableStateFlow(app.aria2RpcSecret)
     val aria2Secret: StateFlow<String> = _aria2Secret.asStateFlow()
 
+    private val _useMBpsSpeedUnit = MutableStateFlow(false)
+    val useMBpsSpeedUnit: StateFlow<Boolean> = _useMBpsSpeedUnit.asStateFlow()
+
     val fontLicenseAudit: String by lazy {
         DiagnosticsCenter.verifyBundledFontLicenses(app)
     }
@@ -306,6 +309,16 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     fun refreshNetworkMatrix() {
         networkMonitor.refreshState()
+    }
+
+    fun toggleSpeedDisplayUnit() {
+        _useMBpsSpeedUnit.value = !_useMBpsSpeedUnit.value
+    }
+
+    fun resetTelemetryPeaks() {
+        telemetryLedger.resetSessionPeaks()
+        _telemetry.value = telemetryLedger.latestSnapshot()
+        _snackbarEvents.tryEmit("Speedometer peaks & engine benchmarks reset")
     }
 
     fun updateSettings(transform: (EngineSettings) -> EngineSettings) {

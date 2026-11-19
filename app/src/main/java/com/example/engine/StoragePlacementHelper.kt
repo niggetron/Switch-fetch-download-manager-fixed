@@ -125,11 +125,31 @@ object StoragePlacementHelper {
         }.getOrNull()
     }
 
-    fun finalizePendingMediaStoreDownload(context: Context, uri: Uri) {
+    fun finalizePendingMediaStoreDownload(
+        context: Context,
+        uri: Uri,
+        updatedFileName: String? = null,
+        updatedMimeType: String? = null,
+    ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         runCatching {
-            val cv = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+            val cv = ContentValues().apply {
+                put(MediaStore.Downloads.IS_PENDING, 0)
+                if (!updatedFileName.isNullOrBlank()) {
+                    put(MediaStore.Downloads.DISPLAY_NAME, updatedFileName)
+                }
+                if (!updatedMimeType.isNullOrBlank()) {
+                    put(MediaStore.Downloads.MIME_TYPE, updatedMimeType)
+                }
+            }
             context.contentResolver.update(uri, cv, null, null)
+        }
+    }
+
+    fun abortPendingMediaStoreDownload(context: Context, uri: Uri) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        runCatching {
+            context.contentResolver.delete(uri, null, null)
         }
     }
 
@@ -140,6 +160,7 @@ object StoragePlacementHelper {
         mimeType: String,
     ): Uri? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !sourceFile.exists()) return null
+        var pendingUri: Uri? = null
         return runCatching {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -149,7 +170,9 @@ object StoragePlacementHelper {
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: return null
-            val pfd = context.contentResolver.openFileDescriptor(uri, "w") ?: return null
+            pendingUri = uri
+            val pfd = context.contentResolver.openFileDescriptor(uri, "w")
+                ?: throw IllegalStateException("Failed to open MediaStore descriptor")
             pfd.use { desc ->
                 val nativeCopied = AetherNativeBridge.copyStagingToFdSafe(sourceFile.absolutePath, desc.fd)
                 if (!nativeCopied) {
@@ -167,6 +190,8 @@ object StoragePlacementHelper {
             }
             finalizePendingMediaStoreDownload(context, uri)
             uri
+        }.onFailure {
+            pendingUri?.let { abortPendingMediaStoreDownload(context, it) }
         }.getOrNull()
     }
 }

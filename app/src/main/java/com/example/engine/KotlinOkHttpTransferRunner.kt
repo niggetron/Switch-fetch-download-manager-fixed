@@ -323,6 +323,7 @@ internal class KotlinOkHttpTransferRunner(
                         val dt = (now - lastSampleTime).coerceAtLeast(100L)
                         val curSpeed = ((curBytes - lastSampleBytes).coerceAtLeast(0L) * 1000L) / dt
                         peakSpeed.updateAndGet { maxOf(it, curSpeed) }
+                        telemetryLedger.recordEnginePeak(ResolvedEngineBackend.KOTLIN_OKHTTP, curSpeed)
                         lastSampleTime = now
                         lastSampleBytes = curBytes
 
@@ -332,7 +333,7 @@ internal class KotlinOkHttpTransferRunner(
                             val anyBreakerOpen = networkMonitor.breakerRegistry.values.any {
                                 it.currentState(now) != BreakerState.CLOSED
                             }
-                            val curTtfb = telemetryLedger.sampleSnapshot(true).lastTtfbMs
+                            val curTtfb = telemetryLedger.latestTtfbMs()
                                 .takeIf { it > 0L }?.toDouble() ?: prevTtfb
                             val adjusted = LinkScheduler.adjustAutoSpeedUp(
                                 currentWorkers = targetWorkers.get(),
@@ -713,6 +714,7 @@ internal class KotlinOkHttpTransferRunner(
         val pinnedLinkKeyId = selectedLane?.linkKeyId
         val pinnedEndpoint = pinnedLinkKeyId?.let { networkMonitor.getNetworkByKey(it) }
         val isCell = pinnedEndpoint?.linkKey?.isCellular == true || routeMode == NetworkRouteMode.CELLULAR_ONLY
+        val isEth = pinnedLinkKeyId?.startsWith("eth:") == true
         val targetUrl = LinkScheduler.selectMirrorForLink(urls, pinnedLinkKeyId ?: "wifi:wlan0", segIndex)
         val client = buildClientForLink(pinnedEndpoint, routeMode, settings)
 
@@ -794,7 +796,10 @@ internal class KotlinOkHttpTransferRunner(
                         queueCounter?.addAndGet(-dec)
 
                         liveWrittenBytes.addAndGet(read.toLong())
-                        if (isCell) taskCellBytes.addAndGet(read.toLong()) else taskWifiBytes.addAndGet(read.toLong())
+                        when {
+                            isCell -> taskCellBytes.addAndGet(read.toLong())
+                            !isEth -> taskWifiBytes.addAndGet(read.toLong())
+                        }
                         telemetryLedger.recordLinkBytesWritten(pinnedLinkKeyId, read.toLong())
                         syscallBatches.incrementAndGet()
                         telemetryLedger.recordSyscallWriteBatch()
@@ -875,6 +880,7 @@ internal class KotlinOkHttpTransferRunner(
         val selectedLane = LinkScheduler.selectEarliestArrivalLink(lanes, networkMonitor.breakerRegistry, settings.segmentSizeBytes.toDouble())
         val endpoint = selectedLane?.let { networkMonitor.getNetworkByKey(it.linkKeyId) }
         val isCell = endpoint?.linkKey?.isCellular == true || routeMode == NetworkRouteMode.CELLULAR_ONLY
+        val isEth = selectedLane?.linkKeyId?.startsWith("eth:") == true
         val client = buildClientForLink(endpoint, routeMode, settings)
 
         val connId = "ok-${taskId.take(6)}-single"
@@ -905,7 +911,10 @@ internal class KotlinOkHttpTransferRunner(
                         dest.writeAt(slab, offset)
                         offset += read
                         liveWrittenBytes.addAndGet(read.toLong())
-                        if (isCell) taskCellBytes.addAndGet(read.toLong()) else taskWifiBytes.addAndGet(read.toLong())
+                        when {
+                            isCell -> taskCellBytes.addAndGet(read.toLong())
+                            !isEth -> taskWifiBytes.addAndGet(read.toLong())
+                        }
                         telemetryLedger.recordLinkBytesWritten(selectedLane?.linkKeyId, read.toLong())
                         syscallBatches.incrementAndGet()
                         telemetryLedger.recordSyscallWriteBatch()

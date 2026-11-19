@@ -79,7 +79,7 @@ import com.example.engine.NetworkMatrixState
 import com.example.engine.ResolvedEngineBackend
 import com.example.engine.TelemetrySnapshot
 import com.example.ui.components.KetchConnectionsInspectorCard
-import com.example.ui.components.PerNetworkLiveSpeedPanel
+import com.example.ui.components.PerNetworkSpeedometerCluster
 import com.example.ui.components.SegmentBitfieldMatrix
 import com.example.ui.components.StatusPill
 import com.example.ui.components.ThroughputSparkline
@@ -94,6 +94,9 @@ fun TransfersScreen(
     selectedFilter: TransferFilter,
     telemetry: TelemetrySnapshot,
     networkMatrix: NetworkMatrixState,
+    useMBpsSpeedUnit: Boolean,
+    onToggleSpeedUnit: () -> Unit,
+    onResetPeaks: () -> Unit,
     onSelectFilter: (TransferFilter) -> Unit,
     onPause: (String) -> Unit,
     onResume: (String) -> Unit,
@@ -132,6 +135,9 @@ fun TransfersScreen(
             HeroTelemetryBanner(
                 telemetry = telemetry,
                 networkMatrix = networkMatrix,
+                useMBpsSpeedUnit = useMBpsSpeedUnit,
+                onToggleSpeedUnit = onToggleSpeedUnit,
+                onResetPeaks = onResetPeaks,
                 activeCount = downloads.count { it.statusEnum.isActive },
                 hasPaused = downloads.any {
                     it.statusEnum == DownloadStatus.PAUSED ||
@@ -201,9 +207,24 @@ fun TransfersScreen(
                 EmptyTransfersCard(onOpenNewDownload = onOpenNewDownload)
             }
         } else {
+            val activeTotalCount = downloads.count { it.statusEnum.isActive }
             items(downloads, key = { it.id }) { item ->
+                val liveTaskBps = if (item.statusEnum.isActive) {
+                    val connSum = telemetry.activeConnections
+                        .filter { it.taskId == item.id }
+                        .sumOf { it.speedBps }
+                    when {
+                        connSum > 0L -> connSum
+                        activeTotalCount == 1 -> telemetry.instantBps
+                        else -> 0L
+                    }
+                } else {
+                    0L
+                }
                 TransferItemCard(
                     entity = item,
+                    liveSpeedBps = liveTaskBps,
+                    useMBpsSpeedUnit = useMBpsSpeedUnit,
                     onPause = { onPause(item.id) },
                     onResume = { onResume(item.id) },
                     onDeleteRequest = { deleteTarget = item },
@@ -250,6 +271,9 @@ fun TransfersScreen(
 private fun HeroTelemetryBanner(
     telemetry: TelemetrySnapshot,
     networkMatrix: NetworkMatrixState,
+    useMBpsSpeedUnit: Boolean,
+    onToggleSpeedUnit: () -> Unit,
+    onResetPeaks: () -> Unit,
     activeCount: Int,
     hasPaused: Boolean,
     onPauseAll: () -> Unit,
@@ -287,12 +311,12 @@ private fun HeroTelemetryBanner(
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text(
-                        text = Formatters.formatSpeedMbps(telemetry.instantBps),
+                        text = Formatters.formatSpeed(telemetry.instantBps, useMBpsSpeedUnit),
                         style = MonoHeroMetricStyle,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        text = Formatters.formatSpeedMBps(telemetry.instantBps),
+                        text = Formatters.formatSpeed(telemetry.instantBps, !useMBpsSpeedUnit),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -331,10 +355,13 @@ private fun HeroTelemetryBanner(
                 .height(50.dp),
         )
 
-        // Live Per-Network Wi-Fi / 5G / Eth Speed Bars
-        PerNetworkLiveSpeedPanel(
+        // Live Per-Network Animated Radial Speedometers (Wi-Fi, 5G/LTE, USB-C Ethernet)
+        PerNetworkSpeedometerCluster(
             telemetry = telemetry,
             networkMatrix = networkMatrix,
+            useMBpsUnit = useMBpsSpeedUnit,
+            onToggleUnit = onToggleSpeedUnit,
+            onResetPeaks = onResetPeaks,
         )
 
         Row(
@@ -438,6 +465,8 @@ private fun TelemetryMiniCell(
 @Composable
 private fun TransferItemCard(
     entity: DownloadEntity,
+    liveSpeedBps: Long,
+    useMBpsSpeedUnit: Boolean,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onDeleteRequest: () -> Unit,
@@ -543,6 +572,18 @@ private fun TransferItemCard(
                         StatusPill(label = statusLabel, color = statusColor)
                         if (engineTag != null) {
                             StatusPill(label = engineTag, color = ext.violet)
+                        }
+                        if (entity.statusEnum.isActive && liveSpeedBps > 0L) {
+                            val remaining = (entity.totalBytes - entity.downloadedBytes).coerceAtLeast(0L)
+                            val etaLabel = if (entity.totalBytes > 0L) {
+                                " · ETA ${Formatters.formatEta(remaining, liveSpeedBps)}"
+                            } else {
+                                ""
+                            }
+                            StatusPill(
+                                label = "${Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit)}$etaLabel",
+                                color = ext.emerald,
+                            )
                         }
                         if (entity.allUrls.size > 1) {
                             StatusPill(label = "${entity.allUrls.size} Mirrors", color = ext.amber)

@@ -54,6 +54,7 @@ import com.example.ui.components.EightAxisRadarChart
 import com.example.ui.components.EngineLayerRow
 import com.example.ui.components.EngineSectionCard
 import com.example.ui.components.EngineToggleRow
+import com.example.ui.components.FullSpeedometerDashboardCard
 import com.example.ui.components.OsSurvivalAndDiagnosticsCard
 import com.example.ui.components.RadarAxis
 import com.example.ui.components.RooflineParetoChart
@@ -74,6 +75,9 @@ fun TelemetryScreen(
     fontLicenseAudit: String,
     diagnosticsPreview: String,
     aria2Secret: String,
+    useMBpsSpeedUnit: Boolean,
+    onToggleSpeedUnit: () -> Unit,
+    onResetPeaks: () -> Unit,
     onUpdateSettings: ((EngineSettings) -> EngineSettings) -> Unit,
     onRefreshNetwork: () -> Unit,
     onPruneCas: () -> Unit,
@@ -112,10 +116,23 @@ fun TelemetryScreen(
     )
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("telemetry_lazy_column"),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        // Per-Network Live Radial Speedometers (Aggregate, Wi-Fi, 5G/LTE, USB-C Eth) + A/B Engine Benchmark
+        item(key = "per_network_speedometers") {
+            FullSpeedometerDashboardCard(
+                telemetry = telemetry,
+                networkMatrix = networkMatrix,
+                useMBpsUnit = useMBpsSpeedUnit,
+                onToggleUnit = onToggleSpeedUnit,
+                onResetPeaks = onResetPeaks,
+            )
+        }
+
         // Dual-Engine Individual A/B Toggles
         item(key = "dual_engine_toggles") {
             EngineSectionCard(title = "DUAL-ENGINE A/B SWITCHBOARD (INDIVIDUAL TOGGLES)") {

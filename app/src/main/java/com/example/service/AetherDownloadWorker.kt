@@ -26,6 +26,7 @@ class AetherDownloadWorker(
     override suspend fun doWork(): Result {
         val app = applicationContext as? AetherApplication ?: return Result.failure()
         runCatching {
+            AetherDownloadService.ensureChannel(applicationContext)
             val notification = NotificationCompat.Builder(applicationContext, AetherDownloadService.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle("AetherIO WorkManager Transfer")

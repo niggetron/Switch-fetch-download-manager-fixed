@@ -285,10 +285,21 @@ class AetherDownloadEngine(
         val settings = settingsRepository.current()
         networkMonitor.applyPolicy(settings)
 
-        // Determine per-task override if explicitly pinned cleanly on enqueue
+        // Respect per-task backend pin only if that engine is still enabled & available;
+        // otherwise honor the user's current Settings switchboard cleanly on resume.
         val perTaskPref = when (entity.engineBackendUsed) {
-            ResolvedEngineBackend.RUST_LIBAETHER_CORE.id -> com.example.data.model.EngineBackendPreference.FORCE_RUST_NATIVE
-            ResolvedEngineBackend.KOTLIN_OKHTTP.id -> com.example.data.model.EngineBackendPreference.FORCE_KOTLIN_OKHTTP
+            ResolvedEngineBackend.RUST_LIBAETHER_CORE.id ->
+                if (settings.enableRustEngine && AetherNativeBridge.isNativeLoaded) {
+                    com.example.data.model.EngineBackendPreference.FORCE_RUST_NATIVE
+                } else {
+                    null
+                }
+            ResolvedEngineBackend.KOTLIN_OKHTTP.id ->
+                if (settings.enableKotlinOkHttpEngine) {
+                    com.example.data.model.EngineBackendPreference.FORCE_KOTLIN_OKHTTP
+                } else {
+                    null
+                }
             else -> null
         }
 
@@ -358,7 +369,10 @@ class AetherDownloadEngine(
             protocolMode = entity.protocolMode,
         )
         if (!started) {
-            mediaStoreTarget?.pfd?.let { runCatching { it.close() } }
+            mediaStoreTarget?.let { target ->
+                runCatching { target.pfd.close() }
+                StoragePlacementHelper.abortPendingMediaStoreDownload(context, target.uri)
+            }
             if (settings.enableKotlinOkHttpEngine) {
                 DiagnosticsCenter.log("FALLBACK", "Native dispatch unavailable; falling back to Kotlin OkHttp")
                 kotlinRunner.run(entity.copy(engineBackendUsed = ResolvedEngineBackend.KOTLIN_OKHTTP.id), settings)
@@ -384,26 +398,43 @@ class AetherDownloadEngine(
 
                 when (outcome.state) {
                     "COMPLETED" -> {
-                        mediaStoreTarget?.let { StoragePlacementHelper.finalizePendingMediaStoreDownload(context, it.uri) }
-                        if (mediaStoreTarget == null && !entity.isSafDestination &&
-                            StoragePlacementHelper.shouldUseDirectMediaStoreFd(total, false)
-                        ) {
-                            StoragePlacementHelper.promoteLocalFileToMediaStore(
-                                context = context,
-                                sourceFile = File(entity.destinationUri),
-                                fileName = outcome.fileName.ifBlank { current.fileName },
-                                mimeType = outcome.mimeType.ifBlank { current.mimeType },
-                            )
-                        }
+                        val resolvedFileName = outcome.fileName.ifBlank { current.fileName }
+                        val resolvedMimeType = outcome.mimeType.ifBlank { current.mimeType }
                         val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
                         val avgBps = (total.coerceAtLeast(outcome.downloadedBytes) * 1000L) / elapsed
                         val hashOk = entity.expectedSha256.isNullOrBlank() ||
                             entity.expectedSha256.equals(outcome.sha256Hex, ignoreCase = true)
 
+                        if (hashOk) {
+                            telemetryLedger.recordEnginePeak(ResolvedEngineBackend.RUST_LIBAETHER_CORE, avgBps)
+                            mediaStoreTarget?.let { target ->
+                                StoragePlacementHelper.finalizePendingMediaStoreDownload(
+                                    context = context,
+                                    uri = target.uri,
+                                    updatedFileName = resolvedFileName,
+                                    updatedMimeType = resolvedMimeType,
+                                )
+                            }
+                            if (mediaStoreTarget == null && !entity.isSafDestination &&
+                                StoragePlacementHelper.shouldUseDirectMediaStoreFd(total, false)
+                            ) {
+                                StoragePlacementHelper.promoteLocalFileToMediaStore(
+                                    context = context,
+                                    sourceFile = File(entity.destinationUri),
+                                    fileName = resolvedFileName,
+                                    mimeType = resolvedMimeType,
+                                )
+                            }
+                        } else {
+                            mediaStoreTarget?.let { target ->
+                                StoragePlacementHelper.abortPendingMediaStoreDownload(context, target.uri)
+                            }
+                        }
+
                         repository.update(
                             current.copy(
-                                fileName = outcome.fileName.ifBlank { current.fileName },
-                                mimeType = outcome.mimeType.ifBlank { current.mimeType },
+                                fileName = resolvedFileName,
+                                mimeType = resolvedMimeType,
                                 totalBytes = total,
                                 downloadedBytes = outcome.downloadedBytes,
                                 wifiBytes = outcome.wifiBytes,
@@ -434,6 +465,9 @@ class AetherDownloadEngine(
                         break
                     }
                     "ENOSPC" -> {
+                        mediaStoreTarget?.let { target ->
+                            StoragePlacementHelper.abortPendingMediaStoreDownload(context, target.uri)
+                        }
                         repository.update(
                             current.copy(
                                 status = DownloadStatus.ENOSPC_R4.name,
@@ -455,7 +489,22 @@ class AetherDownloadEngine(
                         )
                         break
                     }
+                    "CANCELLED" -> {
+                        mediaStoreTarget?.let { target ->
+                            StoragePlacementHelper.abortPendingMediaStoreDownload(context, target.uri)
+                        }
+                        repository.update(
+                            current.copy(
+                                status = DownloadStatus.CANCELLED.name,
+                                updatedAt = System.currentTimeMillis(),
+                            )
+                        )
+                        break
+                    }
                     "FAILED" -> {
+                        mediaStoreTarget?.let { target ->
+                            StoragePlacementHelper.abortPendingMediaStoreDownload(context, target.uri)
+                        }
                         repository.update(
                             current.copy(
                                 status = DownloadStatus.FAILED.name,

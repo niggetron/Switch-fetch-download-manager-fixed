@@ -23,12 +23,18 @@ data class TelemetrySnapshot(
     val wifiBps: Long = 0L,
     val cellBps: Long = 0L,
     val ethBps: Long = 0L,
+    val wifiPeakBps: Long = 0L,
+    val cellPeakBps: Long = 0L,
+    val ethPeakBps: Long = 0L,
+    val rustPeakBps: Long = 0L,
+    val kotlinPeakBps: Long = 0L,
     val wifiBytesTotal: Long = 0L,
     val cellBytesTotal: Long = 0L,
     val ethBytesTotal: Long = 0L,
     val speedHistoryBps: List<Long> = emptyList(),
     val wifiHistoryBps: List<Long> = emptyList(),
     val cellHistoryBps: List<Long> = emptyList(),
+    val ethHistoryBps: List<Long> = emptyList(),
     val activeWorkers: Int = 0,
     val wifiWorkers: Int = 0,
     val cellularWorkers: Int = 0,
@@ -59,8 +65,9 @@ data class TelemetrySnapshot(
  * 1) Zero-JNI `memfd_create()` page when Rust `libaether_core.so` is driving transfers
  * 2) Per-link live metering + connection registry when Kotlin OkHttp engine is running
  *
- * Also polls Android 16 `SystemHealthManager.getCpuHeadroom()` on a dedicated background
- * coroutine respecting `getCpuHeadroomMinIntervalMillis()`, never inside the 4 Hz UI loop.
+ * Thread-safe synchronized sampling prevents competing background callers from draining
+ * byte windows out from under the 4 Hz UI speedometer loop, and accurately sums concurrent
+ * Rust + Kotlin transfers while tracking per-network peaks and dual-engine A/B peaks.
  */
 class TelemetryLedger(
     private val context: Context,
@@ -79,6 +86,12 @@ class TelemetryLedger(
 
     private val lastWindowCheckMs = AtomicLong(System.currentTimeMillis())
     private val peakBps = AtomicLong(0L)
+    private val wifiPeakBps = AtomicLong(0L)
+    private val cellPeakBps = AtomicLong(0L)
+    private val ethPeakBps = AtomicLong(0L)
+    private val rustPeakBps = AtomicLong(0L)
+    private val kotlinPeakBps = AtomicLong(0L)
+
     private val activeWorkers = AtomicInteger(0)
     private val wifiWorkers = AtomicInteger(0)
     private val cellularWorkers = AtomicInteger(0)
@@ -91,16 +104,27 @@ class TelemetryLedger(
     private var cachedCpuHeadroomPct: Int? = null
 
     @Volatile
-    private var activeEngineBadgeLabel: String = if (AetherNativeBridge.isNativeLoaded) "RUST READY" else "KOTLIN OKHTTP"
+    private var activeEngineBadgeLabel: String =
+        if (AetherNativeBridge.isNativeLoaded) "RUST READY" else "KOTLIN OKHTTP"
 
+    @Volatile
+    private var cachedSnapshot: TelemetrySnapshot = TelemetrySnapshot(
+        isNativeRustActive = AetherNativeBridge.isNativeLoaded,
+        activeEngineBadge = activeEngineBadgeLabel,
+    )
+
+    @Volatile
+    private var lastSampleTimestampMs: Long = 0L
+
+    private val sampleLock = Any()
     private val kotlinConnections = ConcurrentHashMap<String, ActiveConnectionInfo>()
     private val headroomStarted = AtomicBoolean(false)
     private var headroomJob: Job? = null
 
-    private val historyLock = Any()
     private val speedRing = ArrayDeque<Long>(60)
     private val wifiRing = ArrayDeque<Long>(60)
     private val cellRing = ArrayDeque<Long>(60)
+    private val ethRing = ArrayDeque<Long>(60)
 
     fun attachMemfdIfAvailable() {
         memfdReader.attachIfNativeAvailable()
@@ -139,7 +163,6 @@ class TelemetryLedger(
                         AetherNativeBridge.setThermalWorkerCapSafe(8)
                     }
                 }.onFailure {
-                    // UnsupportedOperationException on emulators / older kernels -> stop polling gracefully
                     if (it.cause is UnsupportedOperationException || it is UnsupportedOperationException) {
                         cachedCpuHeadroomPct = null
                         return@launch
@@ -153,6 +176,38 @@ class TelemetryLedger(
     fun setActiveEngineBadge(badge: String) {
         activeEngineBadgeLabel = badge
     }
+
+    fun recordEnginePeak(backend: ResolvedEngineBackend, speedBps: Long) {
+        if (speedBps <= 0L) return
+        when (backend) {
+            ResolvedEngineBackend.RUST_LIBAETHER_CORE -> rustPeakBps.updateAndGet { maxOf(it, speedBps) }
+            ResolvedEngineBackend.KOTLIN_OKHTTP -> kotlinPeakBps.updateAndGet { maxOf(it, speedBps) }
+        }
+    }
+
+    fun resetSessionPeaks() {
+        peakBps.set(0L)
+        wifiPeakBps.set(0L)
+        cellPeakBps.set(0L)
+        ethPeakBps.set(0L)
+        rustPeakBps.set(0L)
+        kotlinPeakBps.set(0L)
+        synchronized(sampleLock) {
+            cachedSnapshot = cachedSnapshot.copy(
+                peakBps = 0L,
+                wifiPeakBps = 0L,
+                cellPeakBps = 0L,
+                ethPeakBps = 0L,
+                rustPeakBps = 0L,
+                kotlinPeakBps = 0L,
+            )
+        }
+    }
+
+    fun latestTtfbMs(): Long =
+        memfdReader.readSnapshot()?.ttfbMs?.takeIf { it > 0L } ?: lastTtfbMs.get()
+
+    fun latestSnapshot(): TelemetrySnapshot = cachedSnapshot
 
     fun upsertKotlinConnection(info: ActiveConnectionInfo) {
         kotlinConnections[info.connId] = info
@@ -233,8 +288,25 @@ class TelemetryLedger(
         quotaSessionStartMs.set(0L)
     }
 
-    fun sampleSnapshot(hasActiveDownloads: Boolean): TelemetrySnapshot {
+    /**
+     * Used by background service notifications: reuses the fresh UI sample when foregrounded
+     * so the 1 Hz service never steals window bytes from the 4 Hz UI speedometers.
+     */
+    fun sampleSnapshotIfStale(hasActiveDownloads: Boolean, maxAgeMs: Long = 600L): TelemetrySnapshot {
         val now = System.currentTimeMillis()
+        if (lastSampleTimestampMs > 0L && (now - lastSampleTimestampMs) < maxAgeMs) {
+            return cachedSnapshot
+        }
+        return sampleSnapshot(hasActiveDownloads)
+    }
+
+    fun sampleSnapshot(hasActiveDownloads: Boolean): TelemetrySnapshot = synchronized(sampleLock) {
+        val now = System.currentTimeMillis()
+        if (lastSampleTimestampMs > 0L && (now - lastSampleTimestampMs) < 160L) {
+            return@synchronized cachedSnapshot
+        }
+        lastSampleTimestampMs = now
+
         val prev = lastWindowCheckMs.getAndSet(now)
         val dtMs = (now - prev).coerceAtLeast(100L)
 
@@ -243,41 +315,48 @@ class TelemetryLedger(
         val windowCell = cellBytesWindow.getAndSet(0L)
         val windowEth = ethBytesWindow.getAndSet(0L)
 
+        val kotlinTotalBps = if (hasActiveDownloads || windowTotal > 0L) (windowTotal * 1000L) / dtMs else 0L
+        val kotlinWifiBps = if (hasActiveDownloads || windowWifi > 0L) (windowWifi * 1000L) / dtMs else 0L
+        val kotlinCellBps = if (hasActiveDownloads || windowCell > 0L) (windowCell * 1000L) / dtMs else 0L
+        val kotlinEthBps = if (hasActiveDownloads || windowEth > 0L) (windowEth * 1000L) / dtMs else 0L
+
         val memfdSnap = memfdReader.readSnapshot()
-        val rustActiveNow = memfdSnap != null && (memfdSnap.goodputBps > 0L || memfdSnap.totalWorkers > 0)
+        val rustTotalBps = if (memfdSnap != null && (memfdSnap.goodputBps > 0L || memfdSnap.totalWorkers > 0)) {
+            memfdSnap.goodputBps / 8L
+        } else {
+            0L
+        }
+        val rustWifiBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.wifiGoodputBps / 8L else 0L
+        val rustCellBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.cellGoodputBps / 8L else 0L
+        val rustEthBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.ethGoodputBps / 8L else 0L
 
-        val totalBps = when {
-            rustActiveNow && memfdSnap != null -> memfdSnap.goodputBps / 8L
-            hasActiveDownloads || windowTotal > 0 -> (windowTotal * 1000L) / dtMs
-            else -> 0L
-        }
-        val wifiBpsNow = when {
-            rustActiveNow && memfdSnap != null -> memfdSnap.wifiGoodputBps / 8L
-            hasActiveDownloads || windowWifi > 0 -> (windowWifi * 1000L) / dtMs
-            else -> 0L
-        }
-        val cellBpsNow = when {
-            rustActiveNow && memfdSnap != null -> memfdSnap.cellGoodputBps / 8L
-            hasActiveDownloads || windowCell > 0 -> (windowCell * 1000L) / dtMs
-            else -> 0L
-        }
-        val ethBpsNow = when {
-            rustActiveNow && memfdSnap != null -> memfdSnap.ethGoodputBps / 8L
-            hasActiveDownloads || windowEth > 0 -> (windowEth * 1000L) / dtMs
-            else -> 0L
-        }
+        // Combine both engines cleanly if a Rust task and Kotlin task execute concurrently
+        val totalBps = rustTotalBps + kotlinTotalBps
+        val wifiBpsNow = rustWifiBps + kotlinWifiBps
+        val cellBpsNow = rustCellBps + kotlinCellBps
+        val ethBpsNow = rustEthBps + kotlinEthBps
 
-        peakBps.updateAndGet { maxOf(it, totalBps) }
+        if (rustTotalBps > 0L) rustPeakBps.updateAndGet { maxOf(it, rustTotalBps) }
+        if (kotlinTotalBps > 0L) kotlinPeakBps.updateAndGet { maxOf(it, kotlinTotalBps) }
 
-        val (historyCopy, wifiHistCopy, cellHistCopy) = synchronized(historyLock) {
-            if (speedRing.size >= 48) speedRing.removeFirst()
-            if (wifiRing.size >= 48) wifiRing.removeFirst()
-            if (cellRing.size >= 48) cellRing.removeFirst()
-            speedRing.addLast(totalBps)
-            wifiRing.addLast(wifiBpsNow)
-            cellRing.addLast(cellBpsNow)
-            Triple(speedRing.toList(), wifiRing.toList(), cellRing.toList())
-        }
+        val peakAll = peakBps.updateAndGet { maxOf(it, totalBps) }
+        val peakWifi = wifiPeakBps.updateAndGet { maxOf(it, wifiBpsNow) }
+        val peakCell = cellPeakBps.updateAndGet { maxOf(it, cellBpsNow) }
+        val peakEth = ethPeakBps.updateAndGet { maxOf(it, ethBpsNow) }
+
+        if (speedRing.size >= 48) speedRing.removeFirst()
+        if (wifiRing.size >= 48) wifiRing.removeFirst()
+        if (cellRing.size >= 48) cellRing.removeFirst()
+        if (ethRing.size >= 48) ethRing.removeFirst()
+        speedRing.addLast(totalBps)
+        wifiRing.addLast(wifiBpsNow)
+        cellRing.addLast(cellBpsNow)
+        ethRing.addLast(ethBpsNow)
+
+        val historyCopy = speedRing.toList()
+        val wifiHistCopy = wifiRing.toList()
+        val cellHistCopy = cellRing.toList()
+        val ethHistCopy = ethRing.toList()
 
         val rt = Runtime.getRuntime()
         val jvmUsedMb = (rt.totalMemory() - rt.freeMemory()) / (1024f * 1024f)
@@ -307,30 +386,41 @@ class TelemetryLedger(
         val combinedConns = (nativeConns + kotlinConnections.values)
             .sortedBy { it.rangeStart }
 
+        val rustWTotal = memfdSnap?.totalWorkers ?: 0
+        val rustWWifi = memfdSnap?.wifiWorkers ?: 0
+        val rustWCell = memfdSnap?.cellWorkers ?: 0
+        val rustWEth = memfdSnap?.ethWorkers ?: 0
+
         val blockedLabel = decodeBlockedReason(memfdSnap?.blockedReasonCode ?: 0L)
 
-        return TelemetrySnapshot(
+        val snap = TelemetrySnapshot(
             instantBps = totalBps,
-            peakBps = peakBps.get(),
+            peakBps = peakAll,
             wifiBps = wifiBpsNow,
             cellBps = cellBpsNow,
             ethBps = ethBpsNow,
-            wifiBytesTotal = maxOf(memfdSnap?.wifiBytesTotal ?: 0L, wifiBytesCumulative.get()),
-            cellBytesTotal = maxOf(memfdSnap?.cellBytesTotal ?: 0L, cellBytesCumulative.get()),
+            wifiPeakBps = peakWifi,
+            cellPeakBps = peakCell,
+            ethPeakBps = peakEth,
+            rustPeakBps = rustPeakBps.get(),
+            kotlinPeakBps = kotlinPeakBps.get(),
+            wifiBytesTotal = (memfdSnap?.wifiBytesTotal ?: 0L) + wifiBytesCumulative.get(),
+            cellBytesTotal = (memfdSnap?.cellBytesTotal ?: 0L) + cellBytesCumulative.get(),
             ethBytesTotal = ethBytesCumulative.get(),
             speedHistoryBps = historyCopy,
             wifiHistoryBps = wifiHistCopy,
             cellHistoryBps = cellHistCopy,
-            activeWorkers = if (rustActiveNow && memfdSnap != null) memfdSnap.totalWorkers else activeWorkers.get(),
-            wifiWorkers = if (rustActiveNow && memfdSnap != null) memfdSnap.wifiWorkers else wifiWorkers.get(),
-            cellularWorkers = if (rustActiveNow && memfdSnap != null) memfdSnap.cellWorkers else cellularWorkers.get(),
-            ethWorkers = if (rustActiveNow && memfdSnap != null) memfdSnap.ethWorkers else ethWorkers.get(),
+            ethHistoryBps = ethHistCopy,
+            activeWorkers = rustWTotal + activeWorkers.get(),
+            wifiWorkers = rustWWifi + wifiWorkers.get(),
+            cellularWorkers = rustWCell + cellularWorkers.get(),
+            ethWorkers = rustWEth + ethWorkers.get(),
             activeConnections = combinedConns,
             slabAllocatedMb = slabAllocMb,
             slabInUseMb = slabInUseMb,
             jvmHeapUsedMb = jvmUsedMb,
             nativeHeapMb = nativeMb,
-            totalSyscallWriteBatches = maxOf(memfdSnap?.consumerSeq ?: 0L, totalSyscallWriteBatches.get()),
+            totalSyscallWriteBatches = (memfdSnap?.consumerSeq ?: 0L) + totalSyscallWriteBatches.get(),
             lastTtfbMs = memfdSnap?.ttfbMs?.takeIf { it > 0L } ?: lastTtfbMs.get(),
             thermalStatusLabel = thermalLabel,
             thermalHeadroomClear = thermalOk,
@@ -345,14 +435,21 @@ class TelemetryLedger(
             isMemfdMapped = memfdReader.isMapped,
             activeEngineBadge = activeEngineBadgeLabel,
         )
+        cachedSnapshot = snap
+        snap
     }
 
-    private fun decodeBlockedReason(code: Long): String = when {
-        code == 0L -> "None"
-        (code and 1L) != 0L -> "Data Saver (BLOCKED_REASON_DATA_SAVER)"
-        (code and 2L) != 0L -> "Doze Standby (BLOCKED_REASON_DOZE)"
-        (code and 4L) != 0L -> "OEM / HyperOS Firewall (BLOCKED_REASON_OEM)"
-        (code and 8L) != 0L -> "Android 16 LNP Local Net (BLOCKED_REASON_LOCAL_NETWORK)"
+    /**
+     * Exact discriminant mapping matching Rust `NetworkBlockedReason` enum (`transport.rs`):
+     * 0=None, 1=DataSaver, 2=Oem, 3=Doze, 4=LocalNetwork, 5=UnknownPolicy.
+     */
+    private fun decodeBlockedReason(code: Long): String = when (code) {
+        0L -> "None"
+        1L -> "Data Saver (BLOCKED_REASON_DATA_SAVER)"
+        2L -> "OEM / HyperOS Firewall (BLOCKED_REASON_OEM)"
+        3L -> "Doze Standby (BLOCKED_REASON_DOZE)"
+        4L -> "Android 16 LNP Local Net (BLOCKED_REASON_LOCAL_NETWORK)"
+        5L -> "NDK Blocked Policy"
         else -> "NDK Blocked ($code)"
     }
 

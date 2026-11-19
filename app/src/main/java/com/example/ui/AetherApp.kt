@@ -112,6 +112,7 @@ fun AetherApp(viewModel: AetherViewModel) {
     val telemetry by viewModel.telemetry.collectAsStateWithLifecycle()
     val diagnosticsPreview by viewModel.diagnosticsPreview.collectAsStateWithLifecycle()
     val aria2Secret by viewModel.aria2Secret.collectAsStateWithLifecycle()
+    val useMBpsSpeedUnit by viewModel.useMBpsSpeedUnit.collectAsStateWithLifecycle()
 
     // Lifecycle-aware 4 Hz active / 0 Hz ON_STOP telemetry polling
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
@@ -192,7 +193,7 @@ fun AetherApp(viewModel: AetherViewModel) {
                             val activeCount = downloads.count { it.statusEnum.isActive }
                             if (activeCount > 0) {
                                 Text(
-                                    text = Formatters.formatSpeedMbps(telemetry.instantBps),
+                                    text = Formatters.formatSpeed(telemetry.instantBps, useMBpsSpeedUnit),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = ext.emerald,
                                     modifier = Modifier.padding(end = 16.dp),
@@ -307,6 +308,9 @@ fun AetherApp(viewModel: AetherViewModel) {
                                     selectedFilter = transferFilter,
                                     telemetry = telemetry,
                                     networkMatrix = networkMatrix,
+                                    useMBpsSpeedUnit = useMBpsSpeedUnit,
+                                    onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
+                                    onResetPeaks = viewModel::resetTelemetryPeaks,
                                     onSelectFilter = viewModel::setTransferFilter,
                                     onPause = viewModel::pauseDownload,
                                     onResume = viewModel::resumeDownload,
@@ -346,6 +350,9 @@ fun AetherApp(viewModel: AetherViewModel) {
                                     fontLicenseAudit = viewModel.fontLicenseAudit,
                                     diagnosticsPreview = diagnosticsPreview,
                                     aria2Secret = aria2Secret,
+                                    useMBpsSpeedUnit = useMBpsSpeedUnit,
+                                    onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
+                                    onResetPeaks = viewModel::resetTelemetryPeaks,
                                     onUpdateSettings = viewModel::updateSettings,
                                     onRefreshNetwork = viewModel::refreshNetworkMatrix,
                                     onPruneCas = viewModel::pruneCasCache,

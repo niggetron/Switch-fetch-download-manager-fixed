@@ -31,6 +31,9 @@ object Formatters {
         return String.format(Locale.US, "%.2f MB/s", mbps)
     }
 
+    fun formatSpeed(bytesPerSec: Long, useMBps: Boolean): String =
+        if (useMBps) formatSpeedMBps(bytesPerSec) else formatSpeedMbps(bytesPerSec)
+
     fun formatEta(remainingBytes: Long, speedBps: Long): String {
         if (remainingBytes <= 0L || speedBps <= 0L) return "—"
         val secs = (remainingBytes / speedBps).coerceAtLeast(1L)

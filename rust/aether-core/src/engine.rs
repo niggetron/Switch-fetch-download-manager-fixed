@@ -260,6 +260,12 @@ impl NativeEngine {
         handle: Arc<TaskRuntimeHandle>,
     ) {
         let task_id = cfg.task_id.clone();
+        // Take immediate RAII ownership of direct_fd so any early return closes it cleanly (zero FD leak).
+        let direct_file_opt: Option<File> = if cfg.direct_fd >= 0 {
+            Some(unsafe { File::from_raw_fd(cfg.direct_fd) })
+        } else {
+            None
+        };
         let page = live_telemetry_page();
         page.total_written.store(0, Ordering::Release);
         page.wifi_bytes_total.store(0, Ordering::Release);
@@ -409,8 +415,8 @@ impl NativeEngine {
         page.total_expected.store(total_bytes, Ordering::Release);
 
         // Open backing file (direct MediaStore FD if passed < 1 GiB, else raw F2FS app-private path)
-        let data_file: File = if cfg.direct_fd >= 0 {
-            unsafe { File::from_raw_fd(cfg.direct_fd) }
+        let data_file: File = if let Some(f) = direct_file_opt {
+            f
         } else {
             let p = PathBuf::from(&cfg.output_path);
             if let Some(parent) = p.parent() {
@@ -613,7 +619,7 @@ impl NativeEngine {
                     let stats: Vec<LinkDispatchStats> = links
                         .iter()
                         .filter(|l| {
-                            if l.is_cellular && cell_used >= max_cell {
+                            if l.is_cellular && max_cell > 0 && cell_used >= max_cell {
                                 return false;
                             }
                             is_flag_enabled(FLAG_MULTI_LINK) || !l.is_cellular
@@ -749,6 +755,8 @@ impl NativeEngine {
                                                     let rem = max_cell.saturating_sub(cb);
                                                     page.cellular_quota_remaining.store(rem, Ordering::Release);
                                                     (wifi_tot.load(Ordering::Relaxed), cb)
+                                                } else if picked_key.starts_with("eth:") {
+                                                    (wifi_tot.load(Ordering::Relaxed), cell_tot.load(Ordering::Relaxed))
                                                 } else {
                                                     let wb = wifi_tot.fetch_add(take as u64, Ordering::Relaxed) + take as u64;
                                                     page.wifi_bytes_total.store(wb, Ordering::Release);
