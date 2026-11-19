@@ -190,7 +190,7 @@ val buildRustCore = tasks.register<Exec>("buildRustCore") {
   commandLine(
     "cargo", "ndk",
     "-t", "arm64-v8a",
-    "-p", "24",
+    "--platform", "24",
     "-o", jniLibsOutDir,
     "build", "--release",
   )

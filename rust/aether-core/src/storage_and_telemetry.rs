@@ -315,19 +315,20 @@ pub fn flush_fdatasync(file: &File) -> io::Result<()> {
     fdatasync(file.as_fd()).map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn advise_dontneed(file: &File, offset: u64, len: u64) {
+    const LINUX_POSIX_FADV_DONTNEED: libc::c_int = 4;
     unsafe {
-        libc::posix_fadvise64(
+        libc::posix_fadvise(
             file.as_raw_fd(),
-            offset as libc::off64_t,
-            len as libc::off64_t,
-            libc::POSIX_FADV_DONTNEED,
+            offset as libc::off_t,
+            len as libc::off_t,
+            LINUX_POSIX_FADV_DONTNEED,
         );
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub fn advise_dontneed(_file: &File, _offset: u64, _len: u64) {}
 
 /// Fallback staging copy helper for non-seekable ESPIPE SAF providers or >= 1 GiB F2FS promotion.

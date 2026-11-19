@@ -1,0 +1,1515 @@
+2026-11-18T14:18:04.7747901Z Current runner version: '2.338.2'
+2026-11-18T14:18:04.7785369Z ##[group]Runner Image Provisioner
+2026-11-18T14:18:04.7787212Z Hosted Compute Agent
+2026-11-18T14:18:04.7788287Z Version: 20261103.629
+2026-11-18T14:18:04.7789629Z Commit: 15dbd9ccb5dbf34fae002b6ed1a2670f52df37bc
+2026-11-18T14:18:04.7791139Z Build Date: 2026-11-03T17:26:59Z
+2026-11-18T14:18:04.7792357Z Worker ID: {71c8d5f3-65b9-49e1-bb14-804da680095e}
+2026-11-18T14:18:04.7793760Z Region: westus
+2026-11-18T14:18:04.7794698Z Cloud: Azure
+2026-11-18T14:18:04.7795760Z ##[endgroup]
+2026-11-18T14:18:04.7798417Z ##[group]Operating System
+2026-11-18T14:18:04.7799538Z Ubuntu
+2026-11-18T14:18:04.7800598Z 26.04.1
+2026-11-18T14:18:04.7801459Z LTS
+2026-11-18T14:18:04.7802290Z ##[endgroup]
+2026-11-18T14:18:04.7803621Z ##[group]Runner Image
+2026-11-18T14:18:04.7804737Z Image: ubuntu-26.04
+2026-11-18T14:18:04.7806013Z Version: 20261111.196.1
+2026-11-18T14:18:04.7808563Z Included Software: https://github.com/actions/runner-images/blob/ubuntu26/20261111.196/images/ubuntu/Ubuntu2604-Readme.md
+2026-11-18T14:18:04.7811646Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu26%2F20261111.196
+2026-11-18T14:18:04.7813407Z ##[endgroup]
+2026-11-18T14:18:04.7815479Z ##[group]GITHUB_TOKEN Permissions
+2026-11-18T14:18:04.7818794Z Contents: write
+2026-11-18T14:18:04.7819971Z Metadata: read
+2026-11-18T14:18:04.7820909Z ##[endgroup]
+2026-11-18T14:18:04.7824029Z Secret source: Actions
+2026-11-18T14:18:04.7825910Z Cache mode: write
+2026-11-18T14:18:04.7827565Z Prepare workflow directory
+2026-11-18T14:18:04.8507574Z Prepare all required actions
+2026-11-18T14:18:04.8581613Z Getting action download info
+2026-11-18T14:18:05.2892331Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-11-18T14:18:05.4190274Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
+2026-11-18T14:18:05.8623216Z Download action repository 'dtolnay/rust-toolchain@stable' (SHA:39008827e6b4319a349e9a42dfc90579dd25f1ca)
+2026-11-18T14:18:06.1157158Z Download action repository 'taiki-e/install-action@v2' (SHA:75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f)
+2026-11-18T14:18:06.5242969Z Download action repository 'actions/cache@v4' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-11-18T14:18:06.6007143Z Download action repository 'gradle/actions@v4' (SHA:ed408507eac070d1f99cc633dbcf757c94c7933a)
+2026-11-18T14:18:08.1372508Z Complete job name: build-release
+2026-11-18T14:18:08.2472216Z ##[group]Run actions/checkout@v4
+2026-11-18T14:18:08.2472872Z with:
+2026-11-18T14:18:08.2473214Z   repository: niggetron/Switch-fetch-download-manager
+2026-11-18T14:18:08.2475780Z   token: ***
+2026-11-18T14:18:08.2476054Z   ssh-strict: true
+2026-11-18T14:18:08.2476320Z   ssh-user: git
+2026-11-18T14:18:08.2476924Z   persist-credentials: true
+2026-11-18T14:18:08.2477250Z   clean: true
+2026-11-18T14:18:08.2477518Z   sparse-checkout-cone-mode: true
+2026-11-18T14:18:08.2477842Z   fetch-depth: 1
+2026-11-18T14:18:08.2478110Z   fetch-tags: false
+2026-11-18T14:18:08.2478399Z   show-progress: true
+2026-11-18T14:18:08.2478671Z   lfs: false
+2026-11-18T14:18:08.2478915Z   submodules: false
+2026-11-18T14:18:08.2479180Z   set-safe-directory: true
+2026-11-18T14:18:08.2479488Z   allow-unsafe-pr-checkout: false
+2026-11-18T14:18:08.2480120Z ##[endgroup]
+2026-11-18T14:18:08.5834362Z Syncing repository: niggetron/Switch-fetch-download-manager
+2026-11-18T14:18:08.5835958Z ##[group]Getting Git version info
+2026-11-18T14:18:08.5836908Z Working directory is '/home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager'
+2026-11-18T14:18:08.5837766Z [command]/usr/bin/git version
+2026-11-18T14:18:08.5913673Z git version 2.56.1
+2026-11-18T14:18:08.5959725Z ##[endgroup]
+2026-11-18T14:18:08.5971913Z Temporarily overriding HOME='/home/runner/work/_temp/8bd9cc03-67f0-4a45-9149-9da994b76708' before making global git config changes
+2026-11-18T14:18:08.5973691Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-18T14:18:08.5984630Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager
+2026-11-18T14:18:08.6088307Z Deleting the contents of '/home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager'
+2026-11-18T14:18:08.6090413Z ##[group]Initializing the repository
+2026-11-18T14:18:08.6092452Z [command]/usr/bin/git init /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager
+2026-11-18T14:18:08.6288004Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-11-18T14:18:08.6290716Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-11-18T14:18:08.6292216Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-11-18T14:18:08.6293884Z hint: call:
+2026-11-18T14:18:08.6294561Z hint:
+2026-11-18T14:18:08.6295309Z hint: 	git config --global init.defaultBranch <name>
+2026-11-18T14:18:08.6296045Z hint:
+2026-11-18T14:18:08.6297101Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-11-18T14:18:08.6298511Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-11-18T14:18:08.6299979Z hint:
+2026-11-18T14:18:08.6300540Z hint: 	git branch -m <name>
+2026-11-18T14:18:08.6301277Z hint:
+2026-11-18T14:18:08.6302119Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-11-18T14:18:08.6323284Z Initialized empty Git repository in /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager/.git/
+2026-11-18T14:18:08.6336679Z [command]/usr/bin/git remote add origin https://github.com/niggetron/Switch-fetch-download-manager
+2026-11-18T14:18:08.6437694Z ##[endgroup]
+2026-11-18T14:18:08.6438929Z ##[group]Disabling automatic garbage collection
+2026-11-18T14:18:08.6457591Z [command]/usr/bin/git config --local gc.auto 0
+2026-11-18T14:18:08.6470697Z ##[endgroup]
+2026-11-18T14:18:08.6471680Z ##[group]Setting up auth
+2026-11-18T14:18:08.6472677Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-18T14:18:08.6515635Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-18T14:18:08.7140515Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-18T14:18:08.7199403Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-18T14:18:08.7537143Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-18T14:18:08.7578350Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-18T14:18:08.7872275Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-11-18T14:18:08.7916084Z ##[endgroup]
+2026-11-18T14:18:08.7917713Z ##[group]Fetching the repository
+2026-11-18T14:18:08.7928670Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +7bb2b1c7a8d7933933b16f1446b9bc99f43e2725:refs/remotes/origin/main
+2026-11-18T14:18:09.5103834Z From https://github.com/niggetron/Switch-fetch-download-manager
+2026-11-18T14:18:09.5105513Z  * [new ref]         7bb2b1c7a8d7933933b16f1446b9bc99f43e2725 -> origin/main
+2026-11-18T14:18:09.5112191Z ##[endgroup]
+2026-11-18T14:18:09.5113301Z ##[group]Determining the checkout info
+2026-11-18T14:18:09.5115048Z ##[endgroup]
+2026-11-18T14:18:09.5123782Z [command]/usr/bin/git sparse-checkout disable
+2026-11-18T14:18:09.5186169Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-11-18T14:18:09.5219154Z ##[group]Checking out the ref
+2026-11-18T14:18:09.5224138Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-11-18T14:18:09.5560138Z Switched to a new branch 'main'
+2026-11-18T14:18:09.5571347Z branch 'main' set up to track 'origin/main'.
+2026-11-18T14:18:09.5584431Z ##[endgroup]
+2026-11-18T14:18:09.5628771Z [command]/usr/bin/git log -1 --format=%H
+2026-11-18T14:18:09.5657250Z 7bb2b1c7a8d7933933b16f1446b9bc99f43e2725
+2026-11-18T14:18:09.5972229Z ##[group]Run actions/setup-java@v4
+2026-11-18T14:18:09.5972604Z with:
+2026-11-18T14:18:09.5972868Z   distribution: temurin
+2026-11-18T14:18:09.5973107Z   java-version: 21
+2026-11-18T14:18:09.5973320Z   java-package: jdk
+2026-11-18T14:18:09.5973537Z   check-latest: false
+2026-11-18T14:18:09.5973750Z   server-id: github
+2026-11-18T14:18:09.5973961Z   server-username: GITHUB_ACTOR
+2026-11-18T14:18:09.5974215Z   server-password: GITHUB_TOKEN
+2026-11-18T14:18:09.5974458Z   overwrite-settings: true
+2026-11-18T14:18:09.5974690Z   job-status: success
+2026-11-18T14:18:09.5977275Z   token: ***
+2026-11-18T14:18:09.5977498Z ##[endgroup]
+2026-11-18T14:18:09.8326325Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
+2026-11-18T14:18:09.8337136Z ##[group]Installed distributions
+2026-11-18T14:18:09.8342140Z (node:2158) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-18T14:18:09.8343242Z Resolved Java 21.0.13+9 from tool-cache
+2026-11-18T14:18:09.8344054Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-18T14:18:09.8345194Z Setting Java 21.0.13+9 as the default
+2026-11-18T14:18:09.8346276Z Creating toolchains.xml for JDK version 21 from temurin
+2026-11-18T14:18:09.8425597Z Writing to /home/runner/.m2/toolchains.xml
+2026-11-18T14:18:09.8426917Z 
+2026-11-18T14:18:09.8427974Z Java configuration:
+2026-11-18T14:18:09.8428983Z   Distribution: temurin
+2026-11-18T14:18:09.8430300Z   Version: 21.0.13+9
+2026-11-18T14:18:09.8431545Z   Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:18:09.8432908Z 
+2026-11-18T14:18:09.8433882Z ##[endgroup]
+2026-11-18T14:18:09.8571499Z Creating settings.xml with server-id: github
+2026-11-18T14:18:09.8572559Z Writing to /home/runner/.m2/settings.xml
+2026-11-18T14:18:09.8757455Z ##[group]Run sudo rm -f /etc/apt/sources.list.d/microsoft*.list || true
+2026-11-18T14:18:09.8758349Z [36;1msudo rm -f /etc/apt/sources.list.d/microsoft*.list || true[0m
+2026-11-18T14:18:09.8758968Z [36;1msudo apt-get update -qq || true[0m
+2026-11-18T14:18:09.8759543Z [36;1msudo apt-get install -y --no-install-recommends \[0m
+2026-11-18T14:18:09.8760272Z [36;1m  build-essential cmake ninja-build perl pkg-config libclang-dev[0m
+2026-11-18T14:18:09.8833369Z shell: /usr/bin/bash -e {0}
+2026-11-18T14:18:09.8833841Z env:
+2026-11-18T14:18:09.8834365Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:18:09.8835213Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:18:09.8835857Z ##[endgroup]
+2026-11-18T14:18:14.1226438Z Reading package lists...
+2026-11-18T14:18:14.2616415Z Building dependency tree...
+2026-11-18T14:18:14.2625711Z Reading state information...
+2026-11-18T14:18:14.2931088Z perl is already the newest version (5.40.1-7ubuntu0.4).
+2026-11-18T14:18:14.2932097Z perl set to manually installed.
+2026-11-18T14:18:14.2947340Z pkg-config is already the newest version (2.5.1-4).
+2026-11-18T14:18:14.3405574Z Solving dependencies...
+2026-11-18T14:18:14.4251865Z The following additional packages will be installed:
+2026-11-18T14:18:14.4260482Z   cmake-data libclang-21-dev libjsoncpp26 librhash1
+2026-11-18T14:18:14.4267366Z Suggested packages:
+2026-11-18T14:18:14.4268054Z   cmake-doc cmake-format elpa-cmake-mode
+2026-11-18T14:18:14.4460973Z The following NEW packages will be installed:
+2026-11-18T14:18:14.4463054Z   build-essential cmake cmake-data libclang-21-dev libclang-dev libjsoncpp26
+2026-11-18T14:18:14.4469693Z   librhash1 ninja-build
+2026-11-18T14:18:14.4684992Z 0 upgraded, 8 newly installed, 0 to remove and 28 not upgraded.
+2026-11-18T14:18:14.4697148Z Need to get 47.5 MB of archives.
+2026-11-18T14:18:14.4717511Z After this operation, 361 MB of additional disk space will be used.
+2026-11-18T14:18:14.4718695Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+2026-11-18T14:18:14.5488577Z Get:2 http://azure.archive.ubuntu.com/ubuntu resolute-updates/main amd64v3 build-essential amd64 12.12ubuntu2.26.04.2 [5172 B]
+2026-11-18T14:18:14.6094900Z Get:3 http://azure.archive.ubuntu.com/ubuntu resolute/main amd64v3 cmake-data all 4.2.3-2ubuntu2 [2581 kB]
+2026-11-18T14:18:15.4466001Z Get:4 http://azure.archive.ubuntu.com/ubuntu resolute/main amd64v3 libjsoncpp26 amd64 1.9.6-5 [85.0 kB]
+2026-11-18T14:18:15.5140365Z Get:5 http://azure.archive.ubuntu.com/ubuntu resolute/main amd64v3 librhash1 amd64 1.4.6-1.1 [133 kB]
+2026-11-18T14:18:15.5863205Z Get:6 http://azure.archive.ubuntu.com/ubuntu resolute/main amd64v3 cmake amd64 4.2.3-2ubuntu2 [14.1 MB]
+2026-11-18T14:18:20.1818539Z Get:7 http://azure.archive.ubuntu.com/ubuntu resolute/universe amd64v3 libclang-21-dev amd64 1:21.1.8-6ubuntu1 [30.4 MB]
+2026-11-18T14:18:29.9203625Z Get:8 http://azure.archive.ubuntu.com/ubuntu resolute/universe amd64v3 libclang-dev amd64 1:21.1.6-71 [3448 B]
+2026-11-18T14:18:29.9808383Z Get:9 http://azure.archive.ubuntu.com/ubuntu resolute/universe amd64v3 ninja-build amd64 1.13.2-1 [173 kB]
+2026-11-18T14:18:30.3773864Z Fetched 47.5 MB in 16s (3046 kB/s)
+2026-11-18T14:18:30.4045148Z Selecting previously unselected package build-essential.
+2026-11-18T14:18:30.4391194Z (Reading database ... 
+2026-11-18T14:18:30.4393913Z (Reading database ... 5%
+2026-11-18T14:18:30.4394837Z (Reading database ... 10%
+2026-11-18T14:18:30.4395517Z (Reading database ... 15%
+2026-11-18T14:18:30.4396187Z (Reading database ... 20%
+2026-11-18T14:18:30.4398204Z (Reading database ... 25%
+2026-11-18T14:18:30.4398837Z (Reading database ... 30%
+2026-11-18T14:18:30.4399497Z (Reading database ... 35%
+2026-11-18T14:18:30.4400158Z (Reading database ... 40%
+2026-11-18T14:18:30.4401769Z (Reading database ... 45%
+2026-11-18T14:18:30.4402394Z (Reading database ... 50%
+2026-11-18T14:18:30.5148206Z (Reading database ... 55%
+2026-11-18T14:18:30.6979467Z (Reading database ... 60%
+2026-11-18T14:18:30.8548481Z (Reading database ... 65%
+2026-11-18T14:18:30.9977027Z (Reading database ... 70%
+2026-11-18T14:18:31.1991313Z (Reading database ... 75%
+2026-11-18T14:18:31.3582628Z (Reading database ... 80%
+2026-11-18T14:18:31.5492542Z (Reading database ... 85%
+2026-11-18T14:18:31.7504525Z (Reading database ... 90%
+2026-11-18T14:18:31.9251178Z (Reading database ... 95%
+2026-11-18T14:18:31.9262035Z (Reading database ... 100%
+2026-11-18T14:18:31.9268709Z (Reading database ... 213946 files and directories currently installed.)
+2026-11-18T14:18:31.9269744Z Preparing to unpack .../0-build-essential_12.12ubuntu2.26.04.2_amd64v3.deb ...
+2026-11-18T14:18:31.9314631Z Unpacking build-essential (12.12ubuntu2.26.04.2) ...
+2026-11-18T14:18:31.9600812Z Selecting previously unselected package cmake-data.
+2026-11-18T14:18:31.9747199Z Preparing to unpack .../1-cmake-data_4.2.3-2ubuntu2_all.deb ...
+2026-11-18T14:18:31.9858817Z Unpacking cmake-data (4.2.3-2ubuntu2) ...
+2026-11-18T14:18:32.8712065Z Selecting previously unselected package libjsoncpp26:amd64.
+2026-11-18T14:18:32.8876013Z Preparing to unpack .../2-libjsoncpp26_1.9.6-5_amd64v3.deb ...
+2026-11-18T14:18:32.8897382Z Unpacking libjsoncpp26:amd64 (1.9.6-5) ...
+2026-11-18T14:18:32.9188190Z Selecting previously unselected package librhash1:amd64.
+2026-11-18T14:18:32.9328013Z Preparing to unpack .../3-librhash1_1.4.6-1.1_amd64v3.deb ...
+2026-11-18T14:18:32.9352326Z Unpacking librhash1:amd64 (1.4.6-1.1) ...
+2026-11-18T14:18:32.9636277Z Selecting previously unselected package cmake.
+2026-11-18T14:18:32.9781536Z Preparing to unpack .../4-cmake_4.2.3-2ubuntu2_amd64v3.deb ...
+2026-11-18T14:18:32.9791228Z Unpacking cmake (4.2.3-2ubuntu2) ...
+2026-11-18T14:18:33.2211233Z Selecting previously unselected package libclang-21-dev.
+2026-11-18T14:18:33.2358220Z Preparing to unpack .../5-libclang-21-dev_1%3a21.1.8-6ubuntu1_amd64v3.deb ...
+2026-11-18T14:18:33.2366935Z Unpacking libclang-21-dev (1:21.1.8-6ubuntu1) ...
+2026-11-18T14:18:34.5731830Z Selecting previously unselected package libclang-dev.
+2026-11-18T14:18:34.5887818Z Preparing to unpack .../6-libclang-dev_1%3a21.1.6-71_amd64v3.deb ...
+2026-11-18T14:18:34.5895014Z Unpacking libclang-dev (1:21.1.6-71) ...
+2026-11-18T14:18:34.6124260Z Selecting previously unselected package ninja-build.
+2026-11-18T14:18:34.6269954Z Preparing to unpack .../7-ninja-build_1.13.2-1_amd64v3.deb ...
+2026-11-18T14:18:34.6279934Z Unpacking ninja-build (1.13.2-1) ...
+2026-11-18T14:18:34.6924325Z Setting up libclang-21-dev (1:21.1.8-6ubuntu1) ...
+2026-11-18T14:18:34.6962092Z Setting up ninja-build (1.13.2-1) ...
+2026-11-18T14:18:34.6982125Z Setting up libjsoncpp26:amd64 (1.9.6-5) ...
+2026-11-18T14:18:34.7009640Z Setting up build-essential (12.12ubuntu2.26.04.2) ...
+2026-11-18T14:18:34.7031789Z Setting up cmake-data (4.2.3-2ubuntu2) ...
+2026-11-18T14:18:34.7118687Z Setting up librhash1:amd64 (1.4.6-1.1) ...
+2026-11-18T14:18:34.7141866Z Setting up libclang-dev (1:21.1.6-71) ...
+2026-11-18T14:18:34.7162669Z Setting up cmake (4.2.3-2ubuntu2) ...
+2026-11-18T14:18:34.7189775Z Processing triggers for man-db (2.13.1-1build1) ...
+2026-11-18T14:18:34.7266325Z Not building database; man-db/auto-update is not 'true'.
+2026-11-18T14:18:34.7282587Z Processing triggers for libc-bin (2.43-2ubuntu2.4) ...
+2026-11-18T14:18:35.4329197Z 
+2026-11-18T14:18:35.4329963Z Running kernel seems to be up-to-date.
+2026-11-18T14:18:35.4330642Z 
+2026-11-18T14:18:35.4331121Z Restarting services...
+2026-11-18T14:18:35.4442451Z 
+2026-11-18T14:18:35.4443043Z Service restarts being deferred:
+2026-11-18T14:18:35.4447479Z  systemctl restart hosted-compute-agent.service
+2026-11-18T14:18:35.4448101Z 
+2026-11-18T14:18:35.4448545Z No containers need to be restarted.
+2026-11-18T14:18:35.4449129Z 
+2026-11-18T14:18:35.4449555Z No user sessions are running outdated binaries.
+2026-11-18T14:18:35.4450147Z 
+2026-11-18T14:18:35.4450685Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+2026-11-18T14:18:36.4438342Z ##[group]Run NDK_VERSION="27.2.12479018"
+2026-11-18T14:18:36.4438763Z [36;1mNDK_VERSION="27.2.12479018"[0m
+2026-11-18T14:18:36.4439337Z [36;1myes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" >/dev/null[0m
+2026-11-18T14:18:36.4439953Z [36;1mNDK_DIR="${ANDROID_HOME}/ndk/${NDK_VERSION}"[0m
+2026-11-18T14:18:36.4440373Z [36;1mecho "ANDROID_NDK_HOME=${NDK_DIR}" >> "$GITHUB_ENV"[0m
+2026-11-18T14:18:36.4440784Z [36;1mecho "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"[0m
+2026-11-18T14:18:36.4490670Z shell: /usr/bin/bash -e {0}
+2026-11-18T14:18:36.4490989Z env:
+2026-11-18T14:18:36.4491379Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:18:36.4492020Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:18:36.4492505Z ##[endgroup]
+2026-11-18T14:19:01.1773211Z yes: standard output: Broken pipe
+2026-11-18T14:19:01.1994131Z ##[group]Run dtolnay/rust-toolchain@stable
+2026-11-18T14:19:01.1994476Z with:
+2026-11-18T14:19:01.1994692Z   targets: aarch64-linux-android
+2026-11-18T14:19:01.1994960Z   toolchain: stable
+2026-11-18T14:19:01.1995167Z env:
+2026-11-18T14:19:01.1995471Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.1995973Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.1996442Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:01.1997174Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:01.1997402Z ##[endgroup]
+2026-11-18T14:19:01.2071079Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-11-18T14:19:01.2113836Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-11-18T14:19:01.2114185Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-11-18T14:19:01.2114775Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-11-18T14:19:01.2115574Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-11-18T14:19:01.2115893Z [36;1m  exit 1[0m
+2026-11-18T14:19:01.2116247Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-11-18T14:19:01.2116968Z [36;1m  if [[ Linux == macOS ]]; then[0m
+2026-11-18T14:19:01.2117539Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:01.2118097Z [36;1m  else[0m
+2026-11-18T14:19:01.2118525Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:01.2119023Z [36;1m  fi[0m
+2026-11-18T14:19:01.2119340Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-11-18T14:19:01.2119907Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:01.2120410Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-11-18T14:19:01.2120967Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:01.2121511Z [36;1melse[0m
+2026-11-18T14:19:01.2121719Z [36;1m  delimiter=EOF[0m
+2026-11-18T14:19:01.2122038Z [36;1m  while [[ $toolchain == *$delimiter* ]]; do delimiter+=_; done[0m
+2026-11-18T14:19:01.2122580Z [36;1m  printf 'toolchain<<%s\n%s\n%s\n' "$delimiter" "$toolchain" "$delimiter" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:01.2123034Z [36;1mfi[0m
+2026-11-18T14:19:01.2172522Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:01.2172901Z env:
+2026-11-18T14:19:01.2173256Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2173831Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2174372Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:01.2174759Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:01.2175005Z   toolchain: stable
+2026-11-18T14:19:01.2175500Z ##[endgroup]
+2026-11-18T14:19:01.2280019Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=20]
+2026-11-18T14:19:01.2284352Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-11-18T14:19:01.2302113Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV
+2026-11-18T14:19:01.2302593Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"} >> $GITHUB_ENV[0m
+2026-11-18T14:19:01.2345065Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:01.2345442Z env:
+2026-11-18T14:19:01.2345774Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2346338Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2347260Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:01.2347672Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:01.2347926Z ##[endgroup]
+2026-11-18T14:19:01.2419619Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=13]
+2026-11-18T14:19:01.2421720Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-11-18T14:19:01.2444148Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-11-18T14:19:01.2444523Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-11-18T14:19:01.2445304Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://sh.rustup.rs | sh -s -- --default-toolchain none -y[0m
+2026-11-18T14:19:01.2446087Z [36;1m  echo "$CARGO_HOME/bin" >> $GITHUB_PATH[0m
+2026-11-18T14:19:01.2446379Z [36;1mfi[0m
+2026-11-18T14:19:01.2489352Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:01.2489725Z env:
+2026-11-18T14:19:01.2490213Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2490757Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2491257Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:01.2491625Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:01.2491870Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:01.2492191Z ##[endgroup]
+2026-11-18T14:19:01.2562842Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=14]
+2026-11-18T14:19:01.2565026Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-11-18T14:19:01.2570315Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-18T14:19:01.2582818Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-11-18T14:19:01.2613648Z ##[group]Run set -f  # split targets and components on commas and whitespace, without glob expansion
+2026-11-18T14:19:01.2614790Z [36;1mset -f  # split targets and components on commas and whitespace, without glob expansion[0m
+2026-11-18T14:19:01.2615300Z [36;1mflags=()[0m
+2026-11-18T14:19:01.2615612Z [36;1mfor t in ${targets//,/ }; do flags+=(--target "$t"); done[0m
+2026-11-18T14:19:01.2616043Z [36;1mfor c in ${components//,/ }; do flags+=(--component "$c"); done[0m
+2026-11-18T14:19:01.2616798Z [36;1mif [[ $toolchain == nightly && -n $components ]]; then flags+=(--allow-downgrade); fi[0m
+2026-11-18T14:19:01.2617267Z [36;1mlog=$(mktemp)[0m
+2026-11-18T14:19:01.2617507Z [36;1mtrap 'rm -f "$log"' EXIT[0m
+2026-11-18T14:19:01.2617771Z [36;1mfor attempt in 1 2 3 4 5; do[0m
+2026-11-18T14:19:01.2618362Z [36;1m  if rustup toolchain install "$toolchain" "${flags[@]}" --profile minimal --no-self-update --force-non-host 2>&1 | tee "$log"; then[0m
+2026-11-18T14:19:01.2618988Z [36;1m    break[0m
+2026-11-18T14:19:01.2619204Z [36;1m  else[0m
+2026-11-18T14:19:01.2619419Z [36;1m    status=$?[0m
+2026-11-18T14:19:01.2619637Z [36;1m  fi[0m
+2026-11-18T14:19:01.2619932Z [36;1m  if [[ $attempt == 5 ]] || ! grep -Fq 'checksum failed for ' "$log" \[0m
+2026-11-18T14:19:01.2620508Z [36;1m      || ! grep -Fq 'this is likely due to an ongoing update of the official release server' "$log"; then[0m
+2026-11-18T14:19:01.2620990Z [36;1m    exit "$status"[0m
+2026-11-18T14:19:01.2621220Z [36;1m  fi[0m
+2026-11-18T14:19:01.2621580Z [36;1m  echo "Retrying rustup toolchain install in 30 seconds (retry $attempt of 4)" >&2[0m
+2026-11-18T14:19:01.2622019Z [36;1m  sleep 30[0m
+2026-11-18T14:19:01.2622230Z [36;1mdone[0m
+2026-11-18T14:19:01.2664874Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:01.2665238Z env:
+2026-11-18T14:19:01.2665556Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2666069Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:01.2666951Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:01.2667331Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:01.2667570Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:01.2667816Z   toolchain: stable
+2026-11-18T14:19:01.2668036Z   targets: aarch64-linux-android
+2026-11-18T14:19:01.2668286Z   components: 
+2026-11-18T14:19:01.2668495Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-11-18T14:19:01.2668730Z ##[endgroup]
+2026-11-18T14:19:01.6351431Z info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+2026-11-18T14:19:01.8808715Z info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-18T14:19:01.8968631Z info: removing previous version of component rustfmt
+2026-11-18T14:19:01.9020554Z info: removing previous version of component clippy
+2026-11-18T14:19:01.9031415Z info: removing previous version of component cargo
+2026-11-18T14:19:01.9125554Z info: removing previous version of component rust-std
+2026-11-18T14:19:01.9213373Z info: removing previous version of component rustc
+2026-11-18T14:19:01.9265832Z info: downloading 6 components
+2026-11-18T14:19:13.1072946Z 
+2026-11-18T14:19:13.1144607Z   stable-x86_64-unknown-linux-gnu updated - rustc 1.100.0 (0ef1bc386 2026-11-09) (from rustc 1.99.1 (58cf8f9c3 2026-10-13))
+2026-11-18T14:19:13.1145897Z 
+2026-11-18T14:19:13.1414100Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=11883]
+2026-11-18T14:19:13.1424027Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-11-18T14:19:13.1443085Z ##[group]Run rustup default "$toolchain" --force-non-host
+2026-11-18T14:19:13.1443517Z [36;1mrustup default "$toolchain" --force-non-host[0m
+2026-11-18T14:19:13.1492367Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.1492751Z env:
+2026-11-18T14:19:13.1493088Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.1493670Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.1494201Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.1494579Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.1494838Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.1495109Z   toolchain: stable
+2026-11-18T14:19:13.1495332Z ##[endgroup]
+2026-11-18T14:19:13.1608575Z info: using existing install for stable-x86_64-unknown-linux-gnu
+2026-11-18T14:19:13.1615852Z info: default toolchain set to stable-x86_64-unknown-linux-gnu
+2026-11-18T14:19:13.1616376Z 
+2026-11-18T14:19:13.1683515Z   stable-x86_64-unknown-linux-gnu unchanged - rustc 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-18T14:19:13.1693227Z 
+2026-11-18T14:19:13.1702541Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=27]
+2026-11-18T14:19:13.1706049Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-11-18T14:19:13.1724104Z ##[group]Run DATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-11-18T14:19:13.1725047Z [36;1mDATE=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-11-18T14:19:13.1725783Z [36;1mHASH=$(rustc +"$toolchain" --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-11-18T14:19:13.1726342Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-11-18T14:19:13.1771902Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.1772300Z env:
+2026-11-18T14:19:13.1772660Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.1773263Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.1773822Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.1774244Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.1774522Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.1775003Z   toolchain: stable
+2026-11-18T14:19:13.1775251Z ##[endgroup]
+2026-11-18T14:19:13.2121045Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=41]
+2026-11-18T14:19:13.2123880Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-11-18T14:19:13.2142516Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-11-18T14:19:13.2142959Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-11-18T14:19:13.2143334Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-11-18T14:19:13.2143656Z [36;1mfi[0m
+2026-11-18T14:19:13.2192266Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.2192678Z env:
+2026-11-18T14:19:13.2193041Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2193659Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2194231Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.2194816Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.2195099Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.2195389Z ##[endgroup]
+2026-11-18T14:19:13.2273188Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=14]
+2026-11-18T14:19:13.2276860Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-11-18T14:19:13.2295946Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-11-18T14:19:13.2296323Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-11-18T14:19:13.2297011Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-11-18T14:19:13.2297329Z [36;1mfi[0m
+2026-11-18T14:19:13.2339799Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.2340145Z env:
+2026-11-18T14:19:13.2340452Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2340991Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2341485Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.2341836Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.2342074Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.2342325Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.2342539Z ##[endgroup]
+2026-11-18T14:19:13.2413231Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=13]
+2026-11-18T14:19:13.2416300Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-11-18T14:19:13.2434167Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-11-18T14:19:13.2434710Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-11-18T14:19:13.2435475Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-11-18T14:19:13.2436305Z [36;1m  if rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-11-18T14:19:13.2437207Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-11-18T14:19:13.2437819Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-11-18T14:19:13.2438386Z [36;1m  elif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-11-18T14:19:13.2439039Z [36;1m    touch "/home/runner/work/_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-11-18T14:19:13.2439628Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-11-18T14:19:13.2439994Z [36;1m  fi[0m
+2026-11-18T14:19:13.2440184Z [36;1mfi[0m
+2026-11-18T14:19:13.2482760Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.2483140Z env:
+2026-11-18T14:19:13.2483474Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2484222Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2484749Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.2485127Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.2485387Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.2485662Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.2485907Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:13.2486155Z   toolchain: stable
+2026-11-18T14:19:13.2486379Z ##[endgroup]
+2026-11-18T14:19:13.2797494Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=37]
+2026-11-18T14:19:13.2801418Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-11-18T14:19:13.2820736Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-11-18T14:19:13.2821989Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-11-18T14:19:13.2823303Z [36;1mif rustc +"$toolchain" --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-11-18T14:19:13.2824225Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-11-18T14:19:13.2824869Z [36;1mfi[0m
+2026-11-18T14:19:13.2875225Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.2875582Z env:
+2026-11-18T14:19:13.2875898Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2876432Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.2877225Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.2877593Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.2877840Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.2878109Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.2878337Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:13.2878569Z   toolchain: stable
+2026-11-18T14:19:13.2878777Z ##[endgroup]
+2026-11-18T14:19:13.3070367Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=26]
+2026-11-18T14:19:13.3074340Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-11-18T14:19:13.3091871Z ##[group]Run rustc +"$toolchain" --version --verbose
+2026-11-18T14:19:13.3092247Z [36;1mrustc +"$toolchain" --version --verbose[0m
+2026-11-18T14:19:13.3137784Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-11-18T14:19:13.3138168Z env:
+2026-11-18T14:19:13.3138501Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3139066Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3139592Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.3139970Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.3140238Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.3140541Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.3140827Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:13.3141091Z   toolchain: stable
+2026-11-18T14:19:13.3141327Z ##[endgroup]
+2026-11-18T14:19:13.3308270Z rustc 1.100.0 (0ef1bc386 2026-11-09)
+2026-11-18T14:19:13.3309017Z binary: rustc
+2026-11-18T14:19:13.3315102Z commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+2026-11-18T14:19:13.3316010Z commit-date: 2026-11-09
+2026-11-18T14:19:13.3316836Z host: x86_64-unknown-linux-gnu
+2026-11-18T14:19:13.3317489Z release: 1.100.0
+2026-11-18T14:19:13.3318103Z LLVM version: 23.1.5
+2026-11-18T14:19:13.3324264Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=24]
+2026-11-18T14:19:13.3474088Z ##[group]Run taiki-e/install-action@v2
+2026-11-18T14:19:13.3474391Z with:
+2026-11-18T14:19:13.3474585Z   tool: cargo-ndk
+2026-11-18T14:19:13.3474791Z   checksum: true
+2026-11-18T14:19:13.3475000Z   fallback: cargo-binstall
+2026-11-18T14:19:13.3475226Z env:
+2026-11-18T14:19:13.3475524Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3476034Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3476497Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.3477160Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.3477399Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.3477643Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.3477860Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:13.3478077Z ##[endgroup]
+2026-11-18T14:19:13.3484160Z ##[start-action display=Run bail() {;id=__taiki-e_install-action.__run]
+2026-11-18T14:19:13.3501698Z ##[group]Run bail() {
+2026-11-18T14:19:13.3501990Z [36;1mbail() {[0m
+2026-11-18T14:19:13.3502249Z [36;1m  printf '::error::install-action: %s\n' "$*"[0m
+2026-11-18T14:19:13.3502557Z [36;1m  exit 1[0m
+2026-11-18T14:19:13.3502750Z [36;1m}[0m
+2026-11-18T14:19:13.3503097Z [36;1m# If /bin/sh is dash, environment variable containing % is not imported, but is fine[0m
+2026-11-18T14:19:13.3503820Z [36;1m# because it also means that it will not be exposed to subprocess.[0m
+2026-11-18T14:19:13.3504239Z [36;1mif /usr/bin/env | grep -Eq '^BASH_FUNC_'; then[0m
+2026-11-18T14:19:13.3504784Z [36;1m  bail 'bash function injection via BASH_FUNC_ environment variable is not allowed for security reasons'[0m
+2026-11-18T14:19:13.3505275Z [36;1mfi[0m
+2026-11-18T14:19:13.3505501Z [36;1mif ! command -v bash >/dev/null; then[0m
+2026-11-18T14:19:13.3505844Z [36;1m  if grep -Eq '^ID=alpine' /etc/os-release; then[0m
+2026-11-18T14:19:13.3506286Z [36;1m    printf '::group::Install packages required for install-action (bash)\n'[0m
+2026-11-18T14:19:13.3506945Z [36;1m    # NB: sync with apk_install in main.sh[0m
+2026-11-18T14:19:13.3507264Z [36;1m    if command -v sudo >/dev/null; then[0m
+2026-11-18T14:19:13.3507573Z [36;1m      sudo apk --no-cache add bash[0m
+2026-11-18T14:19:13.3507894Z [36;1m    elif command -v doas >/dev/null; then[0m
+2026-11-18T14:19:13.3508217Z [36;1m      doas apk --no-cache add bash[0m
+2026-11-18T14:19:13.3508504Z [36;1m    else[0m
+2026-11-18T14:19:13.3508721Z [36;1m      apk --no-cache add bash[0m
+2026-11-18T14:19:13.3508982Z [36;1m    fi[0m
+2026-11-18T14:19:13.3509197Z [36;1m    printf '::endgroup::\n'[0m
+2026-11-18T14:19:13.3509449Z [36;1m  else[0m
+2026-11-18T14:19:13.3509671Z [36;1m    bail 'this action requires bash'[0m
+2026-11-18T14:19:13.3509946Z [36;1m  fi[0m
+2026-11-18T14:19:13.3510131Z [36;1mfi[0m
+2026-11-18T14:19:13.3510410Z [36;1mbash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"[0m
+2026-11-18T14:19:13.3511402Z shell: /usr/bin/env -u ENV -u BASH_ENV -u CDPATH -u SHELLOPTS -u BASHOPTS /bin/sh -eu {0}
+2026-11-18T14:19:13.3511809Z env:
+2026-11-18T14:19:13.3512101Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3512583Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:13.3513030Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:13.3513369Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:13.3513599Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:13.3513849Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:13.3514065Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:13.3514289Z   INPUT_TOOL: cargo-ndk
+2026-11-18T14:19:13.3514503Z   INPUT_CHECKSUM: true
+2026-11-18T14:19:13.3514725Z   INPUT_FALLBACK: cargo-binstall
+2026-11-18T14:19:13.3517629Z   DEFAULT_GITHUB_TOKEN: ***
+2026-11-18T14:19:13.3517934Z   ACTION_USER_AGENT: taiki-e/install-action (v2)
+2026-11-18T14:19:13.3518231Z   RUNNER_OS: Linux
+2026-11-18T14:19:13.3518426Z   RUNNER_ARCH: X64
+2026-11-18T14:19:13.3518619Z ##[endgroup]
+2026-11-18T14:19:13.3685135Z info: host platform: x86_64_linux
+2026-11-18T14:19:13.3702946Z info: install-action does not support cargo-ndk (updating install-action might resolve this); fallback to cargo-binstall
+2026-11-18T14:19:13.3749786Z info: installing cargo-binstall@latest (1.27.0)
+2026-11-18T14:19:13.4101518Z info: downloading https://github.com/cargo-bins/cargo-binstall/releases/download/v1.27.0/cargo-binstall-x86_64-unknown-linux-musl.tgz
+2026-11-18T14:19:13.7057969Z info: verifying sha256 checksum for cargo-binstall-x86_64-unknown-linux-musl.tgz
+2026-11-18T14:19:13.8389373Z info: cargo-binstall installed at /home/runner/.cargo/bin/cargo-binstall
+2026-11-18T14:19:13.8397966Z + cargo-binstall binstall -V
+2026-11-18T14:19:13.8410298Z 1.27.0
+2026-11-18T14:19:13.8512577Z cargo-binstall:  INFO resolve: Resolving package: 'cargo-ndk'
+2026-11-18T14:19:15.3245441Z cargo-binstall:  WARN The package cargo-ndk v4.1.2 (x86_64-unknown-linux-gnu, released 2025-08-09) has been downloaded from github.com
+2026-11-18T14:19:15.3247209Z cargo-binstall:  INFO This will install the following binaries:
+2026-11-18T14:19:15.3257122Z cargo-binstall:  INFO   - cargo-ndk => /home/runner/.cargo/bin/cargo-ndk
+2026-11-18T14:19:15.3258353Z cargo-binstall:  INFO   - cargo-ndk-env => /home/runner/.cargo/bin/cargo-ndk-env
+2026-11-18T14:19:15.3259442Z cargo-binstall:  INFO   - cargo-ndk-runner => /home/runner/.cargo/bin/cargo-ndk-runner
+2026-11-18T14:19:15.3261165Z cargo-binstall:  INFO   - cargo-ndk-test => /home/runner/.cargo/bin/cargo-ndk-test
+2026-11-18T14:19:15.3262102Z cargo-binstall:  INFO Installing binaries...
+2026-11-18T14:19:15.3262784Z cargo-binstall:  INFO Done in 1.483951693s
+2026-11-18T14:19:15.3284266Z ##[end-action id=__taiki-e_install-action.__run;outcome=success;conclusion=success;duration_ms=1979]
+2026-11-18T14:19:15.3290527Z ##[start-action display=Run Set-StrictMode -Version Latest;id=__taiki-e_install-action.__run_2]
+2026-11-18T14:19:15.3294126Z ##[end-action id=__taiki-e_install-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-11-18T14:19:15.4034076Z ##[group]Run actions/cache@v4
+2026-11-18T14:19:15.4034374Z with:
+2026-11-18T14:19:15.4034668Z   path: ~/.cargo/registry
+~/.cargo/git
+rust/aether-core/target
+
+2026-11-18T14:19:15.4035261Z   key: Linux-cargo-ndk-v8-99822a2621e2843b771951ff4d387c8b201dcde5d21bf1fa864dedb76635cc62
+2026-11-18T14:19:15.4035799Z   enableCrossOsArchive: false
+2026-11-18T14:19:15.4036066Z   fail-on-cache-miss: false
+2026-11-18T14:19:15.4036313Z   lookup-only: false
+2026-11-18T14:19:15.4036759Z   save-always: false
+2026-11-18T14:19:15.4037102Z env:
+2026-11-18T14:19:15.4037476Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.4038001Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.4038480Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:15.4038836Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:15.4039077Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:15.4039394Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:15.4039628Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:15.4039863Z ##[endgroup]
+2026-11-18T14:19:15.5176193Z (node:2768) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-18T14:19:15.5177880Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-18T14:19:15.7638757Z Cache not found for input keys: Linux-cargo-ndk-v8-99822a2621e2843b771951ff4d387c8b201dcde5d21bf1fa864dedb76635cc62
+2026-11-18T14:19:15.7750923Z ##[group]Run test -f app/src/main/res/font/space_grotesk.ttf
+2026-11-18T14:19:15.7751698Z [36;1mtest -f app/src/main/res/font/space_grotesk.ttf[0m
+2026-11-18T14:19:15.7752109Z [36;1mtest -f app/src/main/res/font/inter.ttf[0m
+2026-11-18T14:19:15.7752503Z [36;1mtest -f app/src/main/res/font/jetbrains_mono.ttf[0m
+2026-11-18T14:19:15.7752888Z [36;1mtest -f app/src/main/assets/font_licenses.txt[0m
+2026-11-18T14:19:15.7803191Z shell: /usr/bin/bash -e {0}
+2026-11-18T14:19:15.7803609Z env:
+2026-11-18T14:19:15.7804137Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.7805064Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.7805851Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:15.7806250Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:15.7806502Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:15.7807115Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:15.7807377Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:15.7807602Z ##[endgroup]
+2026-11-18T14:19:15.7921825Z ##[group]Run cargo test --lib
+2026-11-18T14:19:15.7922134Z [36;1mcargo test --lib[0m
+2026-11-18T14:19:15.7966991Z shell: /usr/bin/bash -e {0}
+2026-11-18T14:19:15.7967250Z env:
+2026-11-18T14:19:15.7967568Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.7968122Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:19:15.7968594Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:19:15.7968942Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:19:15.7969177Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:19:15.7969431Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:19:15.7969651Z   CARGO_TERM_COLOR: always
+2026-11-18T14:19:15.7969873Z ##[endgroup]
+2026-11-18T14:19:15.8399423Z [1m[92m    Updating[0m crates.io index
+2026-11-18T14:19:16.0984446Z [1m[92m     Locking[0m 241 packages to highest Rust 1.100.0 compatible versions
+2026-11-18T14:19:16.1047399Z [1m[92m      Adding[0m generic-array v0.14.7 [1m[33m(available: v0.14.9)[0m
+2026-11-18T14:19:16.1070972Z [1m[92m      Adding[0m jni v0.21.1 [1m[33m(available: v0.22.4)[0m
+2026-11-18T14:19:16.1142242Z [1m[92m      Adding[0m rustix v0.38.44 [1m[33m(available: v1.1.6)[0m
+2026-11-18T14:19:16.1181183Z [1m[92m      Adding[0m sha2 v0.10.9 [1m[33m(available: v0.11.1)[0m
+2026-11-18T14:19:16.1185763Z [1m[92m      Adding[0m socket2 v0.5.10 [1m[33m(available: v0.6.5)[0m
+2026-11-18T14:19:16.1257239Z [1m[92m      Adding[0m webpki-roots v0.26.11 [1m[33m(available: v1.0.12)[0m
+2026-11-18T14:19:16.1459532Z [1m[92m Downloading[0m crates ...
+2026-11-18T14:19:16.1787601Z [1m[92m  Downloaded[0m adler2 v2.0.1
+2026-11-18T14:19:16.1808464Z [1m[92m  Downloaded[0m futures-core v0.3.34
+2026-11-18T14:19:16.1835998Z [1m[92m  Downloaded[0m crossbeam-queue v0.3.14
+2026-11-18T14:19:16.1865738Z [1m[92m  Downloaded[0m icu_locale_core v2.4.0
+2026-11-18T14:19:16.1973280Z [1m[92m  Downloaded[0m cpufeatures v0.3.1
+2026-11-18T14:19:16.2007416Z [1m[92m  Downloaded[0m http v1.5.0
+2026-11-18T14:19:16.2057374Z [1m[92m  Downloaded[0m cmake v0.1.58
+2026-11-18T14:19:16.2077316Z [1m[92m  Downloaded[0m crc32fast v1.5.5
+2026-11-18T14:19:16.2117361Z [1m[92m  Downloaded[0m alloc-stdlib v0.2.4
+2026-11-18T14:19:16.2118269Z [1m[92m  Downloaded[0m arrayvec v0.7.8
+2026-11-18T14:19:16.2149714Z [1m[92m  Downloaded[0m combine v4.6.9
+2026-11-18T14:19:16.2212520Z [1m[92m  Downloaded[0m core_detect v1.0.0
+2026-11-18T14:19:16.2276437Z [1m[92m  Downloaded[0m proc-macro2 v1.0.107
+2026-11-18T14:19:16.2317192Z [1m[92m  Downloaded[0m aho-corasick v1.1.5
+2026-11-18T14:19:16.2427318Z [1m[92m  Downloaded[0m alloc-no-stdlib v2.0.4
+2026-11-18T14:19:16.2477306Z [1m[92m  Downloaded[0m clang-sys v1.9.1
+2026-11-18T14:19:16.2519246Z [1m[92m  Downloaded[0m quinn v0.11.12
+2026-11-18T14:19:16.2568631Z [1m[92m  Downloaded[0m rand_pcg v0.10.2
+2026-11-18T14:19:16.2607179Z [1m[92m  Downloaded[0m zerofrom v0.1.8
+2026-11-18T14:19:16.2622484Z [1m[92m  Downloaded[0m crc32c v0.6.9
+2026-11-18T14:19:16.2647196Z [1m[92m  Downloaded[0m tokio-macros v2.7.2
+2026-11-18T14:19:16.2687210Z [1m[92m  Downloaded[0m cpufeatures v0.2.17
+2026-11-18T14:19:16.2727174Z [1m[92m  Downloaded[0m cexpr v0.6.0
+2026-11-18T14:19:16.2747210Z [1m[92m  Downloaded[0m tokio-socks v0.5.3
+2026-11-18T14:19:16.2850529Z [1m[92m  Downloaded[0m foreign-types-macros v0.2.4
+2026-11-18T14:19:16.2887155Z [1m[92m  Downloaded[0m mio v1.2.5
+2026-11-18T14:19:16.3027767Z [1m[92m  Downloaded[0m crypto-common v0.1.7
+2026-11-18T14:19:16.3037396Z [1m[92m  Downloaded[0m thiserror-impl v1.0.69
+2026-11-18T14:19:16.3067167Z [1m[92m  Downloaded[0m fslock v0.2.1
+2026-11-18T14:19:16.3082838Z [1m[92m  Downloaded[0m futures-task v0.3.34
+2026-11-18T14:19:16.3097373Z [1m[92m  Downloaded[0m http-body v1.1.0
+2026-11-18T14:19:16.3107287Z [1m[92m  Downloaded[0m jni-sys v0.3.1
+2026-11-18T14:19:16.3127335Z [1m[92m  Downloaded[0m rand_core v0.10.1
+2026-11-18T14:19:16.3147662Z [1m[92m  Downloaded[0m simd-adler32 v0.3.10
+2026-11-18T14:19:16.3175571Z [1m[92m  Downloaded[0m digest v0.10.7
+2026-11-18T14:19:16.3207149Z [1m[92m  Downloaded[0m errno v0.3.15
+2026-11-18T14:19:16.3223020Z [1m[92m  Downloaded[0m foldhash v0.2.0
+2026-11-18T14:19:16.3235611Z [1m[92m  Downloaded[0m futures-channel v0.3.34
+2026-11-18T14:19:16.3255525Z [1m[92m  Downloaded[0m getrandom v0.4.3
+2026-11-18T14:19:16.3292590Z [1m[92m  Downloaded[0m httparse v1.10.1
+2026-11-18T14:19:16.3317245Z [1m[92m  Downloaded[0m libloading v0.8.9
+2026-11-18T14:19:16.3340689Z [1m[92m  Downloaded[0m openssl-macros v0.1.1
+2026-11-18T14:19:16.3348553Z [1m[92m  Downloaded[0m slab v0.4.12
+2026-11-18T14:19:16.3361616Z [1m[92m  Downloaded[0m stable_deref_trait v1.2.1
+2026-11-18T14:19:16.3371197Z [1m[92m  Downloaded[0m cfg-if v1.0.5
+2026-11-18T14:19:16.3384357Z [1m[92m  Downloaded[0m foreign-types-shared v0.3.1
+2026-11-18T14:19:16.3392129Z [1m[92m  Downloaded[0m fs_extra v1.3.0
+2026-11-18T14:19:16.3408738Z [1m[92m  Downloaded[0m futures-executor v0.3.34
+2026-11-18T14:19:16.3422828Z [1m[92m  Downloaded[0m getrandom v0.2.17
+2026-11-18T14:19:16.3451747Z [1m[92m  Downloaded[0m itertools v0.13.0
+2026-11-18T14:19:16.3522415Z [1m[92m  Downloaded[0m jni-sys v0.4.1
+2026-11-18T14:19:16.3532892Z [1m[92m  Downloaded[0m jni-sys-macros v0.4.1
+2026-11-18T14:19:16.3540206Z [1m[92m  Downloaded[0m percent-encoding v2.3.2
+2026-11-18T14:19:16.3549457Z [1m[92m  Downloaded[0m cesu8 v1.1.0
+2026-11-18T14:19:16.3558233Z [1m[92m  Downloaded[0m syn v2.0.119
+2026-11-18T14:19:16.3660698Z [1m[92m  Downloaded[0m equivalent v1.0.3
+2026-11-18T14:19:16.3671190Z [1m[92m  Downloaded[0m cfg_aliases v0.2.2
+2026-11-18T14:19:16.3681568Z [1m[92m  Downloaded[0m h3-quinn v0.0.10
+2026-11-18T14:19:16.3691042Z [1m[92m  Downloaded[0m ipnet v2.12.2
+2026-11-18T14:19:16.3708376Z [1m[92m  Downloaded[0m itoa v1.0.19
+2026-11-18T14:19:16.3722898Z [1m[92m  Downloaded[0m multiversion_no_op v1.0.0
+2026-11-18T14:19:16.3732046Z [1m[92m  Downloaded[0m pkg-config v0.3.34
+2026-11-18T14:19:16.3747148Z [1m[92m  Downloaded[0m potential_utf v0.1.6
+2026-11-18T14:19:16.3758257Z [1m[92m  Downloaded[0m shlex v1.3.0
+2026-11-18T14:19:16.3771130Z [1m[92m  Downloaded[0m crossbeam-utils v0.8.23
+2026-11-18T14:19:16.3798068Z [1m[92m  Downloaded[0m futures-sink v0.3.34
+2026-11-18T14:19:16.3807045Z [1m[92m  Downloaded[0m hashbrown v0.17.1
+2026-11-18T14:19:16.3858859Z [1m[92m  Downloaded[0m log v0.4.35
+2026-11-18T14:19:16.3884473Z [1m[92m  Downloaded[0m glob v0.3.4
+2026-11-18T14:19:16.3899675Z [1m[92m  Downloaded[0m idna_adapter v1.2.2
+2026-11-18T14:19:16.3909258Z [1m[92m  Downloaded[0m find-msvc-tools v0.1.15
+2026-11-18T14:19:16.3925682Z [1m[92m  Downloaded[0m mime v0.3.18
+2026-11-18T14:19:16.3941055Z [1m[92m  Downloaded[0m constant_time_eq v0.4.2
+2026-11-18T14:19:16.3961750Z [1m[92m  Downloaded[0m syn v3.0.10
+2026-11-18T14:19:16.4066153Z [1m[92m  Downloaded[0m thiserror v1.0.69
+2026-11-18T14:19:16.4120333Z [1m[92m  Downloaded[0m tinyvec v1.13.3
+2026-11-18T14:19:16.4154268Z [1m[92m  Downloaded[0m socket2 v0.6.5
+2026-11-18T14:19:16.4172726Z [1m[92m  Downloaded[0m tokio-btls v0.5.6
+2026-11-18T14:19:16.4184318Z [1m[92m  Downloaded[0m fnv v1.0.7
+2026-11-18T14:19:16.4193553Z [1m[92m  Downloaded[0m sync_wrapper v1.0.2
+2026-11-18T14:19:16.4202034Z [1m[92m  Downloaded[0m typenum v1.20.1
+2026-11-18T14:19:16.4236700Z [1m[92m  Downloaded[0m once_cell v1.21.4
+2026-11-18T14:19:16.4261532Z [1m[92m  Downloaded[0m smallvec v1.16.6
+2026-11-18T14:19:16.4275599Z [1m[92m  Downloaded[0m jni v0.21.1
+2026-11-18T14:19:16.4340598Z [1m[92m  Downloaded[0m nom v7.1.3
+2026-11-18T14:19:16.4389915Z [1m[92m  Downloaded[0m sha2 v0.10.9
+2026-11-18T14:19:16.4414669Z [1m[92m  Downloaded[0m shlex v2.0.1
+2026-11-18T14:19:16.4427909Z [1m[92m  Downloaded[0m try-lock v0.2.5
+2026-11-18T14:19:16.4437247Z [1m[92m  Downloaded[0m pin-project-lite v0.2.17
+2026-11-18T14:19:16.4507865Z [1m[92m  Downloaded[0m subtle v2.6.1
+2026-11-18T14:19:16.4519392Z [1m[92m  Downloaded[0m utf8_iter v1.1.0
+2026-11-18T14:19:16.4532769Z [1m[92m  Downloaded[0m yoke v0.8.4
+2026-11-18T14:19:16.4550982Z [1m[92m  Downloaded[0m socket2 v0.5.10
+2026-11-18T14:19:16.4569256Z [1m[92m  Downloaded[0m rustix v0.38.44
+2026-11-18T14:19:16.4867452Z [1m[92m  Downloaded[0m typed-builder-macro v0.23.2
+2026-11-18T14:19:16.4868571Z [1m[92m  Downloaded[0m walkdir v2.5.0
+2026-11-18T14:19:16.4901427Z [1m[92m  Downloaded[0m wreq-rt v0.2.2-rc.4
+2026-11-18T14:19:16.4908943Z [1m[92m  Downloaded[0m zstd v0.14.4
+2026-11-18T14:19:16.4945663Z [1m[92m  Downloaded[0m displaydoc v0.2.7
+2026-11-18T14:19:16.4965747Z [1m[92m  Downloaded[0m foreign-types v0.5.0
+2026-11-18T14:19:16.4975333Z [1m[92m  Downloaded[0m form_urlencoded v1.2.2
+2026-11-18T14:19:16.4983916Z [1m[92m  Downloaded[0m futures-io v0.3.34
+2026-11-18T14:19:16.4993098Z [1m[92m  Downloaded[0m futures-macro v0.3.34
+2026-11-18T14:19:16.5003877Z [1m[92m  Downloaded[0m generic-array v0.14.7
+2026-11-18T14:19:16.5018569Z [1m[92m  Downloaded[0m jobserver v0.1.35
+2026-11-18T14:19:16.5037245Z [1m[92m  Downloaded[0m lru-slab v0.1.3
+2026-11-18T14:19:16.5045771Z [1m[92m  Downloaded[0m tower-service v0.3.3
+2026-11-18T14:19:16.5054121Z [1m[92m  Downloaded[0m atomic-waker v1.1.2
+2026-11-18T14:19:16.5066207Z [1m[92m  Downloaded[0m block-buffer v0.10.4
+2026-11-18T14:19:16.5076967Z [1m[92m  Downloaded[0m either v1.19.0
+2026-11-18T14:19:16.5091766Z [1m[92m  Downloaded[0m fastrand v2.5.0
+2026-11-18T14:19:16.5108875Z [1m[92m  Downloaded[0m http-body-util v0.1.5
+2026-11-18T14:19:16.5129155Z [1m[92m  Downloaded[0m litemap v0.8.3
+2026-11-18T14:19:16.5152176Z [1m[92m  Downloaded[0m rustversion v1.0.23
+2026-11-18T14:19:16.5180042Z [1m[92m  Downloaded[0m webpki-roots v0.26.11
+2026-11-18T14:19:16.5192508Z [1m[92m  Downloaded[0m chacha20 v0.10.2
+2026-11-18T14:19:16.5215938Z [1m[92m  Downloaded[0m h3 v0.0.8
+2026-11-18T14:19:16.5268582Z [1m[92m  Downloaded[0m icu_provider v2.4.0
+2026-11-18T14:19:16.5296179Z [1m[92m  Downloaded[0m rustc-hash v2.1.3
+2026-11-18T14:19:16.5309520Z [1m[92m  Downloaded[0m same-file v1.0.6
+2026-11-18T14:19:16.5323350Z [1m[92m  Downloaded[0m thiserror-impl v2.0.21
+2026-11-18T14:19:16.5338353Z [1m[92m  Downloaded[0m untrusted v0.9.0
+2026-11-18T14:19:16.5354791Z [1m[92m  Downloaded[0m want v0.3.2
+2026-11-18T14:19:16.5364281Z [1m[92m  Downloaded[0m yoke-derive v0.8.4
+2026-11-18T14:19:16.5376165Z [1m[92m  Downloaded[0m zerofrom-derive v0.1.8
+2026-11-18T14:19:16.5386865Z [1m[92m  Downloaded[0m zstd-safe v8.3.0
+2026-11-18T14:19:16.5406825Z [1m[92m  Downloaded[0m bitflags v2.13.2
+2026-11-18T14:19:16.5450024Z [1m[92m  Downloaded[0m bytes v1.12.2
+2026-11-18T14:19:16.5485539Z [1m[92m  Downloaded[0m futures v0.3.34
+2026-11-18T14:19:16.5534074Z [1m[92m  Downloaded[0m lru v0.19.0
+2026-11-18T14:19:16.5547094Z [1m[92m  Downloaded[0m miniz_oxide v0.9.1
+2026-11-18T14:19:16.5572291Z [1m[92m  Downloaded[0m rustc_version v0.4.1
+2026-11-18T14:19:16.5585340Z [1m[92m  Downloaded[0m scopeguard v1.2.0
+2026-11-18T14:19:16.5597542Z [1m[92m  Downloaded[0m simdutf8 v0.1.5
+2026-11-18T14:19:16.5627894Z [1m[92m  Downloaded[0m thiserror v2.0.21
+2026-11-18T14:19:16.5690337Z [1m[92m  Downloaded[0m typed-builder v0.23.2
+2026-11-18T14:19:16.5709096Z [1m[92m  Downloaded[0m unicode-ident v1.0.27
+2026-11-18T14:19:16.5736273Z [1m[92m  Downloaded[0m writeable v0.6.4
+2026-11-18T14:19:16.5756818Z [1m[92m  Downloaded[0m flate2 v1.1.11
+2026-11-18T14:19:16.5808233Z [1m[92m  Downloaded[0m icu_collections v2.4.0
+2026-11-18T14:19:16.5871746Z [1m[92m  Downloaded[0m icu_normalizer_data v2.4.0
+2026-11-18T14:19:16.5892459Z [1m[92m  Downloaded[0m indexmap v2.14.2
+2026-11-18T14:19:16.5934216Z [1m[92m  Downloaded[0m memchr v2.8.3
+2026-11-18T14:19:16.5987578Z [1m[92m  Downloaded[0m minimal-lexical v0.2.1
+2026-11-18T14:19:16.6047831Z [1m[92m  Downloaded[0m tinystr v0.8.5
+2026-11-18T14:19:16.6066891Z [1m[92m  Downloaded[0m tower-layer v0.3.3
+2026-11-18T14:19:16.6073854Z [1m[92m  Downloaded[0m version_check v0.9.5
+2026-11-18T14:19:16.6089016Z [1m[92m  Downloaded[0m zerovec-derive v0.11.7
+2026-11-18T14:19:16.6106432Z [1m[92m  Downloaded[0m zmij v1.0.23
+2026-11-18T14:19:16.6124229Z [1m[92m  Downloaded[0m synstructure v0.14.0
+2026-11-18T14:19:16.6134603Z [1m[92m  Downloaded[0m utf_types v1.0.0
+2026-11-18T14:19:16.6146868Z [1m[92m  Downloaded[0m blake3 v1.8.7
+2026-11-18T14:19:16.6223426Z [1m[92m  Downloaded[0m icu_properties v2.4.0
+2026-11-18T14:19:16.6260336Z [1m[92m  Downloaded[0m quinn-udp v0.5.16
+2026-11-18T14:19:16.6277704Z [1m[92m  Downloaded[0m quote v1.0.47
+2026-11-18T14:19:16.6306972Z [1m[92m  Downloaded[0m zeroize v1.9.2
+2026-11-18T14:19:16.6324636Z [1m[92m  Downloaded[0m idna v1.1.0
+2026-11-18T14:19:16.6359458Z [1m[92m  Downloaded[0m semver v1.0.28
+2026-11-18T14:19:16.6383134Z [1m[92m  Downloaded[0m futures-util v0.3.34
+2026-11-18T14:19:16.6509117Z [1m[92m  Downloaded[0m http2 v0.5.20
+2026-11-18T14:19:16.6575316Z [1m[92m  Downloaded[0m cc v1.11.2
+2026-11-18T14:19:16.6616904Z [1m[92m  Downloaded[0m icu_properties_data v2.4.0
+2026-11-18T14:19:16.6726853Z [1m[92m  Downloaded[0m rustls-pki-types v1.16.0
+2026-11-18T14:19:16.6752346Z [1m[92m  Downloaded[0m serde_derive v1.0.229
+2026-11-18T14:19:16.6782503Z [1m[92m  Downloaded[0m tracing-core v0.1.36
+2026-11-18T14:19:16.6808808Z [1m[92m  Downloaded[0m wreq-util v0.2.1
+2026-11-18T14:19:16.6854285Z [1m[92m  Downloaded[0m brotli-decompressor v5.0.3
+2026-11-18T14:19:16.6910878Z [1m[92m  Downloaded[0m serde v1.0.229
+2026-11-18T14:19:16.6944479Z [1m[92m  Downloaded[0m serde_core v1.0.229
+2026-11-18T14:19:16.6971417Z [1m[92m  Downloaded[0m url v2.5.8
+2026-11-18T14:19:16.6997199Z [1m[92m  Downloaded[0m wreq-proto v0.2.6
+2026-11-18T14:19:16.7034334Z [1m[92m  Downloaded[0m btls v0.5.6
+2026-11-18T14:19:16.7117060Z [1m[92m  Downloaded[0m rustls-webpki v0.103.17
+2026-11-18T14:19:16.7152690Z [1m[92m  Downloaded[0m zerotrie v0.2.5
+2026-11-18T14:19:16.7191222Z [1m[92m  Downloaded[0m regex v1.13.2
+2026-11-18T14:19:16.7245400Z [1m[92m  Downloaded[0m tower v0.5.3
+2026-11-18T14:19:16.7343549Z [1m[92m  Downloaded[0m bindgen v0.72.1
+2026-11-18T14:19:16.7408376Z [1m[92m  Downloaded[0m rand v0.10.4
+2026-11-18T14:19:16.7445556Z [1m[92m  Downloaded[0m tokio-util v0.7.20
+2026-11-18T14:19:16.7522639Z [1m[92m  Downloaded[0m tracing v0.1.44
+2026-11-18T14:19:16.7675364Z [1m[92m  Downloaded[0m zerovec v0.11.9
+2026-11-18T14:19:16.7734124Z [1m[92m  Downloaded[0m webpki-root-certs v1.0.12
+2026-11-18T14:19:16.7762150Z [1m[92m  Downloaded[0m zlib-rs v0.6.8
+2026-11-18T14:19:16.7819814Z [1m[92m  Downloaded[0m serde_json v1.0.154
+2026-11-18T14:19:16.7894712Z [1m[92m  Downloaded[0m wreq v0.16.3
+2026-11-18T14:19:16.7977522Z [1m[92m  Downloaded[0m webpki-roots v1.0.12
+2026-11-18T14:19:16.8006039Z [1m[92m  Downloaded[0m quinn-proto v0.11.19
+2026-11-18T14:19:16.8074432Z [1m[92m  Downloaded[0m icu_normalizer v2.4.0
+2026-11-18T14:19:16.8207533Z [1m[92m  Downloaded[0m rustls v0.23.46
+2026-11-18T14:19:16.8375016Z [1m[92m  Downloaded[0m regex-syntax v0.8.12
+2026-11-18T14:19:16.8475314Z [1m[92m  Downloaded[0m brotli v8.0.4
+2026-11-18T14:19:16.8636343Z [1m[92m  Downloaded[0m encoding_rs v0.8.44
+2026-11-18T14:19:16.8731931Z [1m[92m  Downloaded[0m libc v0.2.191
+2026-11-18T14:19:16.9216835Z [1m[92m  Downloaded[0m regex-automata v0.4.19
+2026-11-18T14:19:16.9359493Z [1m[92m  Downloaded[0m zstd-sys v2.1.3+zstd.1.5.7
+2026-11-18T14:19:16.9524369Z [1m[92m  Downloaded[0m tokio v1.54.1
+2026-11-18T14:19:16.9997828Z [1m[92m  Downloaded[0m ring v0.17.14
+2026-11-18T14:19:17.0405513Z [1m[92m  Downloaded[0m linux-raw-sys v0.4.15
+2026-11-18T14:19:17.0864172Z [1m[92m  Downloaded[0m btls-sys v0.5.6
+2026-11-18T14:19:18.1523585Z [1m[92m   Compiling[0m proc-macro2 v1.0.107
+2026-11-18T14:19:18.1524769Z [1m[92m   Compiling[0m unicode-ident v1.0.27
+2026-11-18T14:19:18.2178627Z [1m[92m   Compiling[0m quote v1.0.47
+2026-11-18T14:19:18.4234470Z [1m[92m   Compiling[0m libc v0.2.191
+2026-11-18T14:19:19.2577992Z [1m[92m   Compiling[0m syn v3.0.10
+2026-11-18T14:19:19.8235607Z [1m[92m   Compiling[0m jobserver v0.1.35
+2026-11-18T14:19:20.0968306Z [1m[92m   Compiling[0m shlex v2.0.1
+2026-11-18T14:19:20.2077841Z [1m[92m   Compiling[0m find-msvc-tools v0.1.15
+2026-11-18T14:19:20.3697704Z [1m[92m   Compiling[0m cc v1.11.2
+2026-11-18T14:19:22.1557738Z [1m[92m   Compiling[0m cfg-if v1.0.5
+2026-11-18T14:19:22.1857885Z [1m[92m   Compiling[0m pin-project-lite v0.2.17
+2026-11-18T14:19:22.2267928Z [1m[92m   Compiling[0m bytes v1.12.2
+2026-11-18T14:19:22.9128932Z [1m[92m   Compiling[0m synstructure v0.14.0
+2026-11-18T14:19:23.4177780Z [1m[92m   Compiling[0m syn v2.0.119
+2026-11-18T14:19:24.4514495Z [1m[92m   Compiling[0m zerofrom-derive v0.1.8
+2026-11-18T14:19:25.5817942Z [1m[92m   Compiling[0m futures-core v0.3.34
+2026-11-18T14:19:25.6620117Z [1m[92m   Compiling[0m zerofrom v0.1.8
+2026-11-18T14:19:25.7418615Z [1m[92m   Compiling[0m yoke-derive v0.8.4
+2026-11-18T14:19:26.6273298Z [1m[92m   Compiling[0m stable_deref_trait v1.2.1
+2026-11-18T14:19:26.6627935Z [1m[92m   Compiling[0m yoke v0.8.4
+2026-11-18T14:19:26.8037823Z [1m[92m   Compiling[0m socket2 v0.6.5
+2026-11-18T14:19:27.2857800Z [1m[92m   Compiling[0m futures-sink v0.3.34
+2026-11-18T14:19:27.3368033Z [1m[92m   Compiling[0m slab v0.4.12
+2026-11-18T14:19:27.4492210Z [1m[92m   Compiling[0m memchr v2.8.3
+2026-11-18T14:19:28.1169207Z [1m[92m   Compiling[0m tokio-macros v2.7.2
+2026-11-18T14:19:28.2026014Z [1m[92m   Compiling[0m zerovec-derive v0.11.7
+2026-11-18T14:19:28.5879697Z [1m[92m   Compiling[0m mio v1.2.5
+2026-11-18T14:19:29.0713132Z [1m[92m   Compiling[0m tokio v1.54.1
+2026-11-18T14:19:29.1627742Z [1m[92m   Compiling[0m zerovec v0.11.9
+2026-11-18T14:19:29.6770109Z [1m[92m   Compiling[0m displaydoc v0.2.7
+2026-11-18T14:19:30.2007939Z [1m[92m   Compiling[0m futures-io v0.3.34
+2026-11-18T14:19:30.2938062Z [1m[92m   Compiling[0m glob v0.3.4
+2026-11-18T14:19:30.8918456Z [1m[92m   Compiling[0m clang-sys v1.9.1
+2026-11-18T14:19:31.2227022Z [1m[92m   Compiling[0m futures-channel v0.3.34
+2026-11-18T14:19:31.3997964Z [1m[92m   Compiling[0m futures-macro v0.3.34
+2026-11-18T14:19:32.2087980Z [1m[92m   Compiling[0m zeroize v1.9.2
+2026-11-18T14:19:32.3308732Z [1m[92m   Compiling[0m rustc-hash v2.1.3
+2026-11-18T14:19:32.3868744Z [1m[92m   Compiling[0m itoa v1.0.19
+2026-11-18T14:19:32.5169459Z [1m[92m   Compiling[0m futures-task v0.3.34
+2026-11-18T14:19:32.6227933Z [1m[92m   Compiling[0m futures-util v0.3.34
+2026-11-18T14:19:35.3568032Z [1m[92m   Compiling[0m rustls-pki-types v1.16.0
+2026-11-18T14:19:35.8371422Z [1m[92m   Compiling[0m regex-syntax v0.8.12
+2026-11-18T14:19:35.8561139Z [1m[92m   Compiling[0m minimal-lexical v0.2.1
+2026-11-18T14:19:36.5938746Z [1m[92m   Compiling[0m nom v7.1.3
+2026-11-18T14:19:37.6239008Z [1m[92m   Compiling[0m regex-automata v0.4.19
+2026-11-18T14:19:38.1935555Z [1m[92m   Compiling[0m http v1.5.0
+2026-11-18T14:19:39.2547955Z [1m[92m   Compiling[0m tinystr v0.8.5
+2026-11-18T14:19:39.3938536Z [1m[92m   Compiling[0m libloading v0.8.9
+2026-11-18T14:19:39.5118079Z [1m[92m   Compiling[0m bindgen v0.72.1
+2026-11-18T14:19:39.6419116Z [1m[92m   Compiling[0m litemap v0.8.3
+2026-11-18T14:19:39.7578013Z [1m[92m   Compiling[0m writeable v0.6.4
+2026-11-18T14:19:39.7818044Z [1m[92m   Compiling[0m utf_types v1.0.0
+2026-11-18T14:19:39.9528017Z [1m[92m   Compiling[0m smallvec v1.16.6
+2026-11-18T14:19:39.9798277Z [1m[92m   Compiling[0m either v1.19.0
+2026-11-18T14:19:40.1127253Z [1m[92m   Compiling[0m utf8_iter v1.1.0
+2026-11-18T14:19:40.1252601Z [1m[92m   Compiling[0m itertools v0.13.0
+2026-11-18T14:19:40.2218238Z [1m[92m   Compiling[0m icu_locale_core v2.4.0
+2026-11-18T14:19:41.4968114Z [1m[92m   Compiling[0m regex v1.13.2
+2026-11-18T14:19:41.9623390Z [1m[92m   Compiling[0m cexpr v0.6.0
+2026-11-18T14:19:42.6128168Z [1m[92m   Compiling[0m zerotrie v0.2.5
+2026-11-18T14:19:42.8664229Z [1m[92m   Compiling[0m potential_utf v0.1.6
+2026-11-18T14:19:42.9737855Z [1m[92m   Compiling[0m ring v0.17.14
+2026-11-18T14:19:43.3171638Z [1m[92m   Compiling[0m foldhash v0.2.0
+2026-11-18T14:19:43.4268222Z [1m[92m   Compiling[0m icu_normalizer_data v2.4.0
+2026-11-18T14:19:43.5178077Z [1m[92m   Compiling[0m icu_properties_data v2.4.0
+2026-11-18T14:19:43.6084477Z [1m[92m   Compiling[0m bitflags v2.13.2
+2026-11-18T14:19:43.7487929Z [1m[92m   Compiling[0m shlex v1.3.0
+2026-11-18T14:19:45.0468183Z [1m[92m   Compiling[0m hashbrown v0.17.1
+2026-11-18T14:19:48.8164230Z [1m[92m   Compiling[0m icu_collections v2.4.0
+2026-11-18T14:19:49.1995075Z [1m[92m   Compiling[0m icu_provider v2.4.0
+2026-11-18T14:19:49.4497924Z [1m[92m   Compiling[0m cmake v0.1.58
+2026-11-18T14:19:49.6197883Z [1m[92m   Compiling[0m fslock v0.2.1
+2026-11-18T14:19:49.7298642Z [1m[92m   Compiling[0m pkg-config v0.3.34
+2026-11-18T14:19:49.7467719Z [1m[92m   Compiling[0m once_cell v1.21.4
+2026-11-18T14:19:49.8892720Z [1m[92m   Compiling[0m fs_extra v1.3.0
+2026-11-18T14:19:50.0979271Z [1m[92m   Compiling[0m version_check v0.9.5
+2026-11-18T14:19:50.1507952Z [1m[92m   Compiling[0m rand_core v0.10.1
+2026-11-18T14:19:50.2468019Z [1m[92m   Compiling[0m cfg_aliases v0.2.2
+2026-11-18T14:19:50.2839941Z [1m[92m   Compiling[0m rustversion v1.0.23
+2026-11-18T14:19:50.3057981Z [1m[92m   Compiling[0m generic-array v0.14.7
+2026-11-18T14:19:50.3887846Z [1m[92m   Compiling[0m zstd-sys v2.1.3+zstd.1.5.7
+2026-11-18T14:19:50.4928026Z [1m[92m   Compiling[0m btls-sys v0.5.6
+2026-11-18T14:19:50.7648336Z [1m[92m   Compiling[0m tokio-util v0.7.20
+2026-11-18T14:19:51.1488029Z [1m[92m   Compiling[0m getrandom v0.2.17
+2026-11-18T14:19:51.2657991Z [1m[92m   Compiling[0m httparse v1.10.1
+2026-11-18T14:19:51.4254623Z [1m[92m   Compiling[0m untrusted v0.9.0
+2026-11-18T14:19:51.4512923Z [1m[92m   Compiling[0m equivalent v1.0.3
+2026-11-18T14:19:51.4848754Z [1m[92m   Compiling[0m cpufeatures v0.3.1
+2026-11-18T14:19:51.4897499Z [1m[92m   Compiling[0m getrandom v0.4.3
+2026-11-18T14:19:51.5158077Z [1m[92m   Compiling[0m thiserror v1.0.69
+2026-11-18T14:19:51.6148165Z [1m[92m   Compiling[0m indexmap v2.14.2
+2026-11-18T14:19:53.4656931Z [1m[92m   Compiling[0m icu_properties v2.4.0
+2026-11-18T14:19:54.6473045Z [1m[92m   Compiling[0m icu_normalizer v2.4.0
+2026-11-18T14:20:15.6348001Z [1m[92m   Compiling[0m tracing-core v0.1.36
+2026-11-18T14:20:16.7378720Z [1m[92m   Compiling[0m http-body v1.1.0
+2026-11-18T14:20:16.8247873Z [1m[92m   Compiling[0m thiserror-impl v1.0.69
+2026-11-18T14:20:18.0866783Z [1m[92m   Compiling[0m foreign-types-macros v0.2.4
+2026-11-18T14:20:18.6208429Z [1m[92m   Compiling[0m try-lock v0.2.5
+2026-11-18T14:20:18.7097797Z [1m[92m   Compiling[0m typenum v1.20.1
+2026-11-18T14:20:19.7647854Z [1m[92m   Compiling[0m foreign-types-shared v0.3.1
+2026-11-18T14:20:19.8417987Z [1m[92m   Compiling[0m fnv v1.0.7
+2026-11-18T14:20:19.9227838Z [1m[92m   Compiling[0m atomic-waker v1.1.2
+2026-11-18T14:20:20.0387802Z [1m[92m   Compiling[0m rustls v0.23.46
+2026-11-18T14:20:20.4877926Z [1m[92m   Compiling[0m thiserror v2.0.21
+2026-11-18T14:20:20.9148207Z [1m[92m   Compiling[0m http2 v0.5.20
+2026-11-18T14:20:24.6787848Z [1m[92m   Compiling[0m foreign-types v0.5.0
+2026-11-18T14:20:25.6085759Z [1m[92m   Compiling[0m want v0.3.2
+2026-11-18T14:20:25.8554571Z [1m[92m   Compiling[0m tracing v0.1.44
+2026-11-18T14:20:26.1998575Z [1m[92m   Compiling[0m encoding_rs v0.8.44
+2026-11-18T14:20:26.3789792Z [1m[92m   Compiling[0m idna_adapter v1.2.2
+2026-11-18T14:20:26.4828855Z [1m[92m   Compiling[0m rustls-webpki v0.103.17
+2026-11-18T14:20:28.8128758Z [1m[92m   Compiling[0m chacha20 v0.10.2
+2026-11-18T14:20:29.1388856Z [1m[92m   Compiling[0m quinn-udp v0.5.16
+2026-11-18T14:20:29.5698954Z [1m[92m   Compiling[0m openssl-macros v0.1.1
+2026-11-18T14:20:29.9482389Z [1m[92m   Compiling[0m thiserror-impl v2.0.21
+2026-11-18T14:20:31.9809390Z [1m[92m   Compiling[0m crc32fast v1.5.5
+2026-11-18T14:20:32.2315944Z [1m[92m   Compiling[0m zstd-safe v8.3.0
+2026-11-18T14:20:32.4107790Z [1m[92m   Compiling[0m semver v1.0.28
+2026-11-18T14:20:32.8418909Z [1m[92m   Compiling[0m serde_core v1.0.229
+2026-11-18T14:20:33.1607891Z [1m[92m   Compiling[0m alloc-no-stdlib v2.0.4
+2026-11-18T14:20:33.2598085Z [1m[92m   Compiling[0m subtle v2.6.1
+2026-11-18T14:20:33.4368548Z [1m[92m   Compiling[0m percent-encoding v2.3.2
+2026-11-18T14:20:33.6833255Z [1m[92m   Compiling[0m form_urlencoded v1.2.2
+2026-11-18T14:20:44.7893139Z [1m[92m   Compiling[0m alloc-stdlib v0.2.4
+2026-11-18T14:20:44.9107871Z [1m[92m   Compiling[0m rustc_version v0.4.1
+2026-11-18T14:20:45.4415097Z [1m[92m   Compiling[0m rand v0.10.4
+2026-11-18T14:20:46.6437815Z [1m[92m   Compiling[0m wreq-proto v0.2.6
+2026-11-18T14:20:48.5359119Z [1m[92m   Compiling[0m idna v1.1.0
+2026-11-18T14:20:49.5608185Z [1m[92m   Compiling[0m quinn v0.11.12
+2026-11-18T14:20:49.8012340Z [1m[92m   Compiling[0m rand_pcg v0.10.2
+2026-11-18T14:20:49.9827645Z [1m[92m   Compiling[0m jni-sys-macros v0.4.1
+2026-11-18T14:20:50.3841241Z [1m[92m   Compiling[0m sync_wrapper v1.0.2
+2026-11-18T14:20:50.4728619Z [1m[92m   Compiling[0m core_detect v1.0.0
+2026-11-18T14:20:50.6207979Z [1m[92m   Compiling[0m adler2 v2.0.1
+2026-11-18T14:20:50.7378647Z [1m[92m   Compiling[0m multiversion_no_op v1.0.0
+2026-11-18T14:20:50.9711711Z [1m[92m   Compiling[0m simd-adler32 v0.3.10
+2026-11-18T14:20:51.1868558Z [1m[92m   Compiling[0m scopeguard v1.2.0
+2026-11-18T14:20:51.2697997Z [1m[92m   Compiling[0m crossbeam-utils v0.8.23
+2026-11-18T14:20:51.8208986Z [1m[92m   Compiling[0m simdutf8 v0.1.5
+2026-11-18T14:20:52.1111605Z [1m[92m   Compiling[0m jni-sys v0.3.1
+2026-11-18T14:20:52.2948687Z [1m[92m   Compiling[0m tower-layer v0.3.3
+2026-11-18T14:20:52.5058976Z [1m[92m   Compiling[0m lru-slab v0.1.3
+2026-11-18T14:20:52.6301763Z [1m[92m   Compiling[0m tower-service v0.3.3
+2026-11-18T14:20:52.7138025Z [1m[92m   Compiling[0m tinyvec v1.13.3
+2026-11-18T14:20:53.2221584Z [1m[92m   Compiling[0m zmij v1.0.23
+2026-11-18T14:20:53.5188968Z [1m[92m   Compiling[0m quinn-proto v0.11.19
+2026-11-18T14:21:00.8338437Z [1m[92m   Compiling[0m tower v0.5.3
+2026-11-18T14:21:04.7338637Z [1m[92m   Compiling[0m tokio-socks v0.5.3
+2026-11-18T14:21:05.3888156Z [1m[92m   Compiling[0m miniz_oxide v0.9.1
+2026-11-18T14:21:06.3576880Z [1m[92m   Compiling[0m jni-sys v0.4.1
+2026-11-18T14:21:07.2618178Z [1m[92m   Compiling[0m url v2.5.8
+2026-11-18T14:21:08.3058640Z [1m[92m   Compiling[0m wreq-rt v0.2.2-rc.4
+2026-11-18T14:21:09.1445866Z [1m[92m   Compiling[0m crc32c v0.6.9
+2026-11-18T14:21:13.0148513Z [1m[92m   Compiling[0m brotli-decompressor v5.0.3
+2026-11-18T14:21:14.7298815Z [1m[92m   Compiling[0m block-buffer v0.10.4
+2026-11-18T14:21:14.8668216Z [1m[92m   Compiling[0m crypto-common v0.1.7
+2026-11-18T14:21:14.9438641Z [1m[92m   Compiling[0m http-body-util v0.1.5
+2026-11-18T14:21:15.3321845Z [1m[92m   Compiling[0m lru v0.19.0
+2026-11-18T14:21:15.5588529Z [1m[92m   Compiling[0m webpki-root-certs v1.0.12
+2026-11-18T14:21:15.6628587Z [1m[92m   Compiling[0m futures-executor v0.3.34
+2026-11-18T14:21:16.0789072Z [1m[92m   Compiling[0m typed-builder-macro v0.23.2
+2026-11-18T14:21:18.0877821Z [1m[92m   Compiling[0m blake3 v1.8.7
+2026-11-18T14:21:18.4807888Z [1m[92m   Compiling[0m rustix v0.38.44
+2026-11-18T14:21:18.8595125Z [1m[92m   Compiling[0m serde v1.0.229
+2026-11-18T14:21:19.1757877Z [1m[92m   Compiling[0m fastrand v2.5.0
+2026-11-18T14:21:19.4507871Z [1m[92m   Compiling[0m serde_json v1.0.154
+2026-11-18T14:21:19.6167929Z [1m[92m   Compiling[0m ipnet v2.12.2
+2026-11-18T14:21:20.3498531Z [1m[92m   Compiling[0m mime v0.3.18
+2026-11-18T14:21:20.7747917Z [1m[92m   Compiling[0m h3 v0.0.8
+2026-11-18T14:21:23.9668364Z [1m[92m   Compiling[0m typed-builder v0.23.2
+2026-11-18T14:21:24.0359539Z [1m[92m   Compiling[0m futures v0.3.34
+2026-11-18T14:21:24.0838346Z [1m[92m   Compiling[0m digest v0.10.7
+2026-11-18T14:21:24.2288018Z [1m[92m   Compiling[0m brotli v8.0.4
+2026-11-18T14:21:28.8518126Z [1m[92m   Compiling[0m flate2 v1.1.11
+2026-11-18T14:21:32.2452342Z [1m[92m   Compiling[0m zstd v0.14.4
+2026-11-18T14:21:34.2105947Z [1m[92m   Compiling[0m webpki-roots v1.0.12
+2026-11-18T14:21:34.3549661Z [1m[92m   Compiling[0m combine v4.6.9
+2026-11-18T14:21:41.3690180Z [1m[92m   Compiling[0m serde_derive v1.0.229
+2026-11-18T14:21:45.5600775Z [1m[92m   Compiling[0m cpufeatures v0.2.17
+2026-11-18T14:21:45.6285503Z [1m[92m   Compiling[0m log v0.4.35
+2026-11-18T14:21:45.9018611Z [1m[92m   Compiling[0m arrayvec v0.7.8
+2026-11-18T14:21:46.2315916Z [1m[92m   Compiling[0m cesu8 v1.1.0
+2026-11-18T14:21:46.5345679Z [1m[92m   Compiling[0m linux-raw-sys v0.4.15
+2026-11-18T14:21:47.0028302Z [1m[92m   Compiling[0m constant_time_eq v0.4.2
+2026-11-18T14:21:52.0209007Z [1m[92m   Compiling[0m jni v0.21.1
+2026-11-18T14:21:56.2907967Z [1m[92m   Compiling[0m sha2 v0.10.9
+2026-11-18T14:21:57.7838908Z [1m[92m   Compiling[0m webpki-roots v0.26.11
+2026-11-18T14:21:59.5717445Z [1m[92m   Compiling[0m crossbeam-queue v0.3.14
+2026-11-18T14:21:59.6840269Z [1m[92m   Compiling[0m h3-quinn v0.0.10
+2026-11-18T14:22:00.0448533Z [1m[92m   Compiling[0m socket2 v0.5.10
+2026-11-18T14:22:10.8568248Z [1m[92m   Compiling[0m btls v0.5.6
+2026-11-18T14:22:12.3268162Z [1m[92m   Compiling[0m tokio-btls v0.5.6
+2026-11-18T14:22:12.4058628Z [1m[92m   Compiling[0m wreq v0.16.3
+2026-11-18T14:22:14.4772597Z [1m[92m   Compiling[0m wreq-util v0.2.1
+2026-11-18T14:22:17.8988488Z [1m[92m   Compiling[0m aether-core v8.0.0 (/home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager/rust/aether-core)
+2026-11-18T14:22:20.8560572Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 3m 05s
+2026-11-18T14:22:20.8975847Z [1m[92m     Running[0m unittests src/lib.rs (target/debug/build/aether-core/4dd4c4626a1d2719/out/aether_core-4dd4c4626a1d2719)
+2026-11-18T14:22:20.9002948Z 
+2026-11-18T14:22:20.9003444Z running 7 tests
+2026-11-18T14:22:20.9007280Z test tests::adaptive_bdp_worker_scaling_and_neighbor_absorption ... ok
+2026-11-18T14:22:20.9008942Z test tests::aethldg2_binary_ledger_roundtrip_and_crash_lease_rollback ... ok
+2026-11-18T14:22:20.9011012Z test tests::bounded_slab_pool_enforces_hard_16_slab_cap ... ok
+2026-11-18T14:22:20.9015018Z test tests::contiguous_sha256_handles_out_of_order_completion ... ok
+2026-11-18T14:22:20.9016148Z test tests::earliest_arrival_and_circuit_breaker_and_bisection ... ok
+2026-11-18T14:22:20.9019724Z test tests::rfc6266_mime_hls_dash_aria2_and_redaction ... ok
+2026-11-18T14:22:20.9020674Z test tests::telemetry_page_is_exact_4096_bytes ... ok
+2026-11-18T14:22:20.9021309Z 
+2026-11-18T14:22:20.9021894Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+2026-11-18T14:22:20.9022731Z 
+2026-11-18T14:22:20.9315630Z ##[group]Run gradle/actions/setup-gradle@v4
+2026-11-18T14:22:20.9315950Z with:
+2026-11-18T14:22:20.9316155Z   gradle-version: 9.3.1
+2026-11-18T14:22:20.9316384Z   cache-disabled: false
+2026-11-18T14:22:20.9316949Z   cache-read-only: false
+2026-11-18T14:22:20.9317192Z   cache-write-only: false
+2026-11-18T14:22:20.9317439Z   cache-overwrite-existing: false
+2026-11-18T14:22:20.9317702Z   cache-cleanup: on-success
+2026-11-18T14:22:20.9317990Z   gradle-home-cache-includes: caches
+notifications
+
+2026-11-18T14:22:20.9318312Z   add-job-summary: always
+2026-11-18T14:22:20.9318564Z   add-job-summary-as-pr-comment: never
+2026-11-18T14:22:20.9318855Z   dependency-graph: disabled
+2026-11-18T14:22:20.9319171Z   dependency-graph-report-dir: dependency-graph-reports
+2026-11-18T14:22:20.9319556Z   dependency-graph-continue-on-failure: true
+2026-11-18T14:22:20.9319858Z   build-scan-publish: false
+2026-11-18T14:22:20.9320114Z   validate-wrappers: true
+2026-11-18T14:22:20.9320399Z   allow-snapshot-wrappers: false
+2026-11-18T14:22:20.9320676Z   gradle-home-cache-strict-match: false
+2026-11-18T14:22:20.9320957Z   workflow-job-context: null
+2026-11-18T14:22:20.9323424Z   github-token: ***
+2026-11-18T14:22:20.9323641Z env:
+2026-11-18T14:22:20.9323947Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:22:20.9324444Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:22:20.9324904Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:22:20.9325248Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:22:20.9325486Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:22:20.9325737Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:22:20.9325950Z   CARGO_TERM_COLOR: always
+2026-11-18T14:22:20.9326173Z ##[endgroup]
+2026-11-18T14:22:21.4283806Z Merged default JDK locations into /home/runner/.m2/toolchains.xml
+2026-11-18T14:22:21.4284580Z Preparing cache for cleanup.
+2026-11-18T14:22:21.4285595Z ##[group]Restore Gradle state from cache
+2026-11-18T14:22:21.7015054Z Cache hit for restore-key: gradle-home-v1|Linux-X64|build-release[e9c439f435c93afb673c03e5253c864e]-7c5d81569e15be5fd3a1c047972a8fe17d1d415c
+2026-11-18T14:22:22.9724120Z Received 8388608 of 46219575 (18.1%), 8.0 MBs/sec
+2026-11-18T14:22:23.9726968Z Received 42025271 of 46219575 (90.9%), 20.0 MBs/sec
+2026-11-18T14:22:24.9727304Z Received 42025271 of 46219575 (90.9%), 13.4 MBs/sec
+2026-11-18T14:22:25.9735088Z Received 42025271 of 46219575 (90.9%), 10.0 MBs/sec
+2026-11-18T14:22:26.9743868Z Received 42025271 of 46219575 (90.9%), 8.0 MBs/sec
+2026-11-18T14:22:27.8839991Z Received 46219575 of 46219575 (100.0%), 7.5 MBs/sec
+2026-11-18T14:22:27.8842517Z Cache Size: ~44 MB (46219575 B)
+2026-11-18T14:22:27.9168160Z [command]/usr/bin/tar -xf /home/runner/work/_temp/8a18e680-91fc-45b2-ad29-67f1bedfe2fb/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:28.1636430Z Cache restored successfully
+2026-11-18T14:22:28.1669053Z Restored cache entry with key gradle-home-v1|Linux-X64|build-release[e9c439f435c93afb673c03e5253c864e]-7bb2b1c7a8d7933933b16f1446b9bc99f43e2725 to /home/runner/.gradle/caches,/home/runner/.gradle/notifications,/home/runner/.gradle/.setup-gradle in 6741ms
+2026-11-18T14:22:28.4305559Z Cache hit for: gradle-instrumented-jars-v1-96423f38801dd350e97218794d40e268
+2026-11-18T14:22:28.4314104Z Cache hit for: gradle-generated-gradle-jars-v1-cb4b032a7d08b9bf1e84e9eacaebcc29
+2026-11-18T14:22:28.4403086Z Cache hit for: gradle-transforms-v1-8762815209859226c7dc5639bb1d1a3c
+2026-11-18T14:22:28.4447568Z Cache hit for: gradle-kotlin-dsl-v1-c9be5fdf84e07817d77a279605efa6f5
+2026-11-18T14:22:28.4540859Z Cache hit for: gradle-dependencies-v1-50c6476d6c850c9e2fd98225b654e298
+2026-11-18T14:22:28.4593022Z Cache hit for: gradle-groovy-dsl-v1-2fb7cac525752652384b8ee3e5b13d20
+2026-11-18T14:22:29.0387988Z Received 99323 of 99323 (100.0%), 0.4 MBs/sec
+2026-11-18T14:22:29.0389300Z Cache Size: ~0 MB (99323 B)
+2026-11-18T14:22:29.0483459Z [command]/usr/bin/tar -xf /home/runner/work/_temp/86a2d0fb-d953-4456-bc75-ea645dcd6d51/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:29.0689956Z Cache restored successfully
+2026-11-18T14:22:29.0692543Z Restored cache entry with key gradle-groovy-dsl-v1-2fb7cac525752652384b8ee3e5b13d20 to /home/runner/.gradle/caches/*/groovy-dsl/*/ in 901ms
+2026-11-18T14:22:29.1182011Z Received 65328 of 65328 (100.0%), 0.1 MBs/sec
+2026-11-18T14:22:29.1183420Z Cache Size: ~0 MB (65328 B)
+2026-11-18T14:22:29.1220841Z [command]/usr/bin/tar -xf /home/runner/work/_temp/1b93ff1a-2cae-483b-abbe-cfd3b4c4b203/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:29.1358428Z Cache restored successfully
+2026-11-18T14:22:29.1361377Z Restored cache entry with key gradle-instrumented-jars-v1-96423f38801dd350e97218794d40e268 to /home/runner/.gradle/caches/jars-*/*/ in 969ms
+2026-11-18T14:22:29.1461355Z Received 89922 of 89922 (100.0%), 0.2 MBs/sec
+2026-11-18T14:22:29.1462262Z Cache Size: ~0 MB (89922 B)
+2026-11-18T14:22:29.1488461Z [command]/usr/bin/tar -xf /home/runner/work/_temp/80886f1c-8daa-439e-be37-709ca340a1f3/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:29.1864995Z Cache restored successfully
+2026-11-18T14:22:29.1872341Z Restored cache entry with key gradle-kotlin-dsl-v1-c9be5fdf84e07817d77a279605efa6f5 to /home/runner/.gradle/caches/*/kotlin-dsl/accessors/*/,/home/runner/.gradle/caches/*/kotlin-dsl/scripts/*/ in 1020ms
+2026-11-18T14:22:29.7248524Z Received 0 of 189340838 (0.0%), 0.0 MBs/sec
+2026-11-18T14:22:29.7708266Z Received 0 of 451492732 (0.0%), 0.0 MBs/sec
+2026-11-18T14:22:29.7841285Z Received 0 of 41993405 (0.0%), 0.0 MBs/sec
+2026-11-18T14:22:30.3440891Z Received 41993405 of 41993405 (100.0%), 25.5 MBs/sec
+2026-11-18T14:22:30.3447960Z Cache Size: ~40 MB (41993405 B)
+2026-11-18T14:22:30.5201854Z [command]/usr/bin/tar -xf /home/runner/work/_temp/34a522f2-33fa-41c8-b3fe-ae453d7aaca9/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:30.7731576Z Received 75497472 of 189340838 (39.9%), 35.3 MBs/sec
+2026-11-18T14:22:30.9227565Z Received 75497472 of 451492732 (16.7%), 33.1 MBs/sec
+2026-11-18T14:22:31.4513176Z Cache restored successfully
+2026-11-18T14:22:31.4552694Z Restored cache entry with key gradle-generated-gradle-jars-v1-cb4b032a7d08b9bf1e84e9eacaebcc29 to /home/runner/.gradle/caches/9.3.1/generated-gradle-jars/gradle-api-9.3.1.jar in 3289ms
+2026-11-18T14:22:31.7698014Z Received 134217728 of 189340838 (70.9%), 42.1 MBs/sec
+2026-11-18T14:22:31.9241294Z Received 138412032 of 451492732 (30.7%), 41.5 MBs/sec
+2026-11-18T14:22:32.1218088Z Received 189340838 of 189340838 (100.0%), 53.2 MBs/sec
+2026-11-18T14:22:32.1225132Z Cache Size: ~181 MB (189340838 B)
+2026-11-18T14:22:32.1948489Z [command]/usr/bin/tar -xf /home/runner/work/_temp/58c15645-4038-429f-bd5a-e29ebd11921a/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:32.9246825Z Received 239075328 of 451492732 (53.0%), 54.6 MBs/sec
+2026-11-18T14:22:33.9298444Z Received 322961408 of 451492732 (71.5%), 59.4 MBs/sec
+2026-11-18T14:22:34.9266427Z Received 398458880 of 451492732 (88.3%), 61.5 MBs/sec
+2026-11-18T14:22:35.9275426Z Received 443104124 of 451492732 (98.1%), 58.8 MBs/sec
+2026-11-18T14:22:36.0124168Z Received 451492732 of 451492732 (100.0%), 59.3 MBs/sec
+2026-11-18T14:22:36.0126976Z Cache Size: ~431 MB (451492732 B)
+2026-11-18T14:22:36.3529710Z [command]/usr/bin/tar -xf /home/runner/work/_temp/903165b1-d3d8-4a38-9eb8-f6d9ef9f54ff/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:37.7590171Z Cache restored successfully
+2026-11-18T14:22:37.9975977Z Restored cache entry with key gradle-transforms-v1-8762815209859226c7dc5639bb1d1a3c to /home/runner/.gradle/caches/transforms-4/*/,/home/runner/.gradle/caches/*/transforms/*/ in 9829ms
+2026-11-18T14:22:38.1344013Z Cache restored successfully
+2026-11-18T14:22:38.2529092Z Restored cache entry with key gradle-dependencies-v1-50c6476d6c850c9e2fd98225b654e298 to /home/runner/.gradle/caches/modules-*/files-*/*/*/*/* in 10085ms
+2026-11-18T14:22:38.4566341Z ##[endgroup]
+2026-11-18T14:22:38.5401507Z ##[group]All Gradle Wrapper jars are valid
+2026-11-18T14:22:38.5402912Z 
+2026-11-18T14:22:38.5403718Z ##[endgroup]
+2026-11-18T14:22:38.6658166Z ##[group]Provision Gradle 9.3.1
+2026-11-18T14:22:44.9717268Z Cache hit for: gradle-9.3.1
+2026-11-18T14:22:46.0527975Z Received 83886080 of 136943103 (61.3%), 79.8 MBs/sec
+2026-11-18T14:22:46.8597075Z Received 136943103 of 136943103 (100.0%), 72.0 MBs/sec
+2026-11-18T14:22:46.8599482Z Cache Size: ~131 MB (136943103 B)
+2026-11-18T14:22:46.8629562Z [command]/usr/bin/tar -xf /home/runner/work/_temp/6fa62014-c107-4284-9a98-5b518ce13d5d/cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --use-compress-program unzstd
+2026-11-18T14:22:47.1227018Z Cache restored successfully
+2026-11-18T14:22:47.1313408Z Restored Gradle distribution gradle-9.3.1 from cache to /home/runner/work/_temp/.gradle-actions/gradle-installations/downloads/gradle-9.3.1-bin.zip
+2026-11-18T14:22:47.1376819Z [command]/usr/bin/unzip -o -q /home/runner/work/_temp/.gradle-actions/gradle-installations/downloads/gradle-9.3.1-bin.zip
+2026-11-18T14:22:48.1478165Z Extracted Gradle 9.3.1 to /home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1
+2026-11-18T14:22:48.1480370Z Provisioned Gradle executable /home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1/bin/gradle
+2026-11-18T14:22:48.1482113Z ##[endgroup]
+2026-11-18T14:22:48.1924456Z ##[group]Run gradle :app:buildRustCore -PrequireRustBuild=true --stacktrace
+2026-11-18T14:22:48.1925181Z [36;1mgradle :app:buildRustCore -PrequireRustBuild=true --stacktrace[0m
+2026-11-18T14:22:48.1925805Z [36;1mls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so[0m
+2026-11-18T14:22:48.2013956Z shell: /usr/bin/bash -e {0}
+2026-11-18T14:22:48.2014326Z env:
+2026-11-18T14:22:48.2014780Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:22:48.2015491Z   JAVA_HOME_21_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64
+2026-11-18T14:22:48.2016165Z   ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+2026-11-18T14:22:48.2016760Z   CMAKE_GENERATOR: Ninja
+2026-11-18T14:22:48.2017112Z   CARGO_HOME: /home/runner/.cargo
+2026-11-18T14:22:48.2017476Z   CARGO_INCREMENTAL: 0
+2026-11-18T14:22:48.2017793Z   CARGO_TERM_COLOR: always
+2026-11-18T14:22:48.2018184Z   GRADLE_ACTION_ID: gradle/actions/setup-gradle
+2026-11-18T14:22:48.2018660Z   GRADLE_USER_HOME: /home/runner/.gradle
+2026-11-18T14:22:48.2019067Z   GRADLE_BUILD_ACTION_SETUP_COMPLETED: true
+2026-11-18T14:22:48.2019483Z   GRADLE_BUILD_ACTION_CACHE_RESTORED: true
+2026-11-18T14:22:48.2020089Z   DEVELOCITY_INJECTION_INIT_SCRIPT_NAME: gradle-actions.inject-develocity.init.gradle
+2026-11-18T14:22:48.2020753Z   DEVELOCITY_INJECTION_CUSTOM_VALUE: gradle-actions
+2026-11-18T14:22:48.2021199Z   GITHUB_DEPENDENCY_GRAPH_ENABLED: false
+2026-11-18T14:22:48.2021593Z   ANDROID_ABI: arm64-v8a
+2026-11-18T14:22:48.2021928Z   CARGO_NDK_ANDROID_ABI: arm64-v8a
+2026-11-18T14:22:48.2022607Z   CARGO_NDK_CMAKE_TOOLCHAIN_FILE: /usr/local/lib/android/sdk/ndk/27.2.12479018/build/cmake/android.toolchain.cmake
+2026-11-18T14:22:48.2023248Z ##[endgroup]
+2026-11-18T14:22:49.3618388Z Starting a Gradle Daemon (subsequent builds will be faster)
+2026-11-18T14:22:53.6604734Z Calculating task graph as no cached configuration is available for tasks: :app:buildRustCore
+2026-11-18T14:23:19.6578680Z 
+2026-11-18T14:23:19.6637944Z warning: Environment variable `ANDROID_NDK_HOME = "/usr/local/lib/android/sdk/ndk/27.2.12479018"` doesn't match `ANDROID_NDK_ROOT = "/usr/local/lib/android/sdk/ndk/27.3.13750724"`
+2026-11-18T14:23:19.6639439Z > Task :app:buildRustCore FAILED
+2026-11-18T14:23:19.6657449Z error: cargo-ndk panicked! Generating report...
+2026-11-18T14:23:19.6658134Z location: src/cli/mod.rs:523:40
+2026-11-18T14:23:19.6713424Z error: end of panic report. Please report the above to: <https://github.com/bbqsrc/cargo-ndk/issues>
+2026-11-18T14:23:19.6714403Z message: unknown package: 24
+2026-11-18T14:23:19.6771790Z args: ["/home/runner/.cargo/bin/cargo-ndk", "ndk", "-t", "arm64-v8a", "-p", "24", "-o", "/home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager/app/src/main/jniLibs", "build", "--release"]
+2026-11-18T14:23:19.6817523Z pwd: /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager/rust/aether-core
+2026-11-18T14:23:19.6881246Z env:
+2026-11-18T14:23:19.6943909Z   ACCEPT_EULA="Y"
+2026-11-18T14:23:19.6976150Z   ACTIONS_ORCHESTRATION_ID="92f8e57d-d7ca-8b8b-8e1f-800b91ba759d.build-release.__default"
+2026-11-18T14:23:19.7017271Z   ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE="/opt/actionarchivecache"
+2026-11-18T14:23:19.7087605Z   ACTIONS_RUNNER_RETURN_JOB_RESULT_FOR_HOSTED="1"
+2026-11-18T14:23:19.7097281Z   AGENT_TOOLSDIRECTORY="/opt/hostedtoolcache"
+2026-11-18T14:23:19.7137301Z   ANDROID_ABI="arm64-v8a"
+2026-11-18T14:23:19.7156352Z   ANDROID_HOME="/usr/local/lib/android/sdk"
+2026-11-18T14:23:19.7157528Z   ANDROID_NDK="/usr/local/lib/android/sdk/ndk/27.3.13750724"
+2026-11-18T14:23:19.7158544Z   ANDROID_NDK_HOME="/usr/local/lib/android/sdk/ndk/27.2.12479018"
+2026-11-18T14:23:19.7159616Z   ANDROID_NDK_LATEST_HOME="/usr/local/lib/android/sdk/ndk/30.0.16248370"
+2026-11-18T14:23:19.7160672Z   ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/27.3.13750724"
+2026-11-18T14:23:19.7161642Z   ANDROID_SDK_ROOT="/usr/local/lib/android/sdk"
+2026-11-18T14:23:19.7163133Z   ANT_HOME="/usr/share/ant"
+2026-11-18T14:23:19.7164149Z   AZURE_EXTENSION_DIR="/opt/az/azcliextensions"
+2026-11-18T14:23:19.7165009Z   BOOTSTRAP_HASKELL_NONINTERACTIVE="1"
+2026-11-18T14:23:19.7165992Z   CARGO="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo"
+2026-11-18T14:23:19.7167168Z   CARGO_HOME="/home/runner/.cargo"
+2026-11-18T14:23:19.7197600Z   CARGO_INCREMENTAL="0"
+2026-11-18T14:23:19.7198350Z   CARGO_NDK_ANDROID_ABI="arm64-v8a"
+2026-11-18T14:23:19.7218224Z   CARGO_NDK_CMAKE_TOOLCHAIN_FILE="/usr/local/lib/android/sdk/ndk/27.2.12479018/build/cmake/android.toolchain.cmake"
+2026-11-18T14:23:19.7237218Z   CARGO_TERM_COLOR="always"
+2026-11-18T14:23:19.7252282Z   CHROMEWEBDRIVER="/usr/local/share/chromedriver-linux64"
+2026-11-18T14:23:19.7257305Z   CHROME_BIN="/usr/bin/google-chrome"
+2026-11-18T14:23:19.7316463Z   CI="true"
+2026-11-18T14:23:19.7337093Z   CMAKE_GENERATOR="Ninja"
+2026-11-18T14:23:19.7368876Z   DEBIAN_FRONTEND="noninteractive"
+2026-11-18T14:23:19.7420103Z   DEVELOCITY_INJECTION_CUSTOM_VALUE="gradle-actions"
+2026-11-18T14:23:19.7462568Z   DEVELOCITY_INJECTION_INIT_SCRIPT_NAME="gradle-actions.inject-develocity.init.gradle"
+2026-11-18T14:23:19.7473287Z   DOTNET_MULTILEVEL_LOOKUP="0"
+2026-11-18T14:23:19.7485011Z   DOTNET_NOLOGO="1"
+2026-11-18T14:23:19.7518613Z   DOTNET_SKIP_FIRST_TIME_EXPERIENCE="1"
+2026-11-18T14:23:19.7549055Z   EDGEWEBDRIVER="/usr/local/share/edge_driver"
+2026-11-18T14:23:19.7561659Z   ENABLE_RUNNER_TRACING="true"
+2026-11-18T14:23:19.7563179Z   GECKOWEBDRIVER="/usr/local/share/gecko_driver"
+2026-11-18T14:23:19.7571628Z   GHCUP_INSTALL_BASE_PREFIX="/usr/local"
+2026-11-18T14:23:19.7572391Z   GITHUB_ACTION="__run_5"
+2026-11-18T14:23:19.7573329Z   GITHUB_ACTIONS="true"
+2026-11-18T14:23:19.7573983Z   GITHUB_ACTION_REF=""
+2026-11-18T14:23:19.7589417Z 
+2026-11-18T14:23:19.7637180Z FAILURE: Build failed with an exception.
+2026-11-18T14:23:19.7637882Z   GITHUB_ACTION_REPOSITORY=""
+2026-11-18T14:23:19.7677910Z 
+2026-11-18T14:23:19.7678202Z   GITHUB_ACTOR="niggetron"
+2026-11-18T14:23:19.7707651Z   GITHUB_ACTOR_ID="225940729"
+2026-11-18T14:23:19.7708300Z   GITHUB_API_URL="https://api.github.com"
+2026-11-18T14:23:19.7709416Z   GITHUB_ARTIFACTS="/home/runner/work/_temp/_runner_file_commands/artifacts_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.7711011Z   GITHUB_ARTIFACTS_LIST="/home/runner/work/_temp/_runner_file_commands/artifacts_list_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.7712130Z   GITHUB_BASE_REF=""
+2026-11-18T14:23:19.7712664Z   GITHUB_DEPENDENCY_GRAPH_ENABLED="false"
+2026-11-18T14:23:19.7713664Z   GITHUB_ENV="/home/runner/work/_temp/_runner_file_commands/set_env_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.7714658Z   GITHUB_EVENT_NAME="push"
+2026-11-18T14:23:19.7715382Z   GITHUB_EVENT_PATH="/home/runner/work/_temp/_github_workflow/event.json"
+2026-11-18T14:23:19.7716280Z   GITHUB_GRAPHQL_URL="https://api.github.com/graphql"
+2026-11-18T14:23:19.7717146Z   GITHUB_HEAD_REF=""
+2026-11-18T14:23:19.7717681Z   GITHUB_JOB="build-release"
+2026-11-18T14:23:19.7718681Z   GITHUB_OUTPUT="/home/runner/work/_temp/_runner_file_commands/set_output_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.7720121Z   GITHUB_PATH="/home/runner/work/_temp/_runner_file_commands/add_path_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.7721142Z   GITHUB_REF="refs/heads/main"
+2026-11-18T14:23:19.7721709Z   GITHUB_REF_NAME="main"
+2026-11-18T14:23:19.7722255Z   GITHUB_REF_PROTECTED="false"
+2026-11-18T14:23:19.7722813Z   GITHUB_REF_TYPE="branch"
+2026-11-18T14:23:19.7723487Z   GITHUB_REPOSITORY="niggetron/Switch-fetch-download-manager"
+2026-11-18T14:23:19.7724222Z   GITHUB_REPOSITORY_ID="1462373174"
+2026-11-18T14:23:19.7724829Z   GITHUB_REPOSITORY_OWNER="niggetron"
+2026-11-18T14:23:19.7725444Z   GITHUB_REPOSITORY_OWNER_ID="225940729"
+2026-11-18T14:23:19.7726084Z   GITHUB_RETENTION_DAYS="90"
+2026-11-18T14:23:19.7768148Z   GITHUB_RUN_ATTEMPT="1"
+2026-11-18T14:23:19.7768757Z   GITHUB_RUN_ID="44322732239"
+2026-11-18T14:23:19.7770061Z * What went wrong:
+2026-11-18T14:23:19.7770922Z Execution failed for task ':app:buildRustCore'.
+2026-11-18T14:23:19.7771771Z > Process 'command 'cargo'' finished with non-zero exit value 101
+2026-11-18T14:23:19.7772317Z 
+2026-11-18T14:23:19.7772503Z * Try:
+2026-11-18T14:23:19.7773049Z > Run with --info or --debug option to get more log output.
+2026-11-18T14:23:19.7773945Z > Run with --scan to get full insights from a Build Scan (powered by Develocity).
+2026-11-18T14:23:19.7774777Z > Get more help at https://help.gradle.org.
+2026-11-18T14:23:19.7775186Z 
+2026-11-18T14:23:19.7775740Z * Exception is:
+2026-11-18T14:23:19.7776719Z org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:buildRustCore'.
+2026-11-18T14:23:19.7778403Z 	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.lambda$executeIfValid$1(ExecuteActionsTaskExecuter.java:135)
+2026-11-18T14:23:19.7779886Z 	at org.gradle.internal.Try$Failure.ifSuccessfulOrElse(Try.java:288)
+2026-11-18T14:23:19.7780904Z 	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.executeIfValid(ExecuteActionsTaskExecuter.java:133)
+2026-11-18T14:23:19.7781946Z 	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.execute(ExecuteActionsTaskExecuter.java:121)
+2026-11-18T14:23:19.7783049Z 	at org.gradle.api.internal.tasks.execution.ProblemsTaskPathTrackingTaskExecuter.execute(ProblemsTaskPathTrackingTaskExecuter.java:41)
+2026-11-18T14:23:19.7784165Z 	at org.gradle.api.internal.tasks.execution.FinalizePropertiesTaskExecuter.execute(FinalizePropertiesTaskExecuter.java:46)
+2026-11-18T14:23:19.7785239Z 	at org.gradle.api.internal.tasks.execution.ResolveTaskExecutionModeExecuter.execute(ResolveTaskExecutionModeExecuter.java:51)
+2026-11-18T14:23:19.7786284Z 	at org.gradle.api.internal.tasks.execution.SkipTaskWithNoActionsExecuter.execute(SkipTaskWithNoActionsExecuter.java:57)
+2026-11-18T14:23:19.7808332Z 	at org.gradle.api.internal.tasks.execution.SkipOnlyIfTaskExecuter.execute(SkipOnlyIfTaskExecuter.java:74)
+2026-11-18T14:23:19.7810066Z 	at org.gradle.api.internal.tasks.execution.CatchExceptionTaskExecuter.execute(CatchExceptionTaskExecuter.java:36)
+2026-11-18T14:23:19.7811884Z 	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.executeTask(EventFiringTaskExecuter.java:77)
+2026-11-18T14:23:19.7813577Z 	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.call(EventFiringTaskExecuter.java:55)
+2026-11-18T14:23:19.7815106Z 	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter$1.call(EventFiringTaskExecuter.java:52)
+2026-11-18T14:23:19.7816870Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:209)
+2026-11-18T14:23:19.7818706Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:204)
+2026-11-18T14:23:19.7820310Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:66)
+2026-11-18T14:23:19.7821784Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7823291Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:166)
+2026-11-18T14:23:19.7824778Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7826320Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:53)
+2026-11-18T14:23:19.7848108Z 	at org.gradle.api.internal.tasks.execution.EventFiringTaskExecuter.execute(EventFiringTaskExecuter.java:52)
+2026-11-18T14:23:19.7849659Z 	at org.gradle.execution.plan.DefaultNodeExecutor.executeLocalTaskNode(DefaultNodeExecutor.java:55)
+2026-11-18T14:23:19.7850985Z 	at org.gradle.execution.plan.DefaultNodeExecutor.execute(DefaultNodeExecutor.java:34)
+2026-11-18T14:23:19.7852938Z 	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$InvokeNodeExecutorsAction.execute(DefaultTaskExecutionGraph.java:355)
+2026-11-18T14:23:19.7855000Z 	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$InvokeNodeExecutorsAction.execute(DefaultTaskExecutionGraph.java:343)
+2026-11-18T14:23:19.7857232Z 	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.lambda$execute$0(DefaultTaskExecutionGraph.java:339)
+2026-11-18T14:23:19.7859059Z 	at org.gradle.internal.operations.CurrentBuildOperationRef.with(CurrentBuildOperationRef.java:84)
+2026-11-18T14:23:19.7860794Z 	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.execute(DefaultTaskExecutionGraph.java:339)
+2026-11-18T14:23:19.7862856Z 	at org.gradle.execution.taskgraph.DefaultTaskExecutionGraph$BuildOperationAwareExecutionAction.execute(DefaultTaskExecutionGraph.java:328)
+2026-11-18T14:23:19.7864692Z 	at org.gradle.execution.plan.DefaultPlanExecutor$ExecutorWorker.execute(DefaultPlanExecutor.java:459)
+2026-11-18T14:23:19.7866161Z 	at org.gradle.execution.plan.DefaultPlanExecutor$ExecutorWorker.run(DefaultPlanExecutor.java:376)
+2026-11-18T14:23:19.7887928Z 	at org.gradle.internal.concurrent.ExecutorPolicy$CatchAndRecordFailures.onExecute(ExecutorPolicy.java:64)
+2026-11-18T14:23:19.7889432Z 	at org.gradle.internal.concurrent.AbstractManagedExecutor$1.run(AbstractManagedExecutor.java:47)
+2026-11-18T14:23:19.7890958Z Caused by: org.gradle.process.ProcessExecutionException: Process 'command 'cargo'' finished with non-zero exit value 101
+2026-11-18T14:23:19.7892594Z 	at org.gradle.process.internal.DefaultExecHandle$ExecResultImpl.assertNormalExitValue(DefaultExecHandle.java:454)
+2026-11-18T14:23:19.7893989Z 	at org.gradle.process.internal.DefaultExecAction.execute(DefaultExecAction.java:49)
+2026-11-18T14:23:19.7895071Z 	at org.gradle.api.tasks.AbstractExecTask.exec(AbstractExecTask.java:68)
+2026-11-18T14:23:19.7896106Z 	at org.gradle.internal.reflect.JavaMethod.invoke(JavaMethod.java:125)
+2026-11-18T14:23:19.7897608Z 	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.doExecute(StandardTaskAction.java:58)
+2026-11-18T14:23:19.7899182Z 	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.execute(StandardTaskAction.java:51)
+2026-11-18T14:23:19.7900994Z 	at org.gradle.api.internal.project.taskfactory.StandardTaskAction.execute(StandardTaskAction.java:29)
+2026-11-18T14:23:19.7902327Z 	at org.gradle.api.internal.tasks.execution.TaskExecution$3.run(TaskExecution.java:259)
+2026-11-18T14:23:19.7903726Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$1.execute(DefaultBuildOperationRunner.java:29)
+2026-11-18T14:23:19.7905398Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$1.execute(DefaultBuildOperationRunner.java:26)
+2026-11-18T14:23:19.7927250Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:66)
+2026-11-18T14:23:19.7928885Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7930526Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:166)
+2026-11-18T14:23:19.7932161Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7933761Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.run(DefaultBuildOperationRunner.java:47)
+2026-11-18T14:23:19.7935257Z 	at org.gradle.api.internal.tasks.execution.TaskExecution.executeAction(TaskExecution.java:244)
+2026-11-18T14:23:19.7936818Z 	at org.gradle.api.internal.tasks.execution.TaskExecution.executeActions(TaskExecution.java:227)
+2026-11-18T14:23:19.7938404Z 	at org.gradle.api.internal.tasks.execution.TaskExecution.executeWithPreviousOutputFiles(TaskExecution.java:210)
+2026-11-18T14:23:19.7939977Z 	at org.gradle.api.internal.tasks.execution.TaskExecution.execute(TaskExecution.java:176)
+2026-11-18T14:23:19.7941295Z 	at org.gradle.internal.execution.steps.ExecuteStep.executeInternal(ExecuteStep.java:110)
+2026-11-18T14:23:19.7943053Z 	at org.gradle.internal.execution.steps.ExecuteStep.access$000(ExecuteStep.java:47)
+2026-11-18T14:23:19.7944223Z 	at org.gradle.internal.execution.steps.ExecuteStep$1.call(ExecuteStep.java:64)
+2026-11-18T14:23:19.7945286Z 	at org.gradle.internal.execution.steps.ExecuteStep$1.call(ExecuteStep.java:61)
+2026-11-18T14:23:19.7965119Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:209)
+2026-11-18T14:23:19.7966886Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$CallableBuildOperationWorker.execute(DefaultBuildOperationRunner.java:204)
+2026-11-18T14:23:19.7968451Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:66)
+2026-11-18T14:23:19.7969911Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner$2.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7989580Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:166)
+2026-11-18T14:23:19.7991250Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.execute(DefaultBuildOperationRunner.java:59)
+2026-11-18T14:23:19.7992730Z 	at org.gradle.internal.operations.DefaultBuildOperationRunner.call(DefaultBuildOperationRunner.java:53)
+2026-11-18T14:23:19.7994142Z 	at org.gradle.internal.execution.steps.ExecuteStep.execute(ExecuteStep.java:61)
+2026-11-18T14:23:19.7995307Z 	at org.gradle.internal.execution.steps.ExecuteStep.execute(ExecuteStep.java:47)
+2026-11-18T14:23:19.7997066Z 	at org.gradle.internal.execution.steps.CancelExecutionStep.execute(CancelExecutionStep.java:42)
+2026-11-18T14:23:19.7998543Z 	at org.gradle.internal.execution.steps.TimeoutStep.executeWithoutTimeout(TimeoutStep.java:75)
+2026-11-18T14:23:19.7999854Z 	at org.gradle.internal.execution.steps.TimeoutStep.execute(TimeoutStep.java:55)
+2026-11-18T14:23:19.8001248Z 	at org.gradle.internal.execution.steps.PreCreateOutputParentsStep.execute(PreCreateOutputParentsStep.java:51)
+2026-11-18T14:23:19.8002850Z 	at org.gradle.internal.execution.steps.PreCreateOutputParentsStep.execute(PreCreateOutputParentsStep.java:29)
+2026-11-18T14:23:19.8004481Z 	at org.gradle.internal.execution.steps.RemovePreviousOutputsStep.executeMutable(RemovePreviousOutputsStep.java:70)
+2026-11-18T14:23:19.8006229Z 	at org.gradle.internal.execution.steps.RemovePreviousOutputsStep.executeMutable(RemovePreviousOutputsStep.java:40)
+2026-11-18T14:23:19.8008448Z 	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:25)
+2026-11-18T14:23:19.8009842Z 	at org.gradle.internal.execution.steps.BroadcastChangingOutputsStep.execute(BroadcastChangingOutputsStep.java:62)
+2026-11-18T14:23:19.8011795Z 	at org.gradle.internal.execution.steps.BroadcastChangingOutputsStep.execute(BroadcastChangingOutputsStep.java:27)
+2026-11-18T14:23:19.8013745Z 	at org.gradle.internal.execution.steps.CaptureOutputsAfterExecutionStep.execute(CaptureOutputsAfterExecutionStep.java:69)
+2026-11-18T14:23:19.8015864Z 	at org.gradle.internal.execution.steps.CaptureOutputsAfterExecutionStep.execute(CaptureOutputsAfterExecutionStep.java:46)
+2026-11-18T14:23:19.8017900Z 	at org.gradle.internal.execution.steps.ResolveInputChangesStep.executeMutable(ResolveInputChangesStep.java:39)
+2026-11-18T14:23:19.8019412Z 	at org.gradle.internal.execution.steps.ResolveInputChangesStep.executeMutable(ResolveInputChangesStep.java:28)
+2026-11-18T14:23:19.8020709Z 	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:25)
+2026-11-18T14:23:19.8021889Z 	at org.gradle.internal.execution.steps.BuildCacheStep.executeWithoutCache(BuildCacheStep.java:192)
+2026-11-18T14:23:19.8023160Z 	at org.gradle.internal.execution.steps.BuildCacheStep.lambda$execute$1(BuildCacheStep.java:76)
+2026-11-18T14:23:19.8024113Z 	at org.gradle.internal.Either$Right.fold(Either.java:176)
+2026-11-18T14:23:19.8024986Z 	at org.gradle.internal.execution.caching.CachingState.fold(CachingState.java:62)
+2026-11-18T14:23:19.8048558Z 	at org.gradle.internal.execution.steps.BuildCacheStep.execute(BuildCacheStep.java:74)
+2026-11-18T14:23:19.8049675Z 	at org.gradle.internal.execution.steps.BuildCacheStep.execute(BuildCacheStep.java:49)
+2026-11-18T14:23:19.8050894Z 	at org.gradle.internal.execution.steps.StoreExecutionStateStep.execute(StoreExecutionStateStep.java:46)
+2026-11-18T14:23:19.8052235Z 	at org.gradle.internal.execution.steps.StoreExecutionStateStep.execute(StoreExecutionStateStep.java:35)
+2026-11-18T14:23:19.8053524Z 	at org.gradle.internal.execution.steps.SkipUpToDateStep.executeBecause(SkipUpToDateStep.java:75)
+2026-11-18T14:23:19.8054869Z 	at org.gradle.internal.execution.steps.SkipUpToDateStep.lambda$execute$2(SkipUpToDateStep.java:53)
+2026-11-18T14:23:19.8056165Z 	at org.gradle.internal.execution.steps.SkipUpToDateStep.execute(SkipUpToDateStep.java:53)
+2026-11-18T14:23:19.8073041Z 	at org.gradle.internal.execution.steps.SkipUpToDateStep.execute(SkipUpToDateStep.java:35)
+2026-11-18T14:23:19.8075017Z 	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsFinishedStep.execute(MarkSnapshottingInputsFinishedStep.java:37)
+2026-11-18T14:23:19.8077455Z 	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsFinishedStep.execute(MarkSnapshottingInputsFinishedStep.java:27)
+2026-11-18T14:23:19.8079609Z 	at org.gradle.internal.execution.steps.ResolveIncrementalCachingStateStep.executeDelegate(ResolveIncrementalCachingStateStep.java:49)
+2026-11-18T14:23:19.8081615Z 	at org.gradle.internal.execution.steps.ResolveIncrementalCachingStateStep.executeDelegate(ResolveIncrementalCachingStateStep.java:27)
+2026-11-18T14:23:19.8083375Z 	at org.gradle.internal.execution.steps.AbstractResolveCachingStateStep.execute(AbstractResolveCachingStateStep.java:71)
+2026-11-18T14:23:19.8085117Z 	at org.gradle.internal.execution.steps.AbstractResolveCachingStateStep.execute(AbstractResolveCachingStateStep.java:39)
+2026-11-18T14:23:19.8102969Z 	at org.gradle.internal.execution.steps.ResolveChangesStep.executeMutable(ResolveChangesStep.java:63)
+2026-11-18T14:23:19.8104673Z 	at org.gradle.internal.execution.steps.ResolveChangesStep.executeMutable(ResolveChangesStep.java:34)
+2026-11-18T14:23:19.8106111Z 	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:25)
+2026-11-18T14:23:19.8107562Z 	at org.gradle.internal.execution.steps.ValidateStep.execute(ValidateStep.java:64)
+2026-11-18T14:23:19.8118119Z 	at org.gradle.internal.execution.steps.ValidateStep.execute(ValidateStep.java:42)
+2026-11-18T14:23:19.8119783Z 	at org.gradle.internal.execution.steps.AbstractCaptureStateBeforeExecutionStep.execute(AbstractCaptureStateBeforeExecutionStep.java:77)
+2026-11-18T14:23:19.8121925Z 	at org.gradle.internal.execution.steps.AbstractCaptureStateBeforeExecutionStep.execute(AbstractCaptureStateBeforeExecutionStep.java:46)
+2026-11-18T14:23:19.8123958Z 	at org.gradle.internal.execution.steps.AbstractSkipEmptyWorkStep.executeWithNonEmptySources(AbstractSkipEmptyWorkStep.java:133)
+2026-11-18T14:23:19.8125645Z 	at org.gradle.internal.execution.steps.AbstractSkipEmptyWorkStep.execute(AbstractSkipEmptyWorkStep.java:59)
+2026-11-18T14:23:19.8187698Z 	at org.gradle.internal.execution.steps.AbstractSkipEmptyWorkStep.execute(AbstractSkipEmptyWorkStep.java:36)
+2026-11-18T14:23:19.8189583Z 	at org.gradle.internal.execution.steps.legacy.MarkSnapshottingInputsStartedStep.execute(MarkSnapshottingInputsStartedStep.java:38)
+2026-11-18T14:23:19.8191452Z 	at org.gradle.internal.execution.steps.LoadPreviousExecutionStateStep.execute(LoadPreviousExecutionStateStep.java:36)
+2026-11-18T14:23:19.8193175Z 	at org.gradle.internal.execution.steps.LoadPreviousExecutionStateStep.execute(LoadPreviousExecutionStateStep.java:23)
+2026-11-18T14:23:19.8194808Z 	at org.gradle.internal.execution.steps.HandleStaleOutputsStep.executeMutable(HandleStaleOutputsStep.java:77)
+2026-11-18T14:23:19.8196376Z 	at org.gradle.internal.execution.steps.HandleStaleOutputsStep.executeMutable(HandleStaleOutputsStep.java:43)
+2026-11-18T14:23:19.8198273Z 	at org.gradle.internal.execution.steps.MutableStep.execute(MutableStep.java:25)
+2026-11-18T14:23:19.8199772Z 	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.lambda$execute$0(AssignMutableWorkspaceStep.java:35)
+2026-11-18T14:23:19.8201166Z 	at org.gradle.api.internal.tasks.execution.TaskExecution$4.withWorkspace(TaskExecution.java:305)
+2026-11-18T14:23:19.8202522Z 	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.execute(AssignMutableWorkspaceStep.java:31)
+2026-11-18T14:23:19.8203997Z 	at org.gradle.internal.execution.steps.AssignMutableWorkspaceStep.execute(AssignMutableWorkspaceStep.java:22)
+2026-11-18T14:23:19.8205385Z 	at org.gradle.internal.execution.steps.ChoosePipelineStep.execute(ChoosePipelineStep.java:40)
+2026-11-18T14:23:19.8236903Z 	at org.gradle.internal.execution.steps.ChoosePipelineStep.execute(ChoosePipelineStep.java:23)
+2026-11-18T14:23:19.8238723Z 	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.lambda$execute$2(ExecuteWorkBuildOperationFiringStep.java:67)
+2026-11-18T14:23:19.8240791Z 	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.execute(ExecuteWorkBuildOperationFiringStep.java:67)
+2026-11-18T14:23:19.8242790Z 	at org.gradle.internal.execution.steps.ExecuteWorkBuildOperationFiringStep.execute(ExecuteWorkBuildOperationFiringStep.java:39)
+2026-11-18T14:23:19.8244515Z 	at org.gradle.internal.execution.steps.IdentityCacheStep.execute(IdentityCacheStep.java:46)
+2026-11-18T14:23:19.8245857Z 	at org.gradle.internal.execution.steps.IdentityCacheStep.execute(IdentityCacheStep.java:34)
+2026-11-18T14:23:19.8247286Z 	at org.gradle.internal.execution.steps.IdentifyStep.execute(IdentifyStep.java:44)
+2026-11-18T14:23:19.8248476Z 	at org.gradle.internal.execution.steps.IdentifyStep.execute(IdentifyStep.java:31)
+2026-11-18T14:23:19.8249809Z 	at org.gradle.internal.execution.impl.DefaultExecutionEngine$1.execute(DefaultExecutionEngine.java:68)
+2026-11-18T14:23:19.8251494Z 	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.executeIfValid(ExecuteActionsTaskExecuter.java:132)
+2026-11-18T14:23:19.8252687Z 	... 30 more
+2026-11-18T14:23:19.8306853Z 
+2026-11-18T14:23:19.8306869Z 
+2026-11-18T14:23:19.8307267Z BUILD FAILED in 31s
+2026-11-18T14:23:19.8307760Z   GITHUB_RUN_NUMBER="11"
+2026-11-18T14:23:19.8308294Z   GITHUB_SERVER_URL="https://github.com"
+2026-11-18T14:23:19.8308962Z   GITHUB_SHA="7bb2b1c7a8d7933933b16f1446b9bc99f43e2725"
+2026-11-18T14:23:19.8309970Z   GITHUB_STATE="/home/runner/work/_temp/_runner_file_commands/save_state_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.8311397Z   GITHUB_STEP_SUMMARY="/home/runner/work/_temp/_runner_file_commands/step_summary_9e020acf-63ad-4e56-91d1-95b2a8dfa45e"
+2026-11-18T14:23:19.8312405Z   GITHUB_TRIGGERING_ACTOR="niggetron"
+2026-11-18T14:23:19.8312999Z   GITHUB_WORKFLOW="Build & Publish Release APK"
+2026-11-18T14:23:19.8314047Z   GITHUB_WORKFLOW_REF="niggetron/Switch-fetch-download-manager/.github/workflows/build-release.yml@refs/heads/main"
+2026-11-18T14:23:19.8315349Z   GITHUB_WORKFLOW_SHA="7bb2b1c7a8d7933933b16f1446b9bc99f43e2725"
+2026-11-18T14:23:19.8316433Z   GITHUB_WORKSPACE="/home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager"
+2026-11-18T14:23:19.8317603Z   GOROOT_1_24_X64="/opt/hostedtoolcache/go/1.24.13/x64"
+2026-11-18T14:23:19.8318262Z   GOROOT_1_25_X64="/opt/hostedtoolcache/go/1.25.14/x64"
+2026-11-18T14:23:19.8318918Z   GOROOT_1_26_X64="/opt/hostedtoolcache/go/1.26.11/x64"
+2026-11-18T14:23:19.8319566Z   GRADLE_ACTION_ID="gradle/actions/setup-gradle"
+2026-11-18T14:23:19.8320155Z   GRADLE_BUILD_ACTION_CACHE_RESTORED="true"
+2026-11-18T14:23:19.8320731Z   GRADLE_BUILD_ACTION_SETUP_COMPLETED="true"
+2026-11-18T14:23:19.8321292Z   GRADLE_HOME="/usr/share/gradle-9.9.1"
+2026-11-18T14:23:19.8321853Z   GRADLE_USER_HOME="/home/runner/.gradle"
+2026-11-18T14:23:19.8322408Z   HCA_CLOUD_PROVIDER="azure"
+2026-11-18T14:23:19.8322903Z   HOME="/home/runner"
+2026-11-18T14:23:19.8323362Z   HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS="3650"
+2026-11-18T14:23:19.8324382Z   HOMEBREW_NO_AUTO_UPDATE="1"
+2026-11-18T14:23:19.8325123Z   INVOCATION_ID="ca3bc21484fc4fefaf9d0fb712314bf1"
+2026-11-18T14:23:19.8325733Z   ImageOS="ubuntu26"
+2026-11-18T14:23:19.8326167Z   ImageVersion="20261111.196.1"
+2026-11-18T14:23:19.8367287Z   JAVA_HOME="/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64"
+2026-11-18T14:23:19.8368196Z   JAVA_HOME_11_X64="/usr/lib/jvm/temurin-11-jdk-amd64"
+2026-11-18T14:23:19.8368918Z   JAVA_HOME_17_X64="/usr/lib/jvm/temurin-17-jdk-amd64"
+2026-11-18T14:23:19.8369794Z   JAVA_HOME_21_X64="/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64"
+2026-11-18T14:23:19.8370710Z   JAVA_HOME_25_X64="/usr/lib/jvm/temurin-25-jdk-amd64"
+2026-11-18T14:23:19.8371380Z   JOURNAL_STREAM="10:13808"
+2026-11-18T14:23:19.8371905Z   LANG="C.UTF-8"
+2026-11-18T14:23:19.8372751Z   LD_LIBRARY_PATH="/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib"
+2026-11-18T14:23:19.8373657Z   LOGNAME="runner"
+2026-11-18T14:23:19.8374542Z   MEMORY_PRESSURE_WATCH="/sys/fs/cgroup/system.slice/hosted-compute-agent.service/memory.pressure"
+2026-11-18T14:23:19.8375697Z   MEMORY_PRESSURE_WRITE="c29tZSAyMDAwMDAgMjAwMDAwMAA="
+2026-11-18T14:23:19.8376414Z   NVM_DIR="/home/runner/.nvm"
+2026-11-18T14:23:19.8379498Z   PATH="/home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1/bin:/home/runner/.cargo/bin:/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/21.0.13-9/x64/bin:/snap/bin:/home/runner/.local/bin:/opt/pipx_bin:/home/runner/.cargo/bin:/home/runner/.config/composer/vendor/bin:/usr/local/.ghcup/bin:/home/runner/.dotnet/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+2026-11-18T14:23:19.8382450Z   PIPX_BIN_DIR="/opt/pipx_bin"
+2026-11-18T14:23:19.8382939Z   PIPX_HOME="/opt/pipx"
+2026-11-18T14:23:19.8383512Z   POWERSHELL_DISTRIBUTION_CHANNEL="GitHub-Actions-Linux"
+2026-11-18T14:23:19.8384932Z   PSModulePath="/root/.local/share/powershell/Modules:/usr/local/share/powershell/Modules:/opt/microsoft/powershell/7/Modules:/usr/share/az_15.6.1"
+2026-11-18T14:23:19.8427085Z   ***
+2026-11-18T14:23:19.8427734Z   RUNNER_ARCH="X64"
+2026-11-18T14:23:19.8428224Z   RUNNER_ENVIRONMENT="github-hosted"
+2026-11-18T14:23:19.8428838Z   RUNNER_NAME="GitHub Actions 1000000188"
+2026-11-18T14:23:19.8429419Z   RUNNER_OS="Linux"
+2026-11-18T14:23:19.8429903Z   RUNNER_TEMP="/home/runner/work/_temp"
+2026-11-18T14:23:19.8430486Z   RUNNER_TOOL_CACHE="/opt/hostedtoolcache"
+2026-11-18T14:23:19.8431197Z   RUNNER_TRACKING_ID="github_ca86412b-85fc-4a04-8f2e-38682322886c"
+2026-11-18T14:23:19.8432061Z   RUNNER_WORKSPACE="/home/runner/work/Switch-fetch-download-manager"
+2026-11-18T14:23:19.8432793Z   RUSTUP_HOME="/home/runner/.rustup"
+2026-11-18T14:23:19.8433395Z   RUSTUP_TOOLCHAIN="stable-x86_64-unknown-linux-gnu"
+2026-11-18T14:23:19.8434020Z   RUSTUP_TOOLCHAIN_SOURCE="default"
+2026-11-18T14:23:19.8434542Z   RUST_RECURSION_COUNT="1"
+2026-11-18T14:23:19.8435135Z   SELENIUM_JAR_PATH="/usr/share/java/selenium-server.jar"
+2026-11-18T14:23:19.8435742Z   SGX_AESM_ADDR="1"
+2026-11-18T14:23:19.8436117Z   SHELL="/bin/bash"
+2026-11-18T14:23:19.8436499Z   SHLVL="1"
+2026-11-18T14:23:19.8437072Z   SSL_CERT_DIR="/usr/lib/ssl/certs"
+2026-11-18T14:23:19.8437650Z   SSL_CERT_FILE="/usr/lib/ssl/cert.pem"
+2026-11-18T14:23:19.8438193Z   SWIFT_PATH="/usr/share/swift/usr/bin"
+2026-11-18T14:23:19.8438722Z   SYSTEMD_EXEC_PID="1940"
+2026-11-18T14:23:19.8439163Z   USER="runner"
+2026-11-18T14:23:19.8439601Z   USE_BAZEL_FALLBACK_VERSION="silent:"
+2026-11-18T14:23:19.8440195Z   VCPKG_INSTALLATION_ROOT="/usr/local/share/vcpkg"
+2026-11-18T14:23:19.8440797Z   XDG_CONFIG_HOME="/home/runner/.config"
+2026-11-18T14:23:19.8441348Z   XDG_RUNTIME_DIR="/run/user/1001"
+2026-11-18T14:23:19.8442219Z   _="/home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1/bin/gradle"
+2026-11-18T14:23:19.8443572Z gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_5-1795011775297.json
+2026-11-18T14:23:19.8444580Z 1 actionable task: 1 executed
+2026-11-18T14:23:19.8445418Z Configuration cache entry stored.
+2026-11-18T14:23:20.3371433Z ##[error]Process completed with exit code 1.
+2026-11-18T14:23:20.3551553Z Post job cleanup.
+2026-11-18T14:23:20.6313347Z In post-action step
+2026-11-18T14:23:20.6328246Z ##[group]Stopping Gradle daemons
+2026-11-18T14:23:20.6329651Z Stopping Gradle daemons for /home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1
+2026-11-18T14:23:20.6347044Z [command]/home/runner/work/_temp/.gradle-actions/gradle-installations/installs/gradle-9.3.1/bin/gradle --stop
+2026-11-18T14:23:21.7877551Z Stopping Daemon(s)
+2026-11-18T14:23:21.7898404Z 1 Daemon stopped
+2026-11-18T14:23:21.8151708Z ##[endgroup]
+2026-11-18T14:23:21.8167350Z Not performing cache-cleanup due to build failure
+2026-11-18T14:23:21.8188330Z ##[group]Caching Gradle state
+2026-11-18T14:23:21.8490360Z Not saving configuration-cache state, as no encryption key was provided
+2026-11-18T14:23:22.5867974Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --files-from manifest.txt --use-compress-program zstdmt
+2026-11-18T14:23:23.9657637Z Sent 131072 of 154458 (84.9%), 0.1 MBs/sec
+2026-11-18T14:23:24.2817135Z Sent 154458 of 154458 (100.0%), 0.1 MBs/sec
+2026-11-18T14:23:24.5711186Z Saved cache entry with key gradle-kotlin-dsl-v1-fbfb4490f24abc28a0a34df591d411ab from /home/runner/.gradle/caches/*/kotlin-dsl/accessors/*/,/home/runner/.gradle/caches/*/kotlin-dsl/scripts/*/ in 2048ms
+2026-11-18T14:23:24.6408505Z [command]/usr/bin/tar --posix -cf cache.tzst --exclude cache.tzst -P -C /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager --files-from manifest.txt --use-compress-program zstdmt
+2026-11-18T14:23:26.1532210Z Sent 20709376 of 46385254 (44.6%), 19.8 MBs/sec
+2026-11-18T14:23:26.7037934Z Sent 46385254 of 46385254 (100.0%), 28.6 MBs/sec
+2026-11-18T14:23:27.0289061Z Saved cache entry with key gradle-home-v1|Linux-X64|build-release[e9c439f435c93afb673c03e5253c864e]-7bb2b1c7a8d7933933b16f1446b9bc99f43e2725 from /home/runner/.gradle/caches,/home/runner/.gradle/notifications,/home/runner/.gradle/.setup-gradle in 2400ms
+2026-11-18T14:23:27.0292073Z ##[endgroup]
+2026-11-18T14:23:27.0301960Z Generating Job Summary
+2026-11-18T14:23:27.0311953Z Completed post-action step
+2026-11-18T14:23:27.0580020Z Post job cleanup.
+2026-11-18T14:23:27.2202213Z (node:7620) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-11-18T14:23:27.2204024Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-11-18T14:23:27.2527896Z Post job cleanup.
+2026-11-18T14:23:27.3677849Z [command]/usr/bin/git version
+2026-11-18T14:23:27.3755136Z git version 2.56.1
+2026-11-18T14:23:27.3858076Z Temporarily overriding HOME='/home/runner/work/_temp/38eda745-ec9e-41b2-8410-27a6b980cca5' before making global git config changes
+2026-11-18T14:23:27.3859868Z Adding repository directory to the temporary git global config as a safe directory
+2026-11-18T14:23:27.3885405Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/Switch-fetch-download-manager/Switch-fetch-download-manager
+2026-11-18T14:23:27.3938250Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-11-18T14:23:27.3998107Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-11-18T14:23:27.4445896Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-11-18T14:23:27.4501086Z http.https://github.com/.extraheader
+2026-11-18T14:23:27.4536865Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-11-18T14:23:27.4643771Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-11-18T14:23:27.5371582Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-11-18T14:23:27.5449145Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-11-18T14:23:27.6147546Z Cleaning up orphan processes
+2026-11-18T14:23:27.6782866Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/cache@v4, actions/checkout@v4, actions/setup-java@v4, gradle/actions/setup-gradle@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
