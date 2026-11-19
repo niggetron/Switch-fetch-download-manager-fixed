@@ -145,9 +145,10 @@ class AetherDownloadService : Service() {
                 val titleFile = if (active.size == 1) active.first().fileName else "${active.size} active transfers"
                 val speedText = Formatters.formatSpeedMbps(snapshot.instantBps)
                 val splitText = buildString {
-                    if (snapshot.wifiBps > 0L) append("W:${Formatters.formatSpeedMbps(snapshot.wifiBps)} ")
+                    if (snapshot.wifiBps > 0L) append("W1:${Formatters.formatSpeedMbps(snapshot.wifiBps)} ")
+                    if (snapshot.wifi2Bps > 0L) append("W2:${Formatters.formatSpeedMbps(snapshot.wifi2Bps)} ")
                     if (snapshot.cellBps > 0L) append("5G:${Formatters.formatSpeedMbps(snapshot.cellBps)} ")
-                    if (snapshot.ethBps > 0L) append("ETH:${Formatters.formatSpeedMbps(snapshot.ethBps)} ")
+                    if (snapshot.ethBps > 0L) append("USB:${Formatters.formatSpeedMbps(snapshot.ethBps)} ")
                 }.trim()
                 val subtitle = if (splitText.isNotEmpty()) {
                     "$titleFile · $speedText ($splitText) · ${snapshot.activeWorkers}W"
@@ -250,8 +251,8 @@ class AetherDownloadService : Service() {
     }
 
     override fun onDestroy() {
-        val app = application as AetherApplication
-        app.networkMonitor.releaseCellularLease()
+        // Keep cellular lease alive if user has Quad-Link cellular bonding enabled
+        // so consecutive downloads never drop 5G/LTE between tasks!
         releaseWifiLock()
         serviceScope.cancel()
         super.onDestroy()

@@ -3,21 +3,32 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-/// 1 MiB for slower Wi-Fi (< 50 Mbps), 4 MiB mid-band, 8 MiB for high-BDP 5G (> 120 Mbps)
+/// Adaptive BDP extent sizing for high-speed Wi-Fi 6 / 5G / Quad-Link pipes:
+/// - < 50 Mbps -> 1 MiB
+/// - 50..120 Mbps -> 4 MiB
+/// - 120..250 Mbps -> 8 MiB
+/// - 250..600 Mbps -> 16 MiB
+/// - > 600 Mbps -> 32 MiB
 pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     let mbps = downstream_kbps as f64 / 1000.0;
     if mbps < 50.0 {
         1024 * 1024 // 1 MiB
     } else if mbps <= 120.0 {
         4 * 1024 * 1024 // 4 MiB
-    } else {
+    } else if mbps <= 250.0 {
         8 * 1024 * 1024 // 8 MiB
+    } else if mbps <= 600.0 {
+        16 * 1024 * 1024 // 16 MiB
+    } else {
+        32 * 1024 * 1024 // 32 MiB
     }
 }
 
-/// F8: Always allocate at least one active worker lane per validated active link.
+/// Guarantees at least one active worker per validated active link (and up to 16 total).
 pub fn effective_worker_count(user_max_connections: usize, validated_active_links: usize) -> usize {
-    user_max_connections.max(validated_active_links).max(1)
+    user_max_connections
+        .max(validated_active_links)
+        .clamp(1, 16)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,7 +38,7 @@ pub enum BreakerState {
     HalfOpen,
 }
 
-/// F7: 3-State Per-Link Circuit Breaker (Closed -> Open for 10s -> HalfOpen).
+/// 3-State Per-Link Circuit Breaker (Closed -> Open -> HalfOpen -> Closed).
 #[derive(Debug, Clone)]
 pub struct LinkCircuitBreaker {
     pub state: BreakerState,
@@ -93,7 +104,10 @@ pub struct LinkDispatchStats {
     pub rtt_min_secs: f64,
 }
 
-/// F5: Earliest-Arrival scheduler minimizing F_k = (Q_k + S) / R_k + r_k / 2
+/// Earliest-Arrival scheduler minimizing F_k = (Q_k + S) / R_k + r_k / 2.
+/// Because `queued_bytes` reflects live in-flight bytes per link, multiple healthy links
+/// (Wi-Fi 1 + Wi-Fi 2 + Mobile 5G + USB) pull simultaneously in exact proportion to their
+/// real measured throughput instead of flipping back and forth.
 pub fn select_earliest_arrival_link<'a>(
     candidates: &'a [LinkDispatchStats],
     breakers: &mut HashMap<String, LinkCircuitBreaker>,
@@ -105,7 +119,7 @@ pub fn select_earliest_arrival_link<'a>(
         .filter(|c| {
             let b = breakers
                 .entry(c.link_id.clone())
-                .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(10)));
+                .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(6)));
             b.allow_request(now) && c.ewma_bytes_per_sec > 0.0
         })
         .min_by(|a, b| {
@@ -116,7 +130,7 @@ pub fn select_earliest_arrival_link<'a>(
         .map(|c| c.link_id.as_str())
 }
 
-/// F5: Route HEAD / Range 0- Stream-0 probes strictly to the lowest-RTT healthy link.
+/// Route Stream-0 probes strictly to the lowest-RTT healthy link.
 pub fn select_lowest_rtt_link<'a>(
     candidates: &'a [LinkDispatchStats],
     breakers: &mut HashMap<String, LinkCircuitBreaker>,
@@ -127,14 +141,13 @@ pub fn select_lowest_rtt_link<'a>(
         .filter(|c| {
             let b = breakers
                 .entry(c.link_id.clone())
-                .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(10)));
+                .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(6)));
             b.allow_request(now)
         })
         .min_by(|a, b| a.rtt_min_secs.total_cmp(&b.rtt_min_secs))
         .map(|c| c.link_id.as_str())
 }
 
-/// F6: Immutable SegmentLease pinning stolen tails & retries strictly to the owning worker's link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentLease {
     pub index: usize,
@@ -144,7 +157,7 @@ pub struct SegmentLease {
     pub is_tail_hedge: bool,
 }
 
-/// Open-ended right-neighbor absorption (`_emptyRightOf`) on warm TLS sockets.
+/// Open-ended right-neighbor absorption on warm pooled sockets.
 pub fn absorb_empty_right_of(states: &mut [u8], from_index: usize) -> Option<usize> {
     for (idx, state) in states.iter_mut().enumerate().skip(from_index + 1) {
         if *state == 0 {
@@ -155,9 +168,13 @@ pub fn absorb_empty_right_of(states: &mut [u8], from_index: usize) -> Option<usi
     None
 }
 
-/// `_splitSlowest`: Halves a lagging worker's active byte range `[current_pos .. end]` so a fast
-/// link takes `[mid + 1 .. end]` cleanly without dropping any downloaded prefix.
-pub fn bisect_slowest_range(current_pos: u64, end_inclusive: u64, min_split_bytes: u64) -> Option<(u64, u64)> {
+/// Halves a lagging worker's remaining byte range `[current_pos .. end_inclusive]` so an idle
+/// fast worker takes `[mid .. end_inclusive]` atomically with zero duplicate download bytes.
+pub fn bisect_slowest_range(
+    current_pos: u64,
+    end_inclusive: u64,
+    min_split_bytes: u64,
+) -> Option<(u64, u64)> {
     if end_inclusive <= current_pos {
         return None;
     }
@@ -169,8 +186,7 @@ pub fn bisect_slowest_range(current_pos: u64, end_inclusive: u64, min_split_byte
     Some((mid, end_inclusive))
 }
 
-/// Multi-Mirror URL selector: pairs Wi-Fi with Mirror 0 and Cellular/Ethernet with distinct mirrors
-/// to bypass per-IP CDN rate caps when bonding multiple links.
+/// Quad-link multi-mirror URL selector (`wifi:` -> 0, `cell:` -> 1, `wifi2:` -> 2, `eth:`/`usb:` -> 3).
 pub fn select_mirror_for_link<'a>(urls: &'a [String], link_key: &str, seg_index: usize) -> &'a str {
     if urls.is_empty() {
         return "";
@@ -178,17 +194,19 @@ pub fn select_mirror_for_link<'a>(urls: &'a [String], link_key: &str, seg_index:
     if urls.len() == 1 {
         return urls[0].as_str();
     }
-    let idx = if link_key.starts_with("cell:") {
-        1 % urls.len()
-    } else if link_key.starts_with("eth:") {
-        2 % urls.len()
+    let base = if link_key.starts_with("cell:") {
+        1
+    } else if link_key.starts_with("wifi2:") {
+        2
+    } else if link_key.starts_with("eth:") || link_key.starts_with("usb:") {
+        3
     } else {
-        seg_index % urls.len()
+        0
     };
-    urls[idx].as_str()
+    urls[(base + seg_index) % urls.len()].as_str()
 }
 
-/// Bidirectional closed-loop autoSpeedUp controller (v3.0 + v8.0).
+/// Bidirectional closed-loop autoSpeedUp controller scaling cleanly up to 16 workers.
 pub fn adjust_auto_speed_up(
     current_workers: usize,
     min_workers: usize,
@@ -210,7 +228,6 @@ pub fn adjust_auto_speed_up(
     current_workers.clamp(min_workers, max_workers)
 }
 
-/// Live Ketch-style per-connection descriptor serialized for the Connections Dashboard.
 #[derive(Debug, Clone, Serialize)]
 pub struct ActiveConnectionSnapshot {
     pub conn_id: String,

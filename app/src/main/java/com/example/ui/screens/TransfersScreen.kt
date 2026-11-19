@@ -1,13 +1,19 @@
 package com.example.ui.screens
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,22 +28,28 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderZip
@@ -57,6 +69,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,11 +81,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.local.DownloadEntity
 import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
+import com.example.data.model.SpeedometerStyle
 import com.example.data.model.TransferFilter
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
@@ -83,11 +98,20 @@ import com.example.ui.components.PerNetworkSpeedometerCluster
 import com.example.ui.components.SegmentBitfieldMatrix
 import com.example.ui.components.StatusPill
 import com.example.ui.components.ThroughputSparkline
+import com.example.ui.motion.AetherSharedKey
+import com.example.ui.motion.LocalAnimatedVisibilityScope
+import com.example.ui.motion.LocalMotionSpeedMultiplier
+import com.example.ui.motion.SharedPart
+import com.example.ui.motion.aetherSharedBounds
+import com.example.ui.motion.aetherSharedElement
+import com.example.ui.motion.aetherSkipToLookaheadSize
+import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
 import com.example.ui.theme.MonoHeroMetricStyle
 import com.example.ui.theme.MonoMetricStyle
 import com.example.util.Formatters
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun TransfersScreen(
     downloads: List<DownloadEntity>,
@@ -109,12 +133,24 @@ fun TransfersScreen(
     onOpenFile: (DownloadEntity) -> Unit,
     onShareFile: (DownloadEntity) -> Unit,
     onOpenNewDownload: () -> Unit,
+    speedometerStyle: SpeedometerStyle = SpeedometerStyle.SUPERBIKE_GRID,
+    onCycleSpeedometerStyle: () -> Unit = {},
+    onOpenDualWifi: () -> Unit = {},
+    onSwitchToKotlinAndResume: (String) -> Unit = onResume,
+    isSimulating: Boolean = false,
+    onOpenSimulator: () -> Unit = {},
+    onStopSimulation: () -> Unit = {},
+    onSelectGauge: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
     var deleteTarget by remember { mutableStateOf<DownloadEntity?>(null) }
     var refreshUrlTarget by remember { mutableStateOf<DownloadEntity?>(null) }
     var safRegrantTargetId by remember { mutableStateOf<String?>(null) }
+    var inspectedTransferId by remember { mutableStateOf<String?>(null) }
+    val inspectedTransfer = remember(downloads, inspectedTransferId) {
+        downloads.firstOrNull { it.id == inspectedTransferId }
+    }
 
     val safRegrantLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
@@ -126,121 +162,161 @@ fun TransfersScreen(
         safRegrantTargetId = null
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item(key = "hero_banner") {
-            HeroTelemetryBanner(
-                telemetry = telemetry,
-                networkMatrix = networkMatrix,
-                useMBpsSpeedUnit = useMBpsSpeedUnit,
-                onToggleSpeedUnit = onToggleSpeedUnit,
-                onResetPeaks = onResetPeaks,
-                activeCount = downloads.count { it.statusEnum.isActive },
-                hasPaused = downloads.any {
-                    it.statusEnum == DownloadStatus.PAUSED ||
-                        it.statusEnum == DownloadStatus.QUOTA_GUARD_R3
-                },
-                onPauseAll = onPauseAll,
-                onResumeAll = onResumeAll,
-            )
-        }
-
-        if (telemetry.activeConnections.isNotEmpty()) {
-            item(key = "ketch_connections_inspector") {
-                KetchConnectionsInspectorCard(
-                    connections = telemetry.activeConnections,
-                    activeEngineBadge = telemetry.activeEngineBadge,
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "hero_banner") {
+                HeroTelemetryBanner(
+                    telemetry = telemetry,
+                    networkMatrix = networkMatrix,
+                    useMBpsSpeedUnit = useMBpsSpeedUnit,
+                    speedometerStyle = speedometerStyle,
+                    isSimulating = isSimulating,
+                    onToggleSpeedUnit = onToggleSpeedUnit,
+                    onCycleSpeedometerStyle = onCycleSpeedometerStyle,
+                    onOpenDualWifi = onOpenDualWifi,
+                    onOpenSimulator = onOpenSimulator,
+                    onStopSimulation = onStopSimulation,
+                    onSelectGauge = onSelectGauge,
+                    onResetPeaks = onResetPeaks,
+                    activeCount = downloads.count { it.statusEnum.isActive },
+                    hasPaused = downloads.any {
+                        it.statusEnum == DownloadStatus.PAUSED ||
+                            it.statusEnum == DownloadStatus.QUOTA_GUARD_R3
+                    },
+                    onPauseAll = onPauseAll,
+                    onResumeAll = onResumeAll,
                 )
             }
-        }
 
-        networkMatrix.pacWarningUrl?.let { pacUrl ->
-            item(key = "pac_warning") {
+            if (telemetry.activeConnections.isNotEmpty()) {
+                item(key = "ketch_connections_inspector") {
+                    KetchConnectionsInspectorCard(
+                        connections = telemetry.activeConnections,
+                        activeEngineBadge = telemetry.activeEngineBadge,
+                    )
+                }
+            }
+
+            networkMatrix.pacWarningUrl?.let { pacUrl ->
+                item(key = "pac_warning") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(ext.amber.copy(alpha = 0.12f))
+                            .border(1.dp, ext.amber.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Bolt,
+                            contentDescription = null,
+                            tint = ext.amber,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = "PAC proxy detected ($pacUrl). Configure explicit SOCKS5h host/port in Engine settings to route over this proxy.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ext.amber,
+                        )
+                    }
+                }
+            }
+
+            item(key = "filter_strip") {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(ext.amber.copy(alpha = 0.12f))
-                        .border(1.dp, ext.amber.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Bolt,
-                        contentDescription = null,
-                        tint = ext.amber,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = "PAC proxy detected ($pacUrl). Configure explicit SOCKS5h host/port in Engine settings to route over this proxy.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = ext.amber,
-                    )
-                }
-            }
-        }
-
-        item(key = "filter_strip") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TransferFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = selectedFilter == filter,
-                        onClick = { onSelectFilter(filter) },
-                        label = { Text(filter.label) },
-                        modifier = Modifier.testTag("filter_${filter.name.lowercase()}"),
-                    )
-                }
-            }
-        }
-
-        if (downloads.isEmpty()) {
-            item(key = "empty_state") {
-                EmptyTransfersCard(onOpenNewDownload = onOpenNewDownload)
-            }
-        } else {
-            val activeTotalCount = downloads.count { it.statusEnum.isActive }
-            items(downloads, key = { it.id }) { item ->
-                val liveTaskBps = if (item.statusEnum.isActive) {
-                    val connSum = telemetry.activeConnections
-                        .filter { it.taskId == item.id }
-                        .sumOf { it.speedBps }
-                    when {
-                        connSum > 0L -> connSum
-                        activeTotalCount == 1 -> telemetry.instantBps
-                        else -> 0L
+                    TransferFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = selectedFilter == filter,
+                            onClick = { onSelectFilter(filter) },
+                            label = { Text(filter.label) },
+                            modifier = Modifier.testTag("filter_${filter.name.lowercase()}"),
+                        )
                     }
-                } else {
-                    0L
                 }
-                TransferItemCard(
-                    entity = item,
-                    liveSpeedBps = liveTaskBps,
-                    useMBpsSpeedUnit = useMBpsSpeedUnit,
-                    onPause = { onPause(item.id) },
-                    onResume = { onResume(item.id) },
-                    onDeleteRequest = { deleteTarget = item },
-                    onRefreshUrlRequest = { refreshUrlTarget = item },
-                    onRegrantSafRequest = {
-                        safRegrantTargetId = item.id
-                        safRegrantLauncher.launch(item.fileName)
-                    },
-                    onPruneCas = onPruneCas,
-                    onOpen = { onOpenFile(item) },
-                    onShare = { onShareFile(item) },
-                )
             }
+
+            if (downloads.isEmpty()) {
+                item(key = "empty_state") {
+                    EmptyTransfersCard(
+                        onOpenNewDownload = onOpenNewDownload,
+                        onOpenSimulator = onOpenSimulator,
+                    )
+                }
+            } else {
+                val activeTotalCount = downloads.count { it.statusEnum.isActive }
+                items(downloads, key = { it.id }) { item ->
+                    val liveTaskBps = if (item.statusEnum.isActive) {
+                        val connSum = telemetry.activeConnections
+                            .filter { it.taskId == item.id }
+                            .sumOf { it.speedBps }
+                        when {
+                            connSum > 0L -> connSum
+                            activeTotalCount == 1 -> telemetry.instantBps
+                            else -> 0L
+                        }
+                    } else {
+                        0L
+                    }
+                    TransferItemCard(
+                        entity = item,
+                        liveSpeedBps = liveTaskBps,
+                        useMBpsSpeedUnit = useMBpsSpeedUnit,
+                        onInspect = { inspectedTransferId = item.id },
+                        onPause = { onPause(item.id) },
+                        onResume = { onResume(item.id) },
+                        onSwitchToKotlinAndResume = { onSwitchToKotlinAndResume(item.id) },
+                        onDeleteRequest = { deleteTarget = item },
+                        onRefreshUrlRequest = { refreshUrlTarget = item },
+                        onRegrantSafRequest = {
+                            safRegrantTargetId = item.id
+                            safRegrantLauncher.launch(item.fileName)
+                        },
+                        onPruneCas = onPruneCas,
+                        onOpen = { onOpenFile(item) },
+                        onShare = { onShareFile(item) },
+                        modifier = Modifier.animateItem(),
+                    )
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(76.dp)) }
         }
 
-        item { Spacer(modifier = Modifier.height(76.dp)) }
+        // In-tree Container Transform Overlay for Transfer Pipeline Inspector
+        AnimatedVisibility(
+            visible = inspectedTransfer != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                inspectedTransfer?.let { target ->
+                    val liveBps = telemetry.activeConnections
+                        .filter { it.taskId == target.id }
+                        .sumOf { it.speedBps }
+                    TransferInspectorOverlay(
+                        entity = target,
+                        liveSpeedBps = liveBps,
+                        useMBpsSpeedUnit = useMBpsSpeedUnit,
+                        onPause = { onPause(target.id) },
+                        onResume = { onResume(target.id) },
+                        onOpen = { onOpenFile(target) },
+                        onShare = { onShareFile(target) },
+                        onDismiss = { inspectedTransferId = null },
+                    )
+                }
+            }
+        }
     }
 
     deleteTarget?.let { target ->
@@ -248,6 +324,7 @@ fun TransfersScreen(
             entity = target,
             onDismiss = { deleteTarget = null },
             onConfirm = { deleteFile ->
+                if (inspectedTransferId == target.id) inspectedTransferId = null
                 onDelete(target.id, deleteFile)
                 deleteTarget = null
             },
@@ -266,13 +343,20 @@ fun TransfersScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 private fun HeroTelemetryBanner(
     telemetry: TelemetrySnapshot,
     networkMatrix: NetworkMatrixState,
     useMBpsSpeedUnit: Boolean,
+    speedometerStyle: SpeedometerStyle,
+    isSimulating: Boolean,
     onToggleSpeedUnit: () -> Unit,
+    onCycleSpeedometerStyle: () -> Unit,
+    onOpenDualWifi: () -> Unit,
+    onOpenSimulator: () -> Unit,
+    onStopSimulation: () -> Unit,
+    onSelectGauge: (String) -> Unit,
     onResetPeaks: () -> Unit,
     activeCount: Int,
     hasPaused: Boolean,
@@ -280,15 +364,70 @@ private fun HeroTelemetryBanner(
     onResumeAll: () -> Unit,
 ) {
     val ext = LocalAetherColors.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .aetherSharedBounds(
+                key = AetherSharedKey("hero", SharedPart.HERO_CONTAINER),
+                clipShape = RoundedCornerShape(18.dp),
+                useCockpitSpring = true,
+            )
             .clip(RoundedCornerShape(18.dp))
             .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
-            .border(1.dp, ext.cardBorder, RoundedCornerShape(18.dp))
+            .border(
+                width = if (isSimulating) 1.4.dp else 1.dp,
+                color = if (isSimulating) ext.amber.copy(alpha = 0.65f) else ext.cardBorder,
+                shape = RoundedCornerShape(18.dp),
+            )
+            .animateContentSize(aetherSpringSpec(motionSpeed))
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        AnimatedVisibility(visible = isSimulating) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(ext.amber.copy(alpha = 0.14f))
+                    .border(1.dp, ext.amber.copy(alpha = 0.50f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("sim_active_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = ext.amber, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "SIMULATION MODE ACTIVE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ext.amber,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = onOpenSimulator,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Text("Tune", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = onStopSimulation,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Stop", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -300,11 +439,21 @@ private fun HeroTelemetryBanner(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Text(
-                        text = if (telemetry.isMemfdMapped) "MEMFD ZERO-JNI" else "THROUGHPUT PIPELINE",
+                        text = when {
+                            isSimulating -> "SIMULATED THROUGHPUT"
+                            telemetry.isMemfdMapped -> "MEMFD ZERO-JNI"
+                            else -> "AGGREGATE THROUGHPUT"
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = ext.cyan,
+                        color = if (isSimulating) ext.amber else ext.cyan,
                     )
-                    StatusPill(label = telemetry.activeEngineBadge, color = ext.emerald)
+                    StatusPill(
+                        label = telemetry.activeEngineBadge,
+                        color = ext.emerald,
+                        modifier = Modifier.aetherSharedElement(
+                            key = AetherSharedKey("hero", SharedPart.HERO_ENGINE_BADGE),
+                        ),
+                    )
                 }
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -320,6 +469,17 @@ private fun HeroTelemetryBanner(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    StatusPill(label = "MAX ${Formatters.formatSpeed(telemetry.peakBps, useMBpsSpeedUnit)}", color = ext.amber)
+                    StatusPill(label = "AVG ${Formatters.formatSpeed(telemetry.avgBps, useMBpsSpeedUnit)}", color = ext.violet)
+                    StatusPill(label = "STAB ${telemetry.stabilityPercent}%", color = ext.emerald)
+                    if (telemetry.antiDipRescues > 0) {
+                        StatusPill(label = "RESCUES ${telemetry.antiDipRescues}", color = ext.cyan)
+                    }
                 }
             }
 
@@ -352,15 +512,25 @@ private fun HeroTelemetryBanner(
             historyBps = telemetry.speedHistoryBps,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(50.dp),
+                .height(50.dp)
+                .aetherSharedBounds(
+                    key = AetherSharedKey("hero", SharedPart.HERO_SPARKLINE),
+                    clipShape = RoundedCornerShape(8.dp),
+                ),
         )
 
-        // Live Per-Network Animated Radial Speedometers (Wi-Fi, 5G/LTE, USB-C Ethernet)
+        // Live Quad-Link Bike/Vehicle Speedometers (Wi-Fi 1, Mobile 5G, Wi-Fi 2, USB/Eth)
         PerNetworkSpeedometerCluster(
             telemetry = telemetry,
             networkMatrix = networkMatrix,
             useMBpsUnit = useMBpsSpeedUnit,
+            speedometerStyle = speedometerStyle,
             onToggleUnit = onToggleSpeedUnit,
+            onCycleSpeedometerStyle = onCycleSpeedometerStyle,
+            onOpenDualWifi = onOpenDualWifi,
+            onSelectGauge = onSelectGauge,
+            onOpenSimulator = onOpenSimulator,
+            isSimulating = isSimulating,
             onResetPeaks = onResetPeaks,
         )
 
@@ -370,14 +540,13 @@ private fun HeroTelemetryBanner(
                 .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            LinkEndpointPill(title = "Wi-Fi", endpoint = networkMatrix.wifiLink)
+            LinkEndpointPill(title = "Wi-Fi 1", endpoint = networkMatrix.wifiLink)
+            LinkEndpointPill(title = "Wi-Fi 2", endpoint = networkMatrix.wifi2Link)
             LinkEndpointPill(
                 title = if (networkMatrix.cellularLeaseRequested) "5G/LTE (Leased)" else "5G/LTE",
                 endpoint = networkMatrix.cellularLink,
             )
-            networkMatrix.ethernetLink?.let { eth ->
-                LinkEndpointPill(title = "USB-C Eth", endpoint = eth)
-            }
+            LinkEndpointPill(title = "USB / Eth", endpoint = networkMatrix.ethernetLink)
         }
 
         Row(
@@ -386,13 +555,13 @@ private fun HeroTelemetryBanner(
         ) {
             TelemetryMiniCell(
                 label = "SLAB POOL",
-                value = String.format("%.1f / 8.0 MB", telemetry.slabAllocatedMb.coerceAtLeast(0.5f)),
+                value = String.format("%.1f / 12.0 MB", telemetry.slabAllocatedMb.coerceAtLeast(0.5f)),
                 accent = ext.violet,
                 modifier = Modifier.weight(1f),
             )
             TelemetryMiniCell(
-                label = "LINKS",
-                value = "${networkMatrix.activeValidatedLinks.size} Active",
+                label = "QUAD LINKS",
+                value = "${networkMatrix.activeValidatedLinks.size} / 4 Live",
                 accent = ext.emerald,
                 modifier = Modifier.weight(1f),
             )
@@ -461,22 +630,26 @@ private fun TelemetryMiniCell(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 private fun TransferItemCard(
     entity: DownloadEntity,
     liveSpeedBps: Long,
     useMBpsSpeedUnit: Boolean,
+    onInspect: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
+    onSwitchToKotlinAndResume: () -> Unit,
     onDeleteRequest: () -> Unit,
     onRefreshUrlRequest: () -> Unit,
     onRegrantSafRequest: () -> Unit,
     onPruneCas: () -> Unit,
     onOpen: () -> Unit,
     onShare: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
     var expanded by remember { mutableStateOf(entity.statusEnum.isActive || entity.statusEnum.isIssue) }
     val extentMb = (entity.segmentSizeBytes / (1024L * 1024L)).coerceAtLeast(1L)
 
@@ -521,9 +694,14 @@ private fun TransferItemCard(
     }
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            .aetherSharedBounds(
+                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_CARD),
+                clipShape = RoundedCornerShape(18.dp),
+            )
             .border(1.dp, ext.cardBorder, MaterialTheme.shapes.large)
+            .animateContentSize(aetherSpringSpec(motionSpeed))
             .testTag("transfer_card_${entity.id}"),
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surface,
@@ -543,6 +721,10 @@ private fun TransferItemCard(
             ) {
                 Box(
                     modifier = Modifier
+                        .aetherSharedElement(
+                            key = AetherSharedKey(entity.id, SharedPart.TRANSFER_ICON),
+                            clipShape = RoundedCornerShape(10.dp),
+                        )
                         .size(40.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(statusColor.copy(alpha = 0.14f)),
@@ -563,13 +745,22 @@ private fun TransferItemCard(
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.TRANSFER_TITLE))
+                            .aetherSkipToLookaheadSize(),
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        StatusPill(label = statusLabel, color = statusColor)
+                        StatusPill(
+                            label = statusLabel,
+                            color = statusColor,
+                            modifier = Modifier.aetherSharedElement(
+                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_STATUS),
+                            ),
+                        )
                         if (engineTag != null) {
                             StatusPill(label = engineTag, color = ext.violet)
                         }
@@ -598,6 +789,20 @@ private fun TransferItemCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+
+                IconButton(
+                    onClick = onInspect,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("inspect_transfer_${entity.id}"),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.OpenInFull,
+                        contentDescription = "Inspect transfer pipeline",
+                        tint = ext.cyan,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
 
                 IconButton(
@@ -661,7 +866,12 @@ private fun TransferItemCard(
                         }
                         SegmentBitfieldMatrix(
                             segments = entity.parsedSegments(),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aetherSharedBounds(
+                                    key = AetherSharedKey(entity.id, SharedPart.TRANSFER_LEDGER),
+                                    clipShape = RoundedCornerShape(6.dp),
+                                ),
                         )
                     }
 
@@ -758,6 +968,8 @@ private fun TransferItemCard(
                             }
 
                             else -> {
+                                val missingRustSo = entity.statusEnum == DownloadStatus.FAILED &&
+                                    (entity.errorMessage?.contains("libaether_core.so", ignoreCase = true) == true)
                                 if (entity.statusEnum.isActive) {
                                     OutlinedButton(
                                         onClick = onPause,
@@ -766,6 +978,17 @@ private fun TransferItemCard(
                                         Icon(Icons.Filled.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("Pause")
+                                    }
+                                } else if (missingRustSo) {
+                                    Button(
+                                        onClick = onSwitchToKotlinAndResume,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("switch_kotlin_fallback_${entity.id}"),
+                                    ) {
+                                        Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Use Kotlin OkHttp & Retry")
                                     }
                                 } else {
                                     Button(
@@ -797,8 +1020,220 @@ private fun TransferItemCard(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun EmptyTransfersCard(onOpenNewDownload: () -> Unit) {
+private fun TransferInspectorOverlay(
+    entity: DownloadEntity,
+    liveSpeedBps: Long,
+    useMBpsSpeedUnit: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onOpen: () -> Unit,
+    onShare: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val ext = LocalAetherColors.current
+    BackHandler(onBack = onDismiss)
+    val extentMb = (entity.segmentSizeBytes / (1024L * 1024L)).coerceAtLeast(1L)
+    val statusColor = when {
+        entity.statusEnum == DownloadStatus.COMPLETED -> ext.emerald
+        entity.statusEnum.isActive -> ext.cyan
+        entity.statusEnum.isIssue -> ext.rose
+        else -> ext.amber
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.64f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            )
+            .padding(16.dp)
+            .testTag("transfer_inspector_overlay"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 580.dp)
+                .aetherSharedBounds(
+                    key = AetherSharedKey(entity.id, SharedPart.TRANSFER_CARD),
+                    clipShape = RoundedCornerShape(22.dp),
+                    zIndexInOverlay = 3f,
+                )
+                .clip(RoundedCornerShape(22.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.5.dp, statusColor.copy(alpha = 0.65f), RoundedCornerShape(22.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                )
+                .verticalScroll(rememberScrollState())
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .aetherSharedElement(
+                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_ICON),
+                                clipShape = RoundedCornerShape(14.dp),
+                            )
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(statusColor.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = fileIconForName(entity.fileName, entity.mimeType),
+                            contentDescription = null,
+                            tint = statusColor,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = entity.fileName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.TRANSFER_TITLE))
+                                .aetherSkipToLookaheadSize(),
+                        )
+                        StatusPill(
+                            label = entity.statusEnum.name,
+                            color = statusColor,
+                            modifier = Modifier.aetherSharedElement(
+                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_STATUS),
+                            ),
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("close_transfer_inspector_button"),
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close pipeline inspector")
+                }
+            }
+
+            if (entity.totalBytes > 0L) {
+                LinearProgressIndicator(
+                    progress = { entity.progressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                    color = statusColor,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = StrokeCap.Round,
+                )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                StatusPill(label = "Live ${Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit)}", color = ext.cyan)
+                StatusPill(label = "Peak ${Formatters.formatSpeed(entity.peakSpeedBps, useMBpsSpeedUnit)}", color = ext.amber)
+                StatusPill(label = "Avg ${Formatters.formatSpeed(entity.avgSpeedBps, useMBpsSpeedUnit)}", color = ext.violet)
+                StatusPill(label = "TTFB ${entity.ttfbMs} ms", color = ext.emerald)
+            }
+
+            Text(
+                text = "Endpoint: ${entity.url}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Route: ${entity.routeModeEnum.label} · Workers: ${entity.workerCount} · Syscall Batches: ${entity.syscallWriteBatches}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "Link Split: Wi-Fi ${Formatters.formatBytes(entity.wifiBytes)} · Cellular ${Formatters.formatBytes(entity.cellBytes)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = ext.cyan,
+            )
+
+            Text(
+                text = "${extentMb} MB AETHLDG2 ZERO-MERGE EXTENT BITFIELD (${entity.parsedSegments().size} extents)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SegmentBitfieldMatrix(
+                segments = entity.parsedSegments(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aetherSharedBounds(
+                        key = AetherSharedKey(entity.id, SharedPart.TRANSFER_LEDGER),
+                        clipShape = RoundedCornerShape(8.dp),
+                    ),
+            )
+
+            if (!entity.actualSha256.isNullOrBlank()) {
+                Text(
+                    text = "SHA-256: ${entity.actualSha256}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ext.emerald,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (entity.statusEnum == DownloadStatus.COMPLETED) {
+                    Button(onClick = onOpen, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open")
+                    }
+                    OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Share")
+                    }
+                } else if (entity.statusEnum.isActive) {
+                    OutlinedButton(onClick = onPause, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Pause")
+                    }
+                } else {
+                    Button(onClick = onResume, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Resume")
+                    }
+                }
+                OutlinedButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyTransfersCard(
+    onOpenNewDownload: () -> Unit,
+    onOpenSimulator: () -> Unit,
+) {
     val ext = LocalAetherColors.current
     Column(
         modifier = Modifier
@@ -826,18 +1261,28 @@ private fun EmptyTransfersCard(onOpenNewDownload: () -> Unit) {
         }
         Text(text = "Zero Active Pipelines", style = MaterialTheme.typography.titleLarge)
         Text(
-            text = "Add any HTTP/HTTPS/HLS/DASH URL or multi-mirror set to test Rust libaether_core.so or Kotlin OkHttp multi-network bonding.",
+            text = "Add any HTTP/HTTPS/HLS/DASH URL or launch the Speed & Animation Simulator to preview all 4 motorsport speedometers and shared-element morphs live.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Button(
-            onClick = onOpenNewDownload,
-            modifier = Modifier.testTag("empty_new_download_button"),
-        ) {
-            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("New Download")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onOpenNewDownload,
+                modifier = Modifier.testTag("empty_new_download_button"),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("New Download")
+            }
+            OutlinedButton(
+                onClick = onOpenSimulator,
+                modifier = Modifier.testTag("empty_open_sim_button"),
+            ) {
+                Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Simulate")
+            }
         }
     }
 }

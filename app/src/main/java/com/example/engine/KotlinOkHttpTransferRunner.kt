@@ -14,6 +14,7 @@ import com.example.data.model.DownloadStatus
 import com.example.data.model.EngineSettings
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.SegmentState
+import com.example.data.model.ThroughputProfile
 import com.example.data.repository.DownloadRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -39,6 +42,7 @@ import java.io.RandomAccessFile
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -50,19 +54,27 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import javax.net.SocketFactory
 import kotlin.math.ceil
 
-private const val OKHTTP_STALL_WATCHDOG_MS = 1_500L
-private const val OKHTTP_MAX_SEGMENT_RETRIES = 4
+private const val OKHTTP_STALL_WATCHDOG_MS = 4_500L
+private const val OKHTTP_MAX_SEGMENT_RETRIES = 5
 private const val OKHTTP_MIN_EXTENT_BYTES = 1L * 1024L * 1024L
+private const val OKHTTP_SLAB_FLUSH_THRESHOLD = 448 * 1024 // Coalesce ~448–512 KiB per pwrite
+private const val OKHTTP_TELEMETRY_THROTTLE_MS = 150L
+private const val OKHTTP_MIN_BISECT_BYTES = 2L * 1024L * 1024L
+private const val OKHTTP_STALL_BISECT_BYTES = 1L * 1024L * 1024L
+private const val OKHTTP_TCP_RCVBUF_BYTES = 4 * 1024 * 1024
 
 /**
- * Full-featured Kotlin OkHttp Multi-Network Transfer Engine:
- * - Single-connection Stream 0 probe first (`Range: bytes=0-0`, RFC 6266, magic/MIME, ENOSPC)
- * - Multi-mirror URL bonding across Wi-Fi, 5G/LTE, and hot-plugged USB-C Ethernet
- * - Per-link byte & goodput attribution + live Ketch-style `ActiveConnectionInfo`
- * - Per-session `maxCellularBytes` enforcement
- * - Strict `channel.force(true)` BEFORE marking extents committed in `AETHLDG2`
+ * High-Throughput Quad-Link Kotlin OkHttp Transfer Engine (v9.0 Superbike & Anti-Dip):
+ * - Persistent cached `OkHttpClient` pool per link (4 MiB TCP SO_RCVBUF, TCP_NODELAY,
+ *   `maxRequestsPerHost = 32`, `ConnectionPool(32, 5m)`) — zero Slow Start between segments!
+ * - Lock-free positional `pwrite` via `FileChannel.write(buf, offset)` + 512 KiB slab coalescing
+ *   + non-blocking batched `force(false)` every 2s (eliminates writeMutex worker starvation & flip-flopping!)
+ * - Supports all 4 simultaneous links: Wi-Fi 1, Wi-Fi 2 (Dual-STA or HTTP/SOCKS5h Companion Relay),
+ *   Mobile 5G/LTE, and USB Tethering / USB-C Ethernet
+ * - Live atomic range bisection (Anti-Dip tail rescue) up to 16 parallel workers
  */
 internal class KotlinOkHttpTransferRunner(
     private val context: Context,
@@ -75,14 +87,39 @@ internal class KotlinOkHttpTransferRunner(
     private val ledgerFileProvider: (String) -> File,
     private val stagingFileProvider: (String) -> File,
 ) {
+    private val sharedDispatcher = Dispatcher().apply {
+        maxRequests = 64
+        maxRequestsPerHost = 32
+    }
+
     private val baseClient = OkHttpClient.Builder()
+        .dispatcher(sharedDispatcher)
+        .connectionPool(ConnectionPool(32, 5, TimeUnit.MINUTES))
         .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
         .build()
+
+    // Persistent warm client cache per (linkKey, netHandle, proxySpec)
+    private val clientPool = ConcurrentHashMap<String, OkHttpClient>()
+
+    private class ActiveOkHttpRange(
+        val segIndex: Int,
+        val currentOffset: AtomicLong,
+        val endOffset: AtomicLong,
+        val ewmaBps: AtomicLong,
+        val lastProgressMs: AtomicLong,
+    )
+
+    private data class OkHttpWorkUnit(
+        val segIndex: Int,
+        val startOffset: Long,
+        val endOffset: Long,
+        val isBisectedSteal: Boolean,
+    )
 
     suspend fun run(entityInput: DownloadEntity, settings: EngineSettings) {
         var entity = entityInput
@@ -93,7 +130,6 @@ internal class KotlinOkHttpTransferRunner(
         val useStagedSaf = entity.isSafDestination && settings.stagedSafPlacement
         val staging = stagingFileProvider(id)
 
-        // Fast-path recovery if staged SAF download already verified before SAF_EBADF_R5
         if (useStagedSaf &&
             entity.totalBytes > 0L &&
             staging.exists() &&
@@ -121,7 +157,7 @@ internal class KotlinOkHttpTransferRunner(
             return
         }
 
-        // Stream 0 Probe on Lowest-RTT healthy LinkKey (F5)
+        // Stream 0 Probe on Lowest-RTT healthy LinkKey
         entity = entity.copy(
             status = DownloadStatus.PROBING_0RTT.name,
             engineBackendUsed = ResolvedEngineBackend.KOTLIN_OKHTTP.id,
@@ -133,7 +169,7 @@ internal class KotlinOkHttpTransferRunner(
         val probeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
         val probeLane = LinkScheduler.selectLowestRttLink(probeLanes, networkMonitor.breakerRegistry)
         val probeEndpoint = probeLane?.let { networkMonitor.getNetworkByKey(it.linkKeyId) }
-        val probeClient = buildClientForLink(probeEndpoint, entity.routeModeEnum, settings)
+        val probeClient = getOrBuildClientForLink(probeEndpoint, entity.routeModeEnum, settings)
 
         val probeResult = try {
             performPreflightProbe(probeClient, urls.first(), entity.browserProfile, callsForTask).also {
@@ -195,7 +231,7 @@ internal class KotlinOkHttpTransferRunner(
             entity.segmentSizeBytes.coerceAtLeast(OKHTTP_MIN_EXTENT_BYTES)
         } else {
             val fastestKbps = networkMonitor.state.value.activeValidatedLinks
-                .maxOfOrNull { it.downstreamKbps } ?: 60_000
+                .maxOfOrNull { it.downstreamKbps } ?: 100_000
             LinkScheduler.adaptiveBdpSegmentBytes(fastestKbps)
         }
 
@@ -213,7 +249,6 @@ internal class KotlinOkHttpTransferRunner(
         )
         val bitfield = reconcileBitfield(entity, ledger, segmentCount, totalBytes)
 
-        // Audited 64 MiB ENOSPC reserve guard
         if (totalBytes > 0L && (!entity.isSafDestination || useStagedSaf)) {
             val dir = if (useStagedSaf) {
                 staging.parentFile?.apply { mkdirs() } ?: context.filesDir
@@ -296,6 +331,7 @@ internal class KotlinOkHttpTransferRunner(
         val syscallBatches = AtomicInteger(entity.syscallWriteBatches)
         val peakSpeed = AtomicLong(entity.peakSpeedBps)
         val queuedBytesByLink = ConcurrentHashMap<String, AtomicLong>()
+        val activeRanges = ConcurrentHashMap<String, ActiveOkHttpRange>()
         val segmentRetries = ConcurrentHashMap<Int, AtomicInteger>()
         var failureReason: Pair<DownloadStatus, String>? = null
 
@@ -306,13 +342,25 @@ internal class KotlinOkHttpTransferRunner(
                 }
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
-                val initialWorkers = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
-                    .coerceIn(1, minOf(8, segmentCount.coerceAtLeast(1)))
-                val targetWorkers = AtomicInteger(initialWorkers)
+                val maxCap = when (settings.throughputProfile) {
+                    ThroughputProfile.TURBO_ANTI_DIP,
+                    ThroughputProfile.MAX_MULTI_SOCKET -> 16
+                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 12
+                }
+                val baseDesired = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
+                val boostedDesired = if (settings.throughputProfile != ThroughputProfile.SUSTAINED_ANTI_DIP) {
+                    maxOf(baseDesired, (activeLanes.size * 2).coerceAtMost(maxCap))
+                } else {
+                    baseDesired
+                }
+                // Allow splitting even when segmentCount is small via live bisection!
+                val maxPoolCoroutines = boostedDesired.coerceIn(1, maxCap)
+                val targetWorkers = AtomicInteger(maxPoolCoroutines)
 
-                val flusherJob = engineScope.launch {
+                val flusherJob = engineScope.launch(Dispatchers.IO) {
                     var lastSampleTime = System.currentTimeMillis()
                     var lastSampleBytes = liveWrittenBytes.get()
+                    var lastDiskForceMs = System.currentTimeMillis()
                     var prevGoodputBps = 0.0
                     var prevTtfb = probeResult.ttfbMs.toDouble()
 
@@ -327,9 +375,9 @@ internal class KotlinOkHttpTransferRunner(
                         lastSampleTime = now
                         lastSampleBytes = curBytes
 
-                        if (settings.enableAutoSpeedUp && probeResult.supportsRange && segmentCount > 1) {
+                        if (settings.enableAutoSpeedUp && probeResult.supportsRange && totalBytes > OKHTTP_MIN_EXTENT_BYTES) {
                             val liveLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
-                            val minW = liveLanes.size.coerceAtLeast(1)
+                            val minW = maxOf(liveLanes.size * 2, 2).coerceAtMost(maxCap)
                             val anyBreakerOpen = networkMonitor.breakerRegistry.values.any {
                                 it.currentState(now) != BreakerState.CLOSED
                             }
@@ -338,7 +386,7 @@ internal class KotlinOkHttpTransferRunner(
                             val adjusted = LinkScheduler.adjustAutoSpeedUp(
                                 currentWorkers = targetWorkers.get(),
                                 minWorkers = minW,
-                                maxWorkers = minOf(8, segmentCount),
+                                maxWorkers = maxCap,
                                 prevGoodputBps = prevGoodputBps,
                                 newGoodputBps = curSpeed.toDouble(),
                                 deltaRttMs = (curTtfb - prevTtfb).coerceAtLeast(0.0),
@@ -349,13 +397,16 @@ internal class KotlinOkHttpTransferRunner(
                             prevTtfb = curTtfb
                         }
 
-                        // Strict ordering: force disk write barrier BEFORE persisting ledger DONE bits
-                        runCatching { dest.forceData() }
+                        // Non-blocking batched disk barrier every 2,000 ms (never stalls workers!)
                         val snapshotBits = bitMutex.withLock {
                             syncLedgerFromBitChars(ledger, bitChars)
                             String(bitChars)
                         }
-                        runCatching { ledger.persist(ledgerFileProvider(id)) }
+                        if (now - lastDiskForceMs >= 2_000L) {
+                            runCatching { dest.forceData() }
+                            runCatching { ledger.persist(ledgerFileProvider(id)) }
+                            lastDiskForceMs = now
+                        }
                         networkMonitor.publishState()
 
                         val latest = repository.getById(id) ?: break
@@ -376,8 +427,7 @@ internal class KotlinOkHttpTransferRunner(
                 }
 
                 try {
-                    if (probeResult.supportsRange && totalBytes > 0L && dest.isRandomAccess && segmentCount > 1) {
-                        val maxPoolCoroutines = if (settings.enableAutoSpeedUp) minOf(8, segmentCount) else initialWorkers
+                    if (probeResult.supportsRange && totalBytes > OKHTTP_MIN_EXTENT_BYTES && dest.isRandomAccess) {
                         val nextIndex = AtomicInteger(0)
 
                         coroutineScope {
@@ -385,56 +435,39 @@ internal class KotlinOkHttpTransferRunner(
                                 async(Dispatchers.IO) {
                                     while (isActive && failureReason == null) {
                                         if (workerId >= targetWorkers.get()) {
-                                            val remaining = bitMutex.withLock {
+                                            val hasMore = bitMutex.withLock {
                                                 bitChars.any { SegmentState.fromCode(it) == SegmentState.PENDING }
-                                            }
-                                            if (!remaining) break
-                                            delay(200L)
+                                            } || activeRanges.isNotEmpty()
+                                            if (!hasMore) break
+                                            delay(150L)
                                             continue
                                         }
 
                                         val segIdx = claimNextPendingSegment(bitChars, bitMutex, nextIndex)
-                                        if (segIdx == -1) {
-                                            if (settings.enableTailHedge) {
-                                                val stealIdx = findTailHedgeCandidate(bitChars, bitMutex)
-                                                if (stealIdx != -1) {
-                                                    val ok = runCatching {
-                                                        downloadSegmentWithPinnedLink(
-                                                            taskId = id,
-                                                            workerId = workerId,
-                                                            urls = urls,
-                                                            segIndex = stealIdx,
-                                                            segSize = segSize,
-                                                            totalBytes = totalBytes,
-                                                            routeMode = entity.routeModeEnum,
-                                                            settings = settings,
-                                                            browserProfile = entity.browserProfile,
-                                                            dest = dest,
-                                                            bitChars = bitChars,
-                                                            bitMutex = bitMutex,
-                                                            liveWrittenBytes = liveWrittenBytes,
-                                                            taskWifiBytes = taskWifiBytes,
-                                                            taskCellBytes = taskCellBytes,
-                                                            cellCapBytes = cellLimit,
-                                                            syscallBatches = syscallBatches,
-                                                            queuedBytesByLink = queuedBytesByLink,
-                                                            callsForTask = callsForTask,
-                                                            isHedge = true,
-                                                        )
-                                                    }.getOrDefault(false)
-                                                    if (ok) continue
-                                                }
-                                            }
-                                            break
+                                        val unit: OkHttpWorkUnit? = if (segIdx != -1) {
+                                            val s = segIdx.toLong() * segSize
+                                            val e = minOf(s + segSize - 1L, totalBytes - 1L)
+                                            if (s <= e) OkHttpWorkUnit(segIdx, s, e, false) else null
+                                        } else if (settings.enableTailHedge ||
+                                            settings.throughputProfile != ThroughputProfile.MAX_MULTI_SOCKET
+                                        ) {
+                                            tryStealBisectedRange(activeRanges)
+                                        } else {
+                                            null
+                                        }
+
+                                        if (unit == null) {
+                                            if (activeRanges.isEmpty()) break
+                                            delay(80L)
+                                            continue
                                         }
 
                                         try {
-                                            downloadSegmentWithPinnedLink(
+                                            downloadRangeWithPinnedLink(
                                                 taskId = id,
                                                 workerId = workerId,
                                                 urls = urls,
-                                                segIndex = segIdx,
-                                                segSize = segSize,
+                                                unit = unit,
                                                 totalBytes = totalBytes,
                                                 routeMode = entity.routeModeEnum,
                                                 settings = settings,
@@ -448,8 +481,8 @@ internal class KotlinOkHttpTransferRunner(
                                                 cellCapBytes = cellLimit,
                                                 syscallBatches = syscallBatches,
                                                 queuedBytesByLink = queuedBytesByLink,
+                                                activeRanges = activeRanges,
                                                 callsForTask = callsForTask,
-                                                isHedge = false,
                                             )
                                         } catch (ce: CancellationException) {
                                             throw ce
@@ -463,25 +496,29 @@ internal class KotlinOkHttpTransferRunner(
                                             break
                                         } catch (ex: Exception) {
                                             val attempts = segmentRetries
-                                                .computeIfAbsent(segIdx) { AtomicInteger(0) }
+                                                .computeIfAbsent(unit.segIndex) { AtomicInteger(0) }
                                                 .incrementAndGet()
                                             val canRetry = attempts < OKHTTP_MAX_SEGMENT_RETRIES &&
                                                 (ex is LinkStallException || isNetworkFlap(ex) || ex is IOException)
-                                            bitMutex.withLock {
-                                                if (SegmentState.fromCode(bitChars[segIdx]) != SegmentState.COMMITTED) {
-                                                    bitChars[segIdx] = SegmentState.PENDING.code
+                                            if (!unit.isBisectedSteal) {
+                                                bitMutex.withLock {
+                                                    if (SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED) {
+                                                        bitChars[unit.segIndex] = SegmentState.PENDING.code
+                                                    }
                                                 }
                                             }
                                             if (canRetry) {
-                                                nextIndex.updateAndGet { cur -> minOf(cur, segIdx) }
-                                                delay(150L)
+                                                if (!unit.isBisectedSteal) {
+                                                    nextIndex.updateAndGet { cur -> minOf(cur, unit.segIndex) }
+                                                }
+                                                delay(120L)
                                                 continue
                                             }
                                             failureReason = if (isNetworkFlap(ex)) {
                                                 DownloadStatus.LINK_MIGRATE_R1 to
-                                                    "Radio link interrupted — awaiting Wi-Fi/5G migration"
+                                                    "Radio link interrupted — awaiting Wi-Fi/5G/USB migration"
                                             } else {
-                                                DownloadStatus.FAILED to (ex.message ?: "Segment $segIdx failed")
+                                                DownloadStatus.FAILED to (ex.message ?: "Segment ${unit.segIndex} failed")
                                             }
                                             break
                                         }
@@ -662,12 +699,58 @@ internal class KotlinOkHttpTransferRunner(
         )
     }
 
-    private suspend fun downloadSegmentWithPinnedLink(
+    /**
+     * Atomically bisects the slowest or largest remaining active worker range (Anti-Dip).
+     */
+    private fun tryStealBisectedRange(
+        activeRanges: ConcurrentHashMap<String, ActiveOkHttpRange>,
+    ): OkHttpWorkUnit? {
+        val now = System.currentTimeMillis()
+        var bestVictim: ActiveOkHttpRange? = null
+        var bestScore = -1.0
+
+        for (st in activeRanges.values) {
+            val cur = st.currentOffset.get()
+            val end = st.endOffset.get()
+            if (end <= cur) continue
+            val rem = end - cur + 1L
+            val isStalled = (now - st.lastProgressMs.get()) >= 900L
+            val minReq = if (isStalled) OKHTTP_STALL_BISECT_BYTES else OKHTTP_MIN_BISECT_BYTES
+            if (rem < minReq) continue
+            val speed = st.ewmaBps.get().coerceAtLeast(65_536L).toDouble()
+            val score = (rem.toDouble() / speed) + if (isStalled) 10.0 else 0.0
+            if (score > bestScore) {
+                bestScore = score
+                bestVictim = st
+            }
+        }
+        val victim = bestVictim ?: return null
+        while (true) {
+            val cur = victim.currentOffset.get()
+            val oldEnd = victim.endOffset.get()
+            if (oldEnd <= cur) return null
+            val rem = oldEnd - cur + 1L
+            if (rem < OKHTTP_STALL_BISECT_BYTES) return null
+            val mid = cur + (rem / 2L)
+            val newVictimEnd = mid - 1L
+            if (newVictimEnd <= cur || mid > oldEnd) return null
+            if (victim.endOffset.compareAndSet(oldEnd, newVictimEnd)) {
+                telemetryLedger.recordAntiDipRescue()
+                return OkHttpWorkUnit(
+                    segIndex = victim.segIndex,
+                    startOffset = mid,
+                    endOffset = oldEnd,
+                    isBisectedSteal = true,
+                )
+            }
+        }
+    }
+
+    private suspend fun downloadRangeWithPinnedLink(
         taskId: String,
         workerId: Int,
         urls: List<String>,
-        segIndex: Int,
-        segSize: Long,
+        unit: OkHttpWorkUnit,
         totalBytes: Long,
         routeMode: NetworkRouteMode,
         settings: EngineSettings,
@@ -681,13 +764,13 @@ internal class KotlinOkHttpTransferRunner(
         cellCapBytes: Long,
         syscallBatches: AtomicInteger,
         queuedBytesByLink: ConcurrentHashMap<String, AtomicLong>,
+        activeRanges: ConcurrentHashMap<String, ActiveOkHttpRange>,
         callsForTask: MutableList<Call>,
-        isHedge: Boolean,
     ): Boolean {
-        val startOffset = segIndex.toLong() * segSize
-        val endOffset = minOf(startOffset + segSize - 1L, totalBytes - 1L)
-        if (startOffset > endOffset) return false
-        val segLen = (endOffset - startOffset + 1L)
+        val startOffset = unit.startOffset
+        val initialEndOffset = unit.endOffset
+        if (startOffset > initialEndOffset) return false
+        val segLen = (initialEndOffset - startOffset + 1L)
 
         var baseLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, routeMode)
             .map { lane ->
@@ -695,7 +778,6 @@ internal class KotlinOkHttpTransferRunner(
                 lane.copy(queuedBytes = q)
             }
 
-        // Enforce per-session Cellular Data Cap cleanly if non-cellular lanes are available
         if (taskCellBytes.get() >= cellCapBytes) {
             val nonCell = baseLanes.filterNot { it.linkKeyId.startsWith("cell:") }
             if (nonCell.isNotEmpty()) baseLanes = nonCell
@@ -714,17 +796,26 @@ internal class KotlinOkHttpTransferRunner(
         val pinnedLinkKeyId = selectedLane?.linkKeyId
         val pinnedEndpoint = pinnedLinkKeyId?.let { networkMonitor.getNetworkByKey(it) }
         val isCell = pinnedEndpoint?.linkKey?.isCellular == true || routeMode == NetworkRouteMode.CELLULAR_ONLY
-        val isEth = pinnedLinkKeyId?.startsWith("eth:") == true
-        val targetUrl = LinkScheduler.selectMirrorForLink(urls, pinnedLinkKeyId ?: "wifi:wlan0", segIndex)
-        val client = buildClientForLink(pinnedEndpoint, routeMode, settings)
+        val isEth = pinnedLinkKeyId?.startsWith("eth:") == true || pinnedLinkKeyId?.startsWith("usb:") == true
+        val targetUrl = LinkScheduler.selectMirrorForLink(urls, pinnedLinkKeyId ?: "wifi:wlan0", unit.segIndex)
+        val client = getOrBuildClientForLink(pinnedEndpoint, routeMode, settings)
 
-        bitMutex.withLock {
-            val cur = SegmentState.fromCode(bitChars[segIndex])
-            if (cur == SegmentState.COMMITTED || cur == SegmentState.VERIFIED) return false
-            bitChars[segIndex] = when {
-                isHedge -> SegmentState.STOLEN_HEDGE.code
-                isCell -> SegmentState.ACTIVE_5G.code
-                else -> SegmentState.ACTIVE_WIFI.code
+        if (!unit.isBisectedSteal) {
+            bitMutex.withLock {
+                val cur = SegmentState.fromCode(bitChars[unit.segIndex])
+                if (cur == SegmentState.COMMITTED || cur == SegmentState.VERIFIED) return false
+                bitChars[unit.segIndex] = when {
+                    isCell -> SegmentState.ACTIVE_5G.code
+                    else -> SegmentState.ACTIVE_WIFI.code
+                }
+            }
+        } else {
+            bitMutex.withLock {
+                if (unit.segIndex < bitChars.size &&
+                    SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED
+                ) {
+                    bitChars[unit.segIndex] = SegmentState.STOLEN_HEDGE.code
+                }
             }
         }
 
@@ -734,19 +825,29 @@ internal class KotlinOkHttpTransferRunner(
         queueCounter?.addAndGet(segLen)
         var reservedRemaining = segLen
 
-        val connId = "ok-${taskId.take(6)}-$workerId-$segIndex"
+        val connId = "ok-${taskId.take(6)}-w$workerId-${unit.segIndex}"
+        val nowMs = System.currentTimeMillis()
+        val activeState = ActiveOkHttpRange(
+            segIndex = unit.segIndex,
+            currentOffset = AtomicLong(startOffset),
+            endOffset = AtomicLong(initialEndOffset),
+            ewmaBps = AtomicLong(0L),
+            lastProgressMs = AtomicLong(nowMs),
+        )
+        activeRanges[connId] = activeState
+
         telemetryLedger.workerStarted(pinnedLinkKeyId)
         val slab = slabPool.acquire()
-        val lastProgressMs = AtomicLong(System.currentTimeMillis())
         val stalledOut = AtomicBoolean(false)
         val segStartNs = System.nanoTime()
         var segWritten = 0L
+        var lastTelemetryPushMs = 0L
 
         var callRef: Call? = null
         val watchdogJob = engineScope.launch {
             while (isActive) {
-                delay(300L)
-                if (System.currentTimeMillis() - lastProgressMs.get() >= OKHTTP_STALL_WATCHDOG_MS) {
+                delay(500L)
+                if (System.currentTimeMillis() - activeState.lastProgressMs.get() >= OKHTTP_STALL_WATCHDOG_MS) {
                     stalledOut.set(true)
                     callRef?.cancel()
                     break
@@ -757,7 +858,7 @@ internal class KotlinOkHttpTransferRunner(
         try {
             val req = Request.Builder()
                 .url(targetUrl)
-                .header("Range", "bytes=$startOffset-$endOffset")
+                .header("Range", "bytes=$startOffset-$initialEndOffset")
                 .header("Accept-Encoding", "identity")
                 .header("User-Agent", userAgentForProfile(browserProfile))
                 .build()
@@ -768,29 +869,35 @@ internal class KotlinOkHttpTransferRunner(
             val reqStartMs = System.currentTimeMillis()
             call.execute().use { resp ->
                 val ttfb = (System.currentTimeMillis() - reqStartMs).coerceAtLeast(1L)
-                lastProgressMs.set(System.currentTimeMillis())
+                activeState.lastProgressMs.set(System.currentTimeMillis())
                 if (resp.code == 403 || resp.code == 410) throw HttpAuthExpiredException(resp.code)
-                if (!resp.isSuccessful && resp.code != 206) throw IOException("HTTP ${resp.code} on segment $segIndex")
+                if (!resp.isSuccessful && resp.code != 206) throw IOException("HTTP ${resp.code} on segment ${unit.segIndex}")
 
                 val proto = resp.protocol.toString().uppercase()
-                val source = resp.body?.source() ?: throw IOException("Empty body on segment $segIndex")
+                val source = resp.body?.source() ?: throw IOException("Empty body on segment ${unit.segIndex}")
                 var offset = startOffset
+                var slabWriteOffset = startOffset
+                slab.clear()
 
                 while (true) {
-                    val alreadyDone = bitMutex.withLock {
-                        SegmentState.fromCode(bitChars[segIndex]) == SegmentState.COMMITTED
-                    }
-                    if (alreadyDone) return false
+                    val dynamicEnd = activeState.endOffset.get()
+                    if (offset > dynamicEnd) break
 
-                    slab.clear()
+                    // Cap read to remaining bytes in our dynamic (possibly bisected) range
+                    val remainingInRange = (dynamicEnd - offset + 1L)
+                    if (slab.remaining().toLong() > remainingInRange) {
+                        slab.limit(slab.position() + remainingInRange.toInt())
+                    }
+
                     val read = source.read(slab)
                     if (read == -1) break
                     if (read > 0) {
-                        lastProgressMs.set(System.currentTimeMillis())
-                        slab.flip()
-                        dest.writeAt(slab, offset)
+                        val tickNow = System.currentTimeMillis()
+                        activeState.lastProgressMs.set(tickNow)
                         offset += read
                         segWritten += read
+                        activeState.currentOffset.set(offset)
+
                         val dec = minOf(reservedRemaining, read.toLong())
                         reservedRemaining -= dec
                         queueCounter?.addAndGet(-dec)
@@ -801,32 +908,59 @@ internal class KotlinOkHttpTransferRunner(
                             !isEth -> taskWifiBytes.addAndGet(read.toLong())
                         }
                         telemetryLedger.recordLinkBytesWritten(pinnedLinkKeyId, read.toLong())
-                        syscallBatches.incrementAndGet()
-                        telemetryLedger.recordSyscallWriteBatch()
 
-                        val elapsedSec = ((System.nanoTime() - segStartNs) / 1_000_000_000.0).coerceAtLeast(0.05)
-                        telemetryLedger.upsertKotlinConnection(
-                            ActiveConnectionInfo(
-                                connId = connId,
-                                taskId = taskId,
-                                url = targetUrl,
-                                linkKeyId = pinnedLinkKeyId ?: "default",
-                                protocol = "$proto (OkHttp)",
-                                socketState = if (isHedge) "Hedge Racing" else "Streaming",
-                                ttfbMs = ttfb,
-                                bytesReceived = segWritten,
-                                speedBps = (segWritten / elapsedSec).toLong(),
-                                rangeStart = startOffset,
-                                rangeEnd = endOffset,
+                        // Coalesce up to ~448-512 KiB per positional pwrite syscall!
+                        if (slab.position() >= OKHTTP_SLAB_FLUSH_THRESHOLD || !slab.hasRemaining() || offset > activeState.endOffset.get()) {
+                            slab.flip()
+                            dest.writeAt(slab, slabWriteOffset)
+                            slabWriteOffset = offset
+                            slab.clear()
+                            syscallBatches.incrementAndGet()
+                            telemetryLedger.recordSyscallWriteBatch()
+                        }
+
+                        if (tickNow - lastTelemetryPushMs >= OKHTTP_TELEMETRY_THROTTLE_MS) {
+                            val elapsedSec = ((System.nanoTime() - segStartNs) / 1_000_000_000.0).coerceAtLeast(0.05)
+                            val bps = (segWritten / elapsedSec).toLong()
+                            activeState.ewmaBps.set(bps)
+                            if (pinnedLinkKeyId != null && bps > 0L) {
+                                networkMonitor.updateLinkEwma(pinnedLinkKeyId, (bps * 8.0) / 1_000_000.0)
+                            }
+                            telemetryLedger.upsertKotlinConnection(
+                                ActiveConnectionInfo(
+                                    connId = connId,
+                                    taskId = taskId,
+                                    url = targetUrl,
+                                    linkKeyId = pinnedLinkKeyId ?: "default",
+                                    protocol = "$proto (OkHttp)",
+                                    socketState = if (unit.isBisectedSteal) "Anti-Dip Split" else "Streaming",
+                                    ttfbMs = ttfb,
+                                    bytesReceived = segWritten,
+                                    speedBps = bps,
+                                    rangeStart = startOffset,
+                                    rangeEnd = activeState.endOffset.get(),
+                                )
                             )
-                        )
+                            lastTelemetryPushMs = tickNow
+                        }
                     }
                 }
 
-                // Commit durability barrier before flipping segment DONE
-                dest.forceData()
-                bitMutex.withLock {
-                    bitChars[segIndex] = SegmentState.COMMITTED.code
+                // Flush remaining coalesced slab bytes
+                if (slab.position() > 0) {
+                    slab.flip()
+                    dest.writeAt(slab, slabWriteOffset)
+                    slab.clear()
+                    syscallBatches.incrementAndGet()
+                    telemetryLedger.recordSyscallWriteBatch()
+                }
+
+                if (!unit.isBisectedSteal) {
+                    bitMutex.withLock {
+                        if (unit.segIndex < bitChars.size) {
+                            bitChars[unit.segIndex] = SegmentState.COMMITTED.code
+                        }
+                    }
                 }
 
                 if (pinnedLinkKeyId != null && segWritten > 0L) {
@@ -840,7 +974,8 @@ internal class KotlinOkHttpTransferRunner(
         } catch (ce: CancellationException) {
             if (stalledOut.get()) {
                 pinnedLinkKeyId?.let {
-                    networkMonitor.breakerRegistry[it]?.recordFailureOrStall(immediateTrip = true)
+                    // Non-immediate trip (requires 3 consecutive failures) kills Wi-Fi <-> 5G flip-flopping!
+                    networkMonitor.breakerRegistry[it]?.recordFailureOrStall(immediateTrip = false)
                     networkMonitor.publishState()
                 }
                 throw LinkStallException(pinnedLinkKeyId ?: "unknown")
@@ -848,14 +983,14 @@ internal class KotlinOkHttpTransferRunner(
             throw ce
         } catch (ex: Exception) {
             if (pinnedLinkKeyId != null && ex !is HttpAuthExpiredException) {
-                val isStall = stalledOut.get() || ex is SocketTimeoutException
-                networkMonitor.breakerRegistry[pinnedLinkKeyId]?.recordFailureOrStall(immediateTrip = isStall)
+                networkMonitor.breakerRegistry[pinnedLinkKeyId]?.recordFailureOrStall(immediateTrip = false)
                 networkMonitor.publishState()
             }
             if (stalledOut.get()) throw LinkStallException(pinnedLinkKeyId ?: "unknown")
             throw ex
         } finally {
             watchdogJob.cancel()
+            activeRanges.remove(connId)
             telemetryLedger.removeKotlinConnection(connId)
             if (reservedRemaining > 0L) queueCounter?.addAndGet(-reservedRemaining)
             slabPool.release(slab)
@@ -881,12 +1016,13 @@ internal class KotlinOkHttpTransferRunner(
         val endpoint = selectedLane?.let { networkMonitor.getNetworkByKey(it.linkKeyId) }
         val isCell = endpoint?.linkKey?.isCellular == true || routeMode == NetworkRouteMode.CELLULAR_ONLY
         val isEth = selectedLane?.linkKeyId?.startsWith("eth:") == true
-        val client = buildClientForLink(endpoint, routeMode, settings)
+        val client = getOrBuildClientForLink(endpoint, routeMode, settings)
 
         val connId = "ok-${taskId.take(6)}-single"
         telemetryLedger.workerStarted(selectedLane?.linkKeyId)
         val slab = slabPool.acquire()
         val segStartNs = System.nanoTime()
+        var lastPushMs = 0L
         try {
             val req = Request.Builder()
                 .url(urls.first())
@@ -902,13 +1038,12 @@ internal class KotlinOkHttpTransferRunner(
                 if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                 val source = resp.body?.source() ?: throw IOException("Empty response body")
                 var offset = 0L
+                var slabWriteOffset = 0L
+                slab.clear()
                 while (true) {
-                    slab.clear()
                     val read = source.read(slab)
                     if (read == -1) break
                     if (read > 0) {
-                        slab.flip()
-                        dest.writeAt(slab, offset)
                         offset += read
                         liveWrittenBytes.addAndGet(read.toLong())
                         when {
@@ -916,26 +1051,41 @@ internal class KotlinOkHttpTransferRunner(
                             !isEth -> taskWifiBytes.addAndGet(read.toLong())
                         }
                         telemetryLedger.recordLinkBytesWritten(selectedLane?.linkKeyId, read.toLong())
-                        syscallBatches.incrementAndGet()
-                        telemetryLedger.recordSyscallWriteBatch()
+                        if (slab.position() >= OKHTTP_SLAB_FLUSH_THRESHOLD || !slab.hasRemaining()) {
+                            slab.flip()
+                            dest.writeAt(slab, slabWriteOffset)
+                            slabWriteOffset = offset
+                            slab.clear()
+                            syscallBatches.incrementAndGet()
+                            telemetryLedger.recordSyscallWriteBatch()
+                        }
 
-                        val elapsedSec = ((System.nanoTime() - segStartNs) / 1_000_000_000.0).coerceAtLeast(0.05)
-                        telemetryLedger.upsertKotlinConnection(
-                            ActiveConnectionInfo(
-                                connId = connId,
-                                taskId = taskId,
-                                url = urls.first(),
-                                linkKeyId = selectedLane?.linkKeyId ?: "default",
-                                protocol = "${resp.protocol} (OkHttp)",
-                                socketState = "Single Stream",
-                                ttfbMs = ttfb,
-                                bytesReceived = offset,
-                                speedBps = (offset / elapsedSec).toLong(),
-                                rangeStart = 0L,
-                                rangeEnd = offset,
+                        val now = System.currentTimeMillis()
+                        if (now - lastPushMs >= OKHTTP_TELEMETRY_THROTTLE_MS) {
+                            val elapsedSec = ((System.nanoTime() - segStartNs) / 1_000_000_000.0).coerceAtLeast(0.05)
+                            telemetryLedger.upsertKotlinConnection(
+                                ActiveConnectionInfo(
+                                    connId = connId,
+                                    taskId = taskId,
+                                    url = urls.first(),
+                                    linkKeyId = selectedLane?.linkKeyId ?: "default",
+                                    protocol = "${resp.protocol} (OkHttp)",
+                                    socketState = "Single Stream",
+                                    ttfbMs = ttfb,
+                                    bytesReceived = offset,
+                                    speedBps = (offset / elapsedSec).toLong(),
+                                    rangeStart = 0L,
+                                    rangeEnd = offset,
+                                )
                             )
-                        )
+                            lastPushMs = now
+                        }
                     }
+                }
+                if (slab.position() > 0) {
+                    slab.flip()
+                    dest.writeAt(slab, slabWriteOffset)
+                    slab.clear()
                 }
                 dest.forceData()
             }
@@ -1067,7 +1217,7 @@ internal class KotlinOkHttpTransferRunner(
         val chunkDigest = MessageDigest.getInstance("SHA-256")
         val chunks = mutableListOf<CasChunkEntity>()
         var dedupMatchBytes = 0L
-        val buf = ByteArray(64 * 1024)
+        val buf = ByteArray(128 * 1024)
 
         val stream = when {
             stagingFileIfUsed != null && stagingFileIfUsed.exists() -> FileInputStream(stagingFileIfUsed)
@@ -1109,43 +1259,68 @@ internal class KotlinOkHttpTransferRunner(
         return VerifyResult(fileDigest.digest().toHex(), dedupMatchBytes)
     }
 
-    private fun buildClientForLink(
+    /**
+     * Returns a persistent warm `OkHttpClient` pooled per `(linkKey, netHandle, proxySpec)` so
+     * TLS 1.3 + HTTP/2 sockets stay open across segments (eliminating Slow Start 1/5th speed drops!).
+     */
+    private fun getOrBuildClientForLink(
         endpoint: LinkEndpointInfo?,
         routeMode: NetworkRouteMode,
         settings: EngineSettings,
     ): OkHttpClient {
-        val builder = baseClient.newBuilder()
         val isCell = endpoint?.linkKey?.isCellular == true
-        val (linkProxyHost, linkProxyPort) = if (isCell) {
-            settings.cellularProxyHost.trim() to settings.cellularProxyPort
-        } else {
-            settings.proxyHost.trim() to settings.proxyPort
-        }
-        val resolvedHost = when {
-            linkProxyHost.isNotBlank() -> linkProxyHost
-            routeMode == NetworkRouteMode.PROXY_SOCKS5 && settings.proxyHost.isNotBlank() -> settings.proxyHost.trim()
-            else -> ""
-        }
-        val resolvedPort = if (linkProxyHost.isNotBlank()) linkProxyPort else settings.proxyPort
+        val isRelay = endpoint?.isRelay == true
 
-        if (resolvedHost.isNotBlank()) {
-            builder.proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress.createUnresolved(resolvedHost, resolvedPort)))
-            endpoint?.network?.let { builder.socketFactory(it.socketFactory) }
+        val resolvedHost: String
+        val resolvedPort: Int
+        val proxyType: Proxy.Type
+        if (isRelay && endpoint != null && endpoint.relayProxyHost.isNotBlank()) {
+            resolvedHost = endpoint.relayProxyHost.trim()
+            resolvedPort = endpoint.relayProxyPort
+            proxyType = if (endpoint.relayIsHttp) Proxy.Type.HTTP else Proxy.Type.SOCKS
         } else {
-            builder.proxy(Proxy.NO_PROXY) // Audited Fix #2: prevent Wi-Fi HTTP proxy leak onto cellular links
-            if (endpoint != null) {
-                val net: Network = endpoint.network
-                builder.socketFactory(net.socketFactory)
-                builder.dns(object : Dns {
-                    override fun lookup(hostname: String): List<InetAddress> = try {
-                        net.getAllByName(hostname).toList()
-                    } catch (_: Exception) {
-                        Dns.SYSTEM.lookup(hostname)
-                    }
-                })
+            val (linkProxyHost, linkProxyPort) = if (isCell) {
+                settings.cellularProxyHost.trim() to settings.cellularProxyPort
+            } else {
+                settings.proxyHost.trim() to settings.proxyPort
             }
+            resolvedHost = when {
+                linkProxyHost.isNotBlank() -> linkProxyHost
+                routeMode == NetworkRouteMode.PROXY_SOCKS5 && settings.proxyHost.isNotBlank() -> settings.proxyHost.trim()
+                else -> ""
+            }
+            resolvedPort = if (linkProxyHost.isNotBlank()) linkProxyPort else settings.proxyPort
+            proxyType = Proxy.Type.SOCKS
         }
-        return builder.build()
+
+        val cacheKey = "${endpoint?.linkKey?.id ?: "default"}|${endpoint?.netHandle ?: 0L}|$proxyType|$resolvedHost:$resolvedPort"
+        return clientPool.computeIfAbsent(cacheKey) {
+            val builder = baseClient.newBuilder()
+                .connectionPool(ConnectionPool(32, 5, TimeUnit.MINUTES))
+                .dispatcher(sharedDispatcher)
+
+            if (resolvedHost.isNotBlank()) {
+                builder.proxy(Proxy(proxyType, InetSocketAddress.createUnresolved(resolvedHost, resolvedPort)))
+                val baseSf = endpoint?.network?.socketFactory ?: SocketFactory.getDefault()
+                builder.socketFactory(TunedSocketFactory(baseSf, OKHTTP_TCP_RCVBUF_BYTES))
+            } else {
+                builder.proxy(Proxy.NO_PROXY)
+                if (endpoint != null) {
+                    val net: Network = endpoint.network
+                    builder.socketFactory(TunedSocketFactory(net.socketFactory, OKHTTP_TCP_RCVBUF_BYTES))
+                    builder.dns(object : Dns {
+                        override fun lookup(hostname: String): List<InetAddress> = try {
+                            net.getAllByName(hostname).toList()
+                        } catch (_: Exception) {
+                            Dns.SYSTEM.lookup(hostname)
+                        }
+                    })
+                } else {
+                    builder.socketFactory(TunedSocketFactory(SocketFactory.getDefault(), OKHTTP_TCP_RCVBUF_BYTES))
+                }
+            }
+            builder.build()
+        }
     }
 
     private fun openDestinationHandle(entity: DownloadEntity, useStagedSaf: Boolean, staging: File): DestinationHandle {
@@ -1205,13 +1380,6 @@ internal class KotlinOkHttpTransferRunner(
             -1
         }
 
-    private suspend fun findTailHedgeCandidate(bitChars: CharArray, mutex: Mutex): Int = mutex.withLock {
-        bitChars.indexOfFirst {
-            val s = SegmentState.fromCode(it)
-            s == SegmentState.ACTIVE_WIFI || s == SegmentState.ACTIVE_5G
-        }
-    }
-
     private fun userAgentForProfile(profile: String): String = when (profile) {
         "chrome131" -> "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/131.0.6778.200 Mobile Safari/537.36"
         "okhttp5" -> "AetherIO-OkHttp/5.0 Android"
@@ -1230,16 +1398,44 @@ internal class KotlinOkHttpTransferRunner(
     private data class PreflightProbeResult(val totalBytes: Long, val supportsRange: Boolean, val ttfbMs: Long, val eTag: String?, val suggestedFileName: String?)
     private data class VerifyResult(val fileSha256: String, val dedupMatchingBytes: Long)
 
+    /**
+     * Wraps a network-bound SocketFactory to apply 4 MiB TCP SO_RCVBUF & TCP_NODELAY before connect,
+     * letting high-BDP Wi-Fi 6 / 5G links scale TCP windows immediately without OS buffer bottlenecking.
+     */
+    private class TunedSocketFactory(
+        private val delegate: SocketFactory,
+        private val rcvBufBytes: Int,
+    ) : SocketFactory() {
+        private fun tune(s: Socket): Socket {
+            runCatching { s.receiveBufferSize = rcvBufBytes }
+            runCatching { s.tcpNoDelay = true }
+            return s
+        }
+
+        override fun createSocket(): Socket = tune(delegate.createSocket())
+        override fun createSocket(host: String?, port: Int): Socket = tune(delegate.createSocket(host, port))
+        override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket =
+            tune(delegate.createSocket(host, port, localHost, localPort))
+        override fun createSocket(host: InetAddress?, port: Int): Socket = tune(delegate.createSocket(host, port))
+        override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket =
+            tune(delegate.createSocket(address, port, localAddress, localPort))
+    }
+
+    /**
+     * Lock-free positional pwrite destination handle:
+     * `FileChannel.write(ByteBuffer, long position)` does NOT modify channel position and is safe
+     * for concurrent non-overlapping worker ranges without a global mutex or blocking `force(false)`.
+     */
     private class DestinationHandle(
         private val channel: FileChannel,
         private val closeable: AutoCloseable,
         val isRandomAccess: Boolean,
     ) : AutoCloseable {
-        private val writeMutex = Any()
+        private val sizeMutex = Any()
 
         fun ensureSize(size: Long) {
             if (size <= 0L) return
-            synchronized(writeMutex) {
+            synchronized(sizeMutex) {
                 if (channel.size() < size) {
                     channel.write(ByteBuffer.allocate(1), size - 1L)
                 }
@@ -1247,16 +1443,14 @@ internal class KotlinOkHttpTransferRunner(
         }
 
         fun writeAt(buffer: ByteBuffer, offset: Long) {
-            synchronized(writeMutex) {
-                var pos = offset
-                while (buffer.hasRemaining()) pos += channel.write(buffer, pos)
+            var pos = offset
+            while (buffer.hasRemaining()) {
+                pos += channel.write(buffer, pos)
             }
         }
 
         fun forceData() {
-            synchronized(writeMutex) {
-                runCatching { channel.force(false) }
-            }
+            runCatching { channel.force(false) }
         }
 
         override fun close() {

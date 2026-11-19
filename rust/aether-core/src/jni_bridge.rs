@@ -37,10 +37,10 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
             "fallocate+pwrite+fdatasync"
         };
         format!(
-            "libaether_core.so v8.0 (wreq prefix-symbols + quinn/h3 0-RTT · Semaphore SlabPool 8 MiB · memfd · {uring} · AETHLDG2)"
+            "libaether_core.so v9.0 (Quad-Link Superbike · Pooled wreq+H3 · Async Disk Writer 12 MiB · Anti-Dip Bisection · memfd · {uring})"
         )
     }))
-    .unwrap_or_else(|_| "libaether_core.so v8.0 (recovered panic)".to_string());
+    .unwrap_or_else(|_| "libaether_core.so v9.0 (recovered panic)".to_string());
 
     env.new_string(label)
         .expect("Failed to allocate JNI version string")
@@ -87,13 +87,28 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeUpdateLi
         }
         let ip_str: String = env.get_string(&local_ip).map(Into::into).unwrap_or_default();
         let parsed_ip: Option<IpAddr> = ip_str.trim().parse().ok();
-        let px_host: String = env.get_string(&proxy_host).map(Into::into).unwrap_or_default();
-        let proxy = if !px_host.trim().is_empty() && proxy_port > 0 {
-            Some(ProxyOverride {
-                host: px_host.trim().to_string(),
-                port: proxy_port as u16,
-                is_socks5h: true,
-            })
+        let px_host_raw: String = env.get_string(&proxy_host).map(Into::into).unwrap_or_default();
+        let px_trimmed = px_host_raw.trim();
+        let proxy = if !px_trimmed.is_empty() && proxy_port > 0 {
+            if let Some(stripped) = px_trimmed.strip_prefix("http://") {
+                Some(ProxyOverride {
+                    host: stripped.to_string(),
+                    port: proxy_port as u16,
+                    is_socks5h: false,
+                    is_http: true,
+                })
+            } else {
+                let clean = px_trimmed
+                    .strip_prefix("socks5h://")
+                    .or_else(|| px_trimmed.strip_prefix("socks5://"))
+                    .unwrap_or(px_trimmed);
+                Some(ProxyOverride {
+                    host: clean.to_string(),
+                    port: proxy_port as u16,
+                    is_socks5h: true,
+                    is_http: false,
+                })
+            }
         } else {
             None
         };
@@ -147,7 +162,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSetTherm
     let _ = catch_unwind(AssertUnwindSafe(|| {
         engine()
             .thermal_worker_cap
-            .store((max_workers as i64).clamp(1, 8), std::sync::atomic::Ordering::Release);
+            .store((max_workers as i64).clamp(1, 16), std::sync::atomic::Ordering::Release);
     }));
 }
 
@@ -206,7 +221,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeStartDow
             output_path: out_path,
             ledger_path: ldg_path,
             direct_fd: direct_fd as i32,
-            max_workers: (max_workers as usize).clamp(1, 8),
+            max_workers: (max_workers as usize).clamp(1, 16),
             max_cellular_bytes: cell_cap,
             browser_profile: profile,
             protocol_mode: proto,

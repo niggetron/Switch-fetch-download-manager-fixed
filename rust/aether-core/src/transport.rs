@@ -1,11 +1,12 @@
-//! Hybrid Dual-TLS + HTTP/3 Transport Engine:
+//! Hybrid Dual-TLS + HTTP/3 Transport Engine (v9.0 Anti-Dip & Persistent Pooling):
+//! - Persistent cached `wreq::Client` pool per `(LinkKey, local_ip, proxy, profile)` so TLS 1.3 +
+//!   HTTP/2 sockets stay warm across every segment (eliminating TCP Slow Start dips!)
+//! - Per-link real measured EWMA throughput + live in-flight byte tracking
 //! - 3-DNS parallel race (System + 8.8.8.8:53 + 1.1.1.1:53 bound via android_setsocknetwork)
-//! - Pre-connect socket2 tuning (SO_RCVBUF 4-8 MiB, TCP_NODELAY, TCP_USER_TIMEOUT = 10,000 ms)
+//! - Pre-connect socket2 tuning (SO_RCVBUF 8 MiB, TCP_NODELAY, TCP_USER_TIMEOUT = 10,000 ms)
 //! - NDK android_getnetworkblockedreason(sock.as_raw_fd()) BEFORE dropping failed sockets
-//! - wreq (BoringSSL prefix-symbols, .no_proxy(), zero auto-decompression, identity ranges)
+//! - Support for both SOCKS5h and HTTP Companion Wi-Fi 2 Relay proxies + .no_proxy() isolation
 //! - quinn + h3 + h3-quinn HTTP/3 QUIC + 0-RTT over bound UDP sockets
-//! - Bounded 256 KiB Alt-Svc & Session Ticket LRU keyed by (host, link_key)
-//! - RFC 6266 Content-Disposition + magic-byte MIME sniffer
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -30,8 +31,8 @@ use crate::diagnostics::{FLAG_WREQ_EMULATION, is_flag_enabled, record_diag};
 #[cfg(target_os = "android")]
 use crate::storage_and_telemetry::live_telemetry_page;
 
-pub const BDP_RCVBUF_BYTES: usize = 6 * 1024 * 1024; // 6 MiB high-BDP 5G autotuning receive buffer
-pub const TCP_USER_TIMEOUT_MS: i32 = 10_000; // Abort dead carrier CGNAT flows in 10s
+pub const BDP_RCVBUF_BYTES: usize = 8 * 1024 * 1024; // 8 MiB high-BDP Wi-Fi 6 / 5G receive window
+pub const TCP_USER_TIMEOUT_MS: i32 = 10_000;
 const ALT_SVC_CACHE_MAX_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,11 +59,12 @@ impl NetworkBlockedReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProxyOverride {
     pub host: String,
     pub port: u16,
     pub is_socks5h: bool,
+    pub is_http: bool,
 }
 
 #[derive(Debug)]
@@ -70,6 +72,8 @@ pub struct BoundLinkState {
     pub link_key: String,
     pub net_handle: AtomicU64,
     pub downstream_kbps: AtomicU64,
+    pub measured_ewma_bps: AtomicU64, // Real measured bytes/sec EWMA (updated live during transfers)
+    pub in_flight_bytes: AtomicU64,   // Real active queued bytes on this link
     pub rtt_ms: AtomicU64,
     pub is_cellular: bool,
     pub local_ip: RwLock<Option<IpAddr>>,
@@ -89,11 +93,14 @@ impl BoundLinkState {
         local_ip: Option<IpAddr>,
         proxy_override: Option<ProxyOverride>,
     ) -> Self {
+        let initial_bytes_per_sec = (downstream_kbps.max(4_000) * 125).max(500_000);
         Self {
             link_key,
             net_handle: AtomicU64::new(handle),
             downstream_kbps: AtomicU64::new(downstream_kbps.max(1000)),
-            rtt_ms: AtomicU64::new(rtt_ms.max(10)),
+            measured_ewma_bps: AtomicU64::new(initial_bytes_per_sec),
+            in_flight_bytes: AtomicU64::new(0),
+            rtt_ms: AtomicU64::new(rtt_ms.max(8)),
             is_cellular,
             local_ip: RwLock::new(local_ip),
             proxy_override: RwLock::new(proxy_override),
@@ -113,7 +120,7 @@ impl BoundLinkState {
         self.net_handle.store(new_handle, Ordering::Release);
         self.downstream_kbps
             .store(downstream_kbps.max(1000), Ordering::Relaxed);
-        self.rtt_ms.store(rtt_ms.max(10), Ordering::Relaxed);
+        self.rtt_ms.store(rtt_ms.max(8), Ordering::Relaxed);
         if let Some(ip) = local_ip {
             *self.local_ip.write().unwrap_or_else(|p| p.into_inner()) = Some(ip);
         }
@@ -121,17 +128,30 @@ impl BoundLinkState {
         self.circuit_open_until_ms.store(0, Ordering::Release);
         self.last_blocked_reason.store(0, Ordering::Release);
     }
+
+    pub fn record_measured_bytes_per_sec(&self, sample_bps: u64) {
+        if sample_bps == 0 {
+            return;
+        }
+        let prev = self.measured_ewma_bps.load(Ordering::Relaxed);
+        let blended = if prev == 0 {
+            sample_bps
+        } else {
+            ((prev as f64) * 0.65 + (sample_bps as f64) * 0.35) as u64
+        };
+        self.measured_ewma_bps
+            .store(blended.max(125_000), Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AltSvcHint {
-    pub key: String, // "host|link_key"
+    pub key: String,
     pub h3_authority: String,
     pub observed_epoch_secs: u64,
     pub ttfb_ms: u64,
 }
 
-/// Bounded 256 KiB LRU cache storing Alt-Svc H3 hints & TLS resumption metadata keyed by (host, link_key)
 pub struct AltSvcHintCache {
     order: VecDeque<String>,
     map: HashMap<String, AltSvcHint>,
@@ -218,6 +238,8 @@ pub struct TransportContext {
     pub tls_config: Arc<ClientConfig>,
     pub h3_tls_config: Arc<ClientConfig>,
     pub alt_svc_cache: RwLock<AltSvcHintCache>,
+    /// Persistent per-link warm wreq::Client cache (fixes Slow Start reconnect sawtooth!).
+    wreq_pool: RwLock<HashMap<String, WreqClient>>,
 }
 
 impl TransportContext {
@@ -228,13 +250,13 @@ impl TransportContext {
         let mut cfg = ClientConfig::builder()
             .with_root_certificates(root_store.clone())
             .with_no_client_auth();
-        cfg.resumption = Resumption::in_memory_sessions(64);
+        cfg.resumption = Resumption::in_memory_sessions(128);
         cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let mut h3_cfg = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
-        h3_cfg.resumption = Resumption::in_memory_sessions(64);
+        h3_cfg.resumption = Resumption::in_memory_sessions(128);
         h3_cfg.enable_early_data = true;
         h3_cfg.alpn_protocols = vec![b"h3".to_vec()];
 
@@ -243,6 +265,7 @@ impl TransportContext {
             tls_config: Arc::new(cfg),
             h3_tls_config: Arc::new(h3_cfg),
             alt_svc_cache: RwLock::new(AltSvcHintCache::new()),
+            wreq_pool: RwLock::new(HashMap::new()),
         }
     }
 
@@ -257,18 +280,23 @@ impl TransportContext {
         proxy_override: Option<ProxyOverride>,
     ) -> bool {
         let mut guard = self.links.write().unwrap_or_else(|p| p.into_inner());
-        if let Some(existing) = guard.get(&link_key) {
+        let ip_changed_or_new = if let Some(existing) = guard.get(&link_key) {
+            let prev_ip = *existing.local_ip.read().unwrap_or_else(|p| p.into_inner());
+            let prev_px = existing.proxy_override.read().unwrap_or_else(|p| p.into_inner()).clone();
             existing.update_handle(net_handle, downstream_kbps, rtt_ms, local_ip);
             *existing
                 .proxy_override
                 .write()
-                .unwrap_or_else(|p| p.into_inner()) = proxy_override;
+                .unwrap_or_else(|p| p.into_inner()) = proxy_override.clone();
+            if prev_ip != local_ip || prev_px != proxy_override {
+                self.invalidate_client_pool_for_link(&link_key);
+            }
             false
         } else {
             guard.insert(
                 link_key.clone(),
                 Arc::new(BoundLinkState::new(
-                    link_key,
+                    link_key.clone(),
                     net_handle,
                     downstream_kbps,
                     rtt_ms,
@@ -277,13 +305,63 @@ impl TransportContext {
                     proxy_override,
                 )),
             );
-            true // Newly hot-plugged link!
-        }
+            true
+        };
+        ip_changed_or_new
     }
 
     pub fn remove_link(&self, link_key: &str) {
-        let mut guard = self.links.write().unwrap_or_else(|p| p.into_inner());
-        guard.remove(link_key);
+        self.links
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(link_key);
+        self.invalidate_client_pool_for_link(link_key);
+    }
+
+    fn invalidate_client_pool_for_link(&self, link_key: &str) {
+        let prefix = format!("{link_key}|");
+        self.wreq_pool
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    /// Returns a persistent warm `wreq::Client` pooled per `(link_key, local_ip, proxy, profile)`
+    /// so TLS 1.3 sessions & HTTP/2 streams stay open across every segment (zero Slow Start dip).
+    pub fn get_or_build_wreq_client(
+        &self,
+        link_key: &str,
+        local_ip: Option<IpAddr>,
+        proxy: Option<&ProxyOverride>,
+        profile: &str,
+    ) -> Result<WreqClient, wreq::Error> {
+        let px_tag = proxy
+            .map(|p| format!("{}:{}:{}:{}", p.host, p.port, p.is_socks5h, p.is_http))
+            .unwrap_or_else(|| "direct".to_string());
+        let ip_tag = local_ip
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "any".to_string());
+        let cache_key = format!(
+            "{link_key}|{ip_tag}|{px_tag}|{profile}|{}",
+            is_flag_enabled(FLAG_WREQ_EMULATION)
+        );
+
+        if let Some(cached) = self
+            .wreq_pool
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&cache_key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let built = build_wreq_link_client(local_ip, proxy, profile)?;
+        self.wreq_pool
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(cache_key, built.clone());
+        Ok(built)
     }
 
     pub fn snapshot_links(&self) -> Vec<Arc<BoundLinkState>> {
@@ -296,7 +374,6 @@ impl TransportContext {
     }
 }
 
-/// Binds a raw socket fd to a specific Android `net_handle_t` via `android_setsocknetwork` (API 23+).
 #[cfg(target_os = "android")]
 pub fn bind_fd_to_network(fd: i32, net_handle: u64) -> Result<(), i32> {
     if net_handle == 0 {
@@ -317,8 +394,6 @@ pub fn bind_fd_to_network(_fd: i32, _net_handle: u64) -> Result<(), i32> {
     Ok(())
 }
 
-/// Fix #1: Calls NDK `int32_t android_getnetworkblockedreason(int sockfd)` on the OPEN socket fd
-/// BEFORE dropping `sock` so we never suffer `EBADF`.
 #[cfg(target_os = "android")]
 pub fn query_socket_blocked_reason(fd: i32) -> NetworkBlockedReason {
     type BlockedReasonFn = unsafe extern "C" fn(sockfd: libc::c_int) -> i32;
@@ -333,7 +408,6 @@ pub fn query_socket_blocked_reason(fd: i32) -> NetworkBlockedReason {
     }
     let func: BlockedReasonFn = unsafe { std::mem::transmute(sym) };
     let raw = unsafe { func(fd) };
-    // Map Android NDK <android/multinetwork.h> reason codes
     let reason = match raw {
         0 => NetworkBlockedReason::None,
         1 => NetworkBlockedReason::DataSaver,
@@ -356,8 +430,6 @@ pub fn query_socket_blocked_reason(_fd: i32) -> NetworkBlockedReason {
     NetworkBlockedReason::None
 }
 
-/// Apply pre-connect tuning: SO_RCVBUF (6 MiB), TCP_NODELAY, and TCP_USER_TIMEOUT = 10,000 ms
-/// so stalled CGNAT / dead cellular flows abort cleanly in 10s instead of lingering.
 fn tune_tcp_socket(sock: &Socket) {
     let _ = sock.set_nodelay(true);
     let _ = sock.set_recv_buffer_size(BDP_RCVBUF_BYTES);
@@ -375,8 +447,6 @@ fn tune_tcp_socket(sock: &Socket) {
     }
 }
 
-/// Connects a TCP socket bound to `net_handle`, interrogating `android_getnetworkblockedreason(fd)`
-/// BEFORE dropping failed descriptors.
 pub async fn connect_bound_tcp(
     host: &str,
     port: u16,
@@ -387,7 +457,7 @@ pub async fn connect_bound_tcp(
     if let Some(px) = proxy {
         let resolved = resolve_with_race(&px.host, px.port, net_handle).await?;
         let mut stream = connect_socket_bound(resolved, net_handle).await?;
-        if px.is_socks5h {
+        if px.is_socks5h && !px.is_http {
             perform_socks5h_handshake(&mut stream, host, port).await?;
         }
         return Ok((stream, t0.elapsed()));
@@ -398,8 +468,6 @@ pub async fn connect_bound_tcp(
     Ok((stream, t0.elapsed()))
 }
 
-/// Parallel 3-DNS Race: System DNS + UDP A-record probe to 8.8.8.8:53 + 1.1.1.1:53
-/// bound strictly to `net_handle` via `android_setsocknetwork`.
 pub async fn resolve_with_race(
     host: &str,
     port: u16,
@@ -443,7 +511,6 @@ pub async fn resolve_with_race(
             if res.is_ok() { return res; }
         }
     }
-    // Fallback await system DNS if UDP race failed first
     tokio::net::lookup_host((host, port))
         .await?
         .next()
@@ -472,7 +539,7 @@ async fn udp_dns_a_query(
         pkt.push(label.len() as u8);
         pkt.extend_from_slice(label.as_bytes());
     }
-    pkt.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01]); // QTYPE=A, QCLASS=IN
+    pkt.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01]);
 
     udp.send_to(&pkt, server).await?;
     let mut resp = [0u8; 512];
@@ -496,7 +563,6 @@ fn parse_dns_first_a_record(buf: &[u8]) -> Option<Ipv4Addr> {
         return None;
     }
     let mut pos = 12;
-    // Skip question name
     while pos < buf.len() {
         let len = buf[pos];
         if len == 0 {
@@ -509,7 +575,7 @@ fn parse_dns_first_a_record(buf: &[u8]) -> Option<Ipv4Addr> {
         }
         pos += 1 + len as usize;
     }
-    pos += 4; // QTYPE + QCLASS
+    pos += 4;
 
     for _ in 0..ancount {
         if pos >= buf.len() {
@@ -553,7 +619,6 @@ async fn connect_socket_bound(addr: SocketAddr, net_handle: u64) -> std::io::Res
             if e.raw_os_error() == Some(libc::EINPROGRESS)
                 || e.kind() == std::io::ErrorKind::WouldBlock => {}
         Err(e) => {
-            // Query blocked reason BEFORE dropping `sock`!
             let reason = query_socket_blocked_reason(sock.as_raw_fd());
             if reason != NetworkBlockedReason::None {
                 record_diag("NET_BLOCK", &format!("TCP sync connect blocked: {}", reason.label()));
@@ -583,10 +648,7 @@ async fn connect_socket_bound(addr: SocketAddr, net_handle: u64) -> std::io::Res
     Ok(tokio_stream)
 }
 
-/// Build a link-isolated `wreq::Client` (Fix #2):
-/// - Explicitly calls `.no_proxy()` on direct links so `rmnet0` never leaks Wi-Fi HTTP_PROXY env vars
-/// - Does NOT enable gzip/brotli/zstd decompression so ranged payloads arrive bit-exact
-/// - Emulates Chrome134 or OkHttp5 TLS JA3/JA4 + H2 fingerprint
+/// Build a persistent pooled, link-isolated `wreq::Client` with keep-alive + high idle pool.
 pub fn build_wreq_link_client(
     local_ip: Option<IpAddr>,
     proxy: Option<&ProxyOverride>,
@@ -594,7 +656,10 @@ pub fn build_wreq_link_client(
 ) -> Result<WreqClient, wreq::Error> {
     let mut builder = WreqClient::builder()
         .connect_timeout(Duration::from_secs(12))
-        .tcp_nodelay(true);
+        .tcp_nodelay(true)
+        .tcp_keepalive(Duration::from_secs(30))
+        .pool_max_idle_per_host(16)
+        .pool_idle_timeout(Duration::from_secs(90));
 
     if is_flag_enabled(FLAG_WREQ_EMULATION) {
         let emu = match profile {
@@ -610,21 +675,24 @@ pub fn build_wreq_link_client(
     }
 
     if let Some(px) = proxy {
-        let scheme = if px.is_socks5h { "socks5h" } else { "socks5" };
+        let scheme = if px.is_http {
+            "http"
+        } else if px.is_socks5h {
+            "socks5h"
+        } else {
+            "socks5"
+        };
         let uri = format!("{scheme}://{}:{}", px.host, px.port);
         if let Ok(p) = WreqProxy::all(uri) {
             builder = builder.proxy(p);
         }
     } else {
-        // Explicit no_proxy() fixes Fix #2: cellular sockets never inherit Wi-Fi env proxies
         builder = builder.no_proxy();
     }
 
     builder.build()
 }
 
-/// Send an HTTP/1.1 or HTTP/2 request via `wreq` forcing `Accept-Encoding: identity`
-/// so byte ranges never shift due to server-side content compression.
 pub async fn send_wreq_range_request(
     client: &WreqClient,
     url: &str,
@@ -637,7 +705,6 @@ pub async fn send_wreq_range_request(
     req.send().await
 }
 
-/// Execute an HTTP/3 QUIC request bound strictly to `net_handle` via `android_setsocknetwork`.
 pub async fn fetch_h3_range_bytes(
     ctx: &TransportContext,
     link_key: &str,
@@ -707,7 +774,7 @@ pub async fn fetch_h3_range_bytes(
         .method("GET")
         .uri(url_str)
         .header("accept-encoding", "identity")
-        .header("user-agent", "AetherIO/8.0");
+        .header("user-agent", "AetherIO/9.0");
     if let Some(r) = range_header {
         req_builder = req_builder.header("range", r);
     }
@@ -761,7 +828,6 @@ pub async fn fetch_h3_range_bytes(
     Ok((status, headers, data))
 }
 
-/// RFC 6266 Content-Disposition filename parser (`filename*=UTF-8''...` and quoted `filename="..."`).
 pub fn parse_content_disposition_filename(header_val: &str) -> Option<String> {
     for part in header_val.split(';').map(str::trim) {
         let lower = part.to_ascii_lowercase();
@@ -817,7 +883,6 @@ pub fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-/// Magic-byte MIME sniffer for opaque redirect/stream downloads.
 pub fn sniff_mime_from_magic(prefix: &[u8], fallback_name: &str) -> &'static str {
     if prefix.starts_with(b"%PDF-") {
         return "application/pdf";
@@ -855,11 +920,9 @@ pub fn sniff_mime_from_magic(prefix: &[u8], fallback_name: &str) -> &'static str
     "application/octet-stream"
 }
 
-/// Keep HeaderValue in scope cleanly
 #[allow(dead_code)]
 fn _header_check(_v: HeaderValue) {}
 
-/// RFC 1928 SOCKS5h remote-DNS handshake (ATYP=0x03).
 async fn perform_socks5h_handshake(
     stream: &mut TcpStream,
     target_host: &str,

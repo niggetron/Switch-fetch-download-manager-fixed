@@ -15,6 +15,9 @@ import com.example.data.model.EngineSettings
 import com.example.data.model.F2FS_SEGMENT_BYTES
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.ProtocolMode
+import com.example.data.model.SpeedometerStyle
+import com.example.data.model.ThroughputProfile
+import com.example.data.model.WifiBandPreference
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -52,11 +55,22 @@ class SettingsRepository(private val context: Context) {
         val MAX_CELLULAR_BYTES = longPreferencesKey("max_cellular_bytes_session")
         val BROWSER_PROFILE = stringPreferencesKey("default_browser_profile")
         val PROTOCOL_MODE = stringPreferencesKey("default_protocol_mode")
+
+        // v9.0 Quad-Link Superbike & Anti-Dip keys
+        val SPEEDOMETER_STYLE = stringPreferencesKey("speedometer_style")
+        val THROUGHPUT_PROFILE = stringPreferencesKey("throughput_profile")
+        val DUAL_WIFI_ENABLED = booleanPreferencesKey("dual_wifi_enabled")
+        val USB_BONDING_ENABLED = booleanPreferencesKey("usb_bonding_enabled")
+        val WIFI2_SSID = stringPreferencesKey("wifi2_ssid")
+        val WIFI2_BAND_PREF = stringPreferencesKey("wifi2_band_pref")
+        val WIFI2_RELAY_HOST = stringPreferencesKey("wifi2_relay_host")
+        val WIFI2_RELAY_PORT = intPreferencesKey("wifi2_relay_port")
+        val WIFI2_RELAY_IS_HTTP = booleanPreferencesKey("wifi2_relay_is_http")
     }
 
     val settingsFlow: Flow<EngineSettings> = context.aetherDataStore.data.map { prefs ->
         EngineSettings(
-            maxConcurrentWorkers = (prefs[Keys.MAX_WORKERS] ?: 4).coerceIn(1, 8),
+            maxConcurrentWorkers = (prefs[Keys.MAX_WORKERS] ?: 8).coerceIn(1, 16),
             segmentSizeBytes = prefs[Keys.SEGMENT_SIZE] ?: F2FS_SEGMENT_BYTES,
             enableTailHedge = prefs[Keys.TAIL_HEDGE] ?: true,
             enableAutoSpeedUp = prefs[Keys.AUTO_SPEED_UP] ?: true,
@@ -89,6 +103,21 @@ class SettingsRepository(private val context: Context) {
             defaultProtocolMode = prefs[Keys.PROTOCOL_MODE]
                 ?.let { runCatching { ProtocolMode.valueOf(it) }.getOrNull() }
                 ?: ProtocolMode.AUTO_HYBRID,
+            speedometerStyle = prefs[Keys.SPEEDOMETER_STYLE]
+                ?.let { runCatching { SpeedometerStyle.valueOf(it) }.getOrNull() }
+                ?: SpeedometerStyle.SUPERBIKE_GRID,
+            throughputProfile = prefs[Keys.THROUGHPUT_PROFILE]
+                ?.let { runCatching { ThroughputProfile.valueOf(it) }.getOrNull() }
+                ?: ThroughputProfile.TURBO_ANTI_DIP,
+            dualWifiEnabled = prefs[Keys.DUAL_WIFI_ENABLED] ?: true,
+            usbBondingEnabled = prefs[Keys.USB_BONDING_ENABLED] ?: true,
+            wifi2Ssid = prefs[Keys.WIFI2_SSID] ?: "",
+            wifi2BandPreference = prefs[Keys.WIFI2_BAND_PREF]
+                ?.let { runCatching { WifiBandPreference.valueOf(it) }.getOrNull() }
+                ?: WifiBandPreference.BAND_5GHZ,
+            wifi2RelayHost = prefs[Keys.WIFI2_RELAY_HOST] ?: "",
+            wifi2RelayPort = (prefs[Keys.WIFI2_RELAY_PORT] ?: 1080).coerceIn(1, 65535),
+            wifi2RelayIsHttp = prefs[Keys.WIFI2_RELAY_IS_HTTP] ?: false,
         )
     }
 
@@ -97,7 +126,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun update(transform: (EngineSettings) -> EngineSettings) {
         val updated = transform(current())
         context.aetherDataStore.edit { prefs ->
-            prefs[Keys.MAX_WORKERS] = updated.maxConcurrentWorkers.coerceIn(1, 8)
+            prefs[Keys.MAX_WORKERS] = updated.maxConcurrentWorkers.coerceIn(1, 16)
             prefs[Keys.SEGMENT_SIZE] = updated.segmentSizeBytes
             prefs[Keys.TAIL_HEDGE] = updated.enableTailHedge
             prefs[Keys.AUTO_SPEED_UP] = updated.enableAutoSpeedUp
@@ -120,6 +149,15 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.MAX_CELLULAR_BYTES] = updated.maxCellularBytesPerSession.coerceAtLeast(0L)
             prefs[Keys.BROWSER_PROFILE] = updated.defaultBrowserProfile.name
             prefs[Keys.PROTOCOL_MODE] = updated.defaultProtocolMode.name
+            prefs[Keys.SPEEDOMETER_STYLE] = updated.speedometerStyle.name
+            prefs[Keys.THROUGHPUT_PROFILE] = updated.throughputProfile.name
+            prefs[Keys.DUAL_WIFI_ENABLED] = updated.dualWifiEnabled
+            prefs[Keys.USB_BONDING_ENABLED] = updated.usbBondingEnabled
+            prefs[Keys.WIFI2_SSID] = updated.wifi2Ssid.trim()
+            prefs[Keys.WIFI2_BAND_PREF] = updated.wifi2BandPreference.name
+            prefs[Keys.WIFI2_RELAY_HOST] = updated.wifi2RelayHost.trim()
+            prefs[Keys.WIFI2_RELAY_PORT] = updated.wifi2RelayPort.coerceIn(1, 65535)
+            prefs[Keys.WIFI2_RELAY_IS_HTTP] = updated.wifi2RelayIsHttp
         }
     }
 }

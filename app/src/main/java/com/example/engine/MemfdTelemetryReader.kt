@@ -6,6 +6,12 @@ import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
+/**
+ * Exact byte-for-byte projection of Rust `TelemetryPage` (4,096 bytes) in
+ * `rust/aether-core/src/storage_and_telemetry.rs` (v9.0 Quad-Link).
+ *
+ * `workerCountsPacked` layout: `[usb:12 | cell:12 | wifi2:12 | wifi1:12 | total:16]`.
+ */
 data class MemfdPageSnapshot(
     val totalWritten: Long,
     val totalExpected: Long,
@@ -22,18 +28,31 @@ data class MemfdPageSnapshot(
     val blockedReasonCode: Long,
     val contiguousVerifiedOffset: Long,
     val cellularQuotaRemaining: Long,
+    val wifi2GoodputBps: Long,
     val consumerSeq: Long,
+    val wifi2BytesTotal: Long,
+    val ethBytesTotal: Long,
+    val antiDipRescues: Long,
 ) {
     val totalWorkers: Int get() = (workerCountsPacked and 0xFFFFL).toInt()
-    val wifiWorkers: Int get() = ((workerCountsPacked ushr 16) and 0xFFFFL).toInt()
-    val cellWorkers: Int get() = ((workerCountsPacked ushr 32) and 0xFFFFL).toInt()
-    val ethWorkers: Int get() = ((workerCountsPacked ushr 48) and 0xFFFFL).toInt()
+    val wifiWorkers: Int get() = ((workerCountsPacked ushr 16) and 0x0FFFL).toInt()
+    val wifi2Workers: Int get() = ((workerCountsPacked ushr 28) and 0x0FFFL).toInt()
+    val cellWorkers: Int get() = ((workerCountsPacked ushr 40) and 0x0FFFL).toInt()
+    val ethWorkers: Int get() = ((workerCountsPacked ushr 52) and 0x0FFFL).toInt()
+
+    companion object {
+        fun packQuadWorkerCounts(total: Int, wifi1: Int, wifi2: Int, cell: Int, usb: Int): Long =
+            ((usb.toLong() and 0x0FFFL) shl 52) or
+                ((cell.toLong() and 0x0FFFL) shl 40) or
+                ((wifi2.toLong() and 0x0FFFL) shl 28) or
+                ((wifi1.toLong() and 0x0FFFL) shl 16) or
+                (total.toLong() and 0xFFFFL)
+    }
 }
 
 /**
  * Zero-JNI Read-Only Mmap Telemetry Reader backed by Rust `memfd_create()` +
  * `ParcelFileDescriptor.adoptFd(fd)` mapped READ_ONLY.
- * Exact layout matches `TelemetryPage` in `rust/aether-core/src/storage_and_telemetry.rs`.
  */
 class MemfdTelemetryReader : AutoCloseable {
     private var pfd: ParcelFileDescriptor? = null
@@ -82,7 +101,11 @@ class MemfdTelemetryReader : AutoCloseable {
             blockedReasonCode = buf.getLong(0x060),
             contiguousVerifiedOffset = buf.getLong(0x068),
             cellularQuotaRemaining = buf.getLong(0x070),
+            wifi2GoodputBps = buf.getLong(0x078),
             consumerSeq = buf.getLong(0x080),
+            wifi2BytesTotal = buf.getLong(0x088),
+            ethBytesTotal = buf.getLong(0x090),
+            antiDipRescues = buf.getLong(0x098),
         )
     }
 

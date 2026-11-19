@@ -3,11 +3,16 @@ package com.example.ui.screens
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,32 +20,32 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -51,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -64,10 +70,20 @@ import com.example.data.model.NewDownloadRequest
 import com.example.data.model.ProtocolMode
 import com.example.engine.NetworkMatrixState
 import com.example.ui.components.StatusPill
+import com.example.ui.motion.AetherSharedKey
+import com.example.ui.motion.LocalMotionSpeedMultiplier
+import com.example.ui.motion.SharedPart
+import com.example.ui.motion.aetherSharedBounds
+import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/**
+ * In-tree Container Transform Overlay for Launching a Zero-Merge Pipeline.
+ * Morphs directly from the FloatingActionButton (`FAB_NEW_DOWNLOAD`) via official
+ * Jetpack Compose `sharedBounds` inside the root `SharedTransitionLayout`.
+ */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun NewDownloadSheet(
     defaultSettings: EngineSettings,
@@ -77,7 +93,9 @@ fun NewDownloadSheet(
 ) {
     val context = LocalContext.current
     val ext = LocalAetherColors.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val motionSpeed = LocalMotionSpeedMultiplier.current
+
+    BackHandler(onBack = onDismiss)
 
     var urlText by remember { mutableStateOf("") }
     var mirrorUrlsText by remember { mutableStateOf("") }
@@ -102,28 +120,64 @@ fun NewDownloadSheet(
         if (uri != null) safDestinationUri = uri
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.62f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onDismiss,
+            )
+            .padding(horizontal = 12.dp, vertical = 18.dp)
+            .testTag("new_download_sheet"),
+        contentAlignment = Alignment.BottomCenter,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 620.dp)
+                .aetherSharedBounds(
+                    key = AetherSharedKey("fab_new_download", SharedPart.FAB_NEW_DOWNLOAD),
+                    clipShape = RoundedCornerShape(24.dp),
+                    zIndexInOverlay = 3f,
+                )
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.2.dp, ext.cyan.copy(alpha = 0.48f), RoundedCornerShape(24.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                )
+                .animateContentSize(aetherSpringSpec(motionSpeed))
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Bolt,
-                    contentDescription = null,
-                    tint = ext.cyan,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Launch Zero-Merge Pipeline", style = MaterialTheme.typography.titleLarge)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Bolt,
+                        contentDescription = null,
+                        tint = ext.cyan,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Launch Zero-Merge Pipeline", style = MaterialTheme.typography.titleLarge)
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("close_new_download_sheet_button"),
+                ) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close new download panel")
+                }
             }
 
             OutlinedTextField(
@@ -149,7 +203,7 @@ fun NewDownloadSheet(
                 },
             )
 
-            if (isAdaptiveManifest) {
+            AnimatedVisibility(visible = isAdaptiveManifest) {
                 StatusPill(label = "HLS/DASH Adaptive Segment Extractor Armed", color = ext.cyan)
             }
 
@@ -283,7 +337,11 @@ fun NewDownloadSheet(
                 Text("TRANSPORT & LINK POLICY", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     text = if (networkMatrix.activeValidatedLinks.isNotEmpty()) {
-                        String.format("%.1f Mbps est.", networkMatrix.aggregateEstimatedMbps)
+                        String.format(
+                            "%d/4 links · %.1f Mbps est.",
+                            networkMatrix.activeValidatedLinks.size,
+                            networkMatrix.aggregateEstimatedMbps,
+                        )
                     } else "No validated links",
                     style = MaterialTheme.typography.labelSmall,
                     color = ext.emerald,
@@ -330,7 +388,7 @@ fun NewDownloadSheet(
                     Text("Adaptive BDP Segment Workers", style = MaterialTheme.typography.titleSmall)
                     Text("${workerCount.roundToInt()} parallel streams", style = MaterialTheme.typography.labelMedium, color = ext.emerald)
                 }
-                Slider(value = workerCount, onValueChange = { workerCount = it }, valueRange = 1f..8f, steps = 6)
+                Slider(value = workerCount, onValueChange = { workerCount = it }, valueRange = 1f..16f, steps = 14)
             }
 
             Row(

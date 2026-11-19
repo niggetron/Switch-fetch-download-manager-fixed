@@ -191,17 +191,19 @@ fun SankeyLinkSplitBar(
     wifiBytes: Long,
     cellBytes: Long,
     ethBytes: Long = 0L,
+    wifi2Bytes: Long = 0L,
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
-    val total = (wifiBytes + cellBytes + ethBytes).coerceAtLeast(1L)
+    val total = (wifiBytes + wifi2Bytes + cellBytes + ethBytes).coerceAtLeast(1L)
     val wifiFrac = (wifiBytes.toFloat() / total).coerceIn(0f, 1f)
+    val wifi2Frac = (wifi2Bytes.toFloat() / total).coerceIn(0f, 1f)
     val cellFrac = (cellBytes.toFloat() / total).coerceIn(0f, 1f)
     val ethFrac = (ethBytes.toFloat() / total).coerceIn(0f, 1f)
 
     Column(
         modifier = modifier.semantics {
-            contentDescription = "Sankey interface split bar: Wi-Fi ${(wifiFrac * 100).toInt()} percent, 5G ${(cellFrac * 100).toInt()} percent"
+            contentDescription = "Quad-link interface split bar: Wi-Fi 1 ${(wifiFrac * 100).toInt()}%, Wi-Fi 2 ${(wifi2Frac * 100).toInt()}%, 5G ${(cellFrac * 100).toInt()}%, USB ${(ethFrac * 100).toInt()}%"
         },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -220,9 +222,14 @@ fun SankeyLinkSplitBar(
                 drawRect(color = ext.cyan, topLeft = Offset(x, 0f), size = Size(sw, h))
                 x += sw
             }
+            if (wifi2Bytes > 0L) {
+                val w2w = w * wifi2Frac
+                drawRect(color = ext.violet, topLeft = Offset(x, 0f), size = Size(w2w, h))
+                x += w2w
+            }
             if (cellBytes > 0L) {
                 val cw = w * cellFrac
-                drawRect(color = ext.violet, topLeft = Offset(x, 0f), size = Size(cw, h))
+                drawRect(color = ext.amber, topLeft = Offset(x, 0f), size = Size(cw, h))
                 x += cw
             }
             if (ethBytes > 0L) {
@@ -234,10 +241,13 @@ fun SankeyLinkSplitBar(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            LegendDot("Wi-Fi ${(wifiFrac * 100).toInt()}% (${Formatters.formatBytes(wifiBytes)})", ext.cyan)
-            LegendDot("5G ${(cellFrac * 100).toInt()}% (${Formatters.formatBytes(cellBytes)})", ext.violet)
+            LegendDot("Wi-Fi 1 ${(wifiFrac * 100).toInt()}% (${Formatters.formatBytes(wifiBytes)})", ext.cyan)
+            if (wifi2Bytes > 0L) {
+                LegendDot("Wi-Fi 2 ${(wifi2Frac * 100).toInt()}% (${Formatters.formatBytes(wifi2Bytes)})", ext.violet)
+            }
+            LegendDot("5G ${(cellFrac * 100).toInt()}% (${Formatters.formatBytes(cellBytes)})", ext.amber)
             if (ethBytes > 0L) {
-                LegendDot("Eth ${(ethFrac * 100).toInt()}% (${Formatters.formatBytes(ethBytes)})", ext.emerald)
+                LegendDot("USB ${(ethFrac * 100).toInt()}% (${Formatters.formatBytes(ethBytes)})", ext.emerald)
             }
         }
     }
@@ -251,7 +261,7 @@ fun BdpConcurrencyHeatmap(
 ) {
     val ext = LocalAetherColors.current
     val rttBuckets = listOf("<=20ms", "40ms", "80ms", "120ms+")
-    val workerCols = listOf(1, 2, 4, 6, 8)
+    val workerCols = listOf(2, 4, 8, 12, 16)
     val activeRttRow = when {
         lastRttMs <= 25L -> 0
         lastRttMs <= 55L -> 1
@@ -354,7 +364,7 @@ fun RooflineParetoChart(
                 style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
             val opX = (w * 0.65f)
-            val opNorm = (currentMbps / 400.0).toFloat().coerceIn(0.05f, 1.0f)
+            val opNorm = (currentMbps / 1000.0).toFloat().coerceIn(0.05f, 1.0f)
             val opY = (h * 0.88f) - opNorm * (h * 0.70f)
             drawCircle(color = ext.emerald, radius = 5.dp.toPx(), center = Offset(opX, opY))
         }
@@ -362,7 +372,7 @@ fun RooflineParetoChart(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text("Storage/CPU Roofline (400 Mbps peak)", style = MaterialTheme.typography.labelSmall, color = ext.amber)
+            Text("Quad-Link Storage/CPU Roofline (1000 Mbps)", style = MaterialTheme.typography.labelSmall, color = ext.amber)
             Text(String.format("Now: %.1f Mbps", currentMbps), style = MonoMetricStyle, color = ext.emerald)
         }
     }

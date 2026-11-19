@@ -20,25 +20,37 @@ const val DATA_SYNC_QUOTA_MS = 6L * 60L * 60L * 1000L // Android 15/16 6h dataSy
 data class TelemetrySnapshot(
     val instantBps: Long = 0L,
     val peakBps: Long = 0L,
+    val avgBps: Long = 0L,
     val wifiBps: Long = 0L,
+    val wifi2Bps: Long = 0L,
     val cellBps: Long = 0L,
     val ethBps: Long = 0L,
     val wifiPeakBps: Long = 0L,
+    val wifi2PeakBps: Long = 0L,
     val cellPeakBps: Long = 0L,
     val ethPeakBps: Long = 0L,
+    val wifiAvgBps: Long = 0L,
+    val wifi2AvgBps: Long = 0L,
+    val cellAvgBps: Long = 0L,
+    val ethAvgBps: Long = 0L,
     val rustPeakBps: Long = 0L,
     val kotlinPeakBps: Long = 0L,
     val wifiBytesTotal: Long = 0L,
+    val wifi2BytesTotal: Long = 0L,
     val cellBytesTotal: Long = 0L,
     val ethBytesTotal: Long = 0L,
     val speedHistoryBps: List<Long> = emptyList(),
     val wifiHistoryBps: List<Long> = emptyList(),
+    val wifi2HistoryBps: List<Long> = emptyList(),
     val cellHistoryBps: List<Long> = emptyList(),
     val ethHistoryBps: List<Long> = emptyList(),
     val activeWorkers: Int = 0,
     val wifiWorkers: Int = 0,
+    val wifi2Workers: Int = 0,
     val cellularWorkers: Int = 0,
     val ethWorkers: Int = 0,
+    val antiDipRescues: Long = 0L,
+    val stabilityPercent: Int = 100,
     val activeConnections: List<ActiveConnectionInfo> = emptyList(),
     val slabAllocatedMb: Float = 0f,
     val slabInUseMb: Float = 0f,
@@ -61,13 +73,10 @@ data class TelemetrySnapshot(
 )
 
 /**
- * Cache-line aligned telemetry aggregator supporting BOTH:
- * 1) Zero-JNI `memfd_create()` page when Rust `libaether_core.so` is driving transfers
- * 2) Per-link live metering + connection registry when Kotlin OkHttp engine is running
- *
- * Thread-safe synchronized sampling prevents competing background callers from draining
- * byte windows out from under the 4 Hz UI speedometer loop, and accurately sums concurrent
- * Rust + Kotlin transfers while tracking per-network peaks and dual-engine A/B peaks.
+ * Quad-Link Cache-Line Aligned Telemetry Aggregator (v9.0):
+ * Tracks live speed, session MAX peak, TRUE active AVG speed, bytes transferred, worker count,
+ * and Anti-Dip rescues across all 4 links (Wi-Fi 1, Wi-Fi 2, Mobile 5G/LTE, USB/Ethernet)
+ * for BOTH Rust `libaether_core.so` (zero-JNI memfd) and Kotlin OkHttp Engine!
  */
 class TelemetryLedger(
     private val context: Context,
@@ -78,22 +87,40 @@ class TelemetryLedger(
 
     private val bytesWindow = AtomicLong(0L)
     private val wifiBytesWindow = AtomicLong(0L)
+    private val wifi2BytesWindow = AtomicLong(0L)
     private val cellBytesWindow = AtomicLong(0L)
     private val ethBytesWindow = AtomicLong(0L)
+
     private val wifiBytesCumulative = AtomicLong(0L)
+    private val wifi2BytesCumulative = AtomicLong(0L)
     private val cellBytesCumulative = AtomicLong(0L)
     private val ethBytesCumulative = AtomicLong(0L)
 
     private val lastWindowCheckMs = AtomicLong(System.currentTimeMillis())
     private val peakBps = AtomicLong(0L)
     private val wifiPeakBps = AtomicLong(0L)
+    private val wifi2PeakBps = AtomicLong(0L)
     private val cellPeakBps = AtomicLong(0L)
     private val ethPeakBps = AtomicLong(0L)
     private val rustPeakBps = AtomicLong(0L)
     private val kotlinPeakBps = AtomicLong(0L)
+    private val kotlinAntiDipRescues = AtomicLong(0L)
+
+    // True active-time running averages (sum of non-zero sample speeds / active sample count)
+    private var aggActiveSum = 0L
+    private var aggActiveCount = 0L
+    private var wifiActiveSum = 0L
+    private var wifiActiveCount = 0L
+    private var wifi2ActiveSum = 0L
+    private var wifi2ActiveCount = 0L
+    private var cellActiveSum = 0L
+    private var cellActiveCount = 0L
+    private var ethActiveSum = 0L
+    private var ethActiveCount = 0L
 
     private val activeWorkers = AtomicInteger(0)
     private val wifiWorkers = AtomicInteger(0)
+    private val wifi2Workers = AtomicInteger(0)
     private val cellularWorkers = AtomicInteger(0)
     private val ethWorkers = AtomicInteger(0)
     private val totalSyscallWriteBatches = AtomicLong(0L)
@@ -123,6 +150,7 @@ class TelemetryLedger(
 
     private val speedRing = ArrayDeque<Long>(60)
     private val wifiRing = ArrayDeque<Long>(60)
+    private val wifi2Ring = ArrayDeque<Long>(60)
     private val cellRing = ArrayDeque<Long>(60)
     private val ethRing = ArrayDeque<Long>(60)
 
@@ -130,10 +158,6 @@ class TelemetryLedger(
         memfdReader.attachIfNativeAvailable()
     }
 
-    /**
-     * Audited Fix #5: Query `SystemHealthManager.getCpuHeadroomMinIntervalMillis()` once at startup
-     * and poll `getCpuHeadroom()` in a dedicated background coroutine with cooldown >= 1000ms.
-     */
     fun startCpuHeadroomMonitor(scope: CoroutineScope) {
         if (!headroomStarted.compareAndSet(false, true)) return
         if (Build.VERSION.SDK_INT < 36) return
@@ -155,12 +179,12 @@ class TelemetryLedger(
                     val value = getHeadroomMethod.first.invoke(shm, null) as? Number
                     val pct = value?.toFloat()?.coerceIn(0f, 100f)?.toInt()
                     cachedCpuHeadroomPct = pct
-                    if (pct != null && pct < 25) {
-                        AetherNativeBridge.setThermalWorkerCapSafe(2)
-                    } else if (pct != null && pct < 45) {
+                    if (pct != null && pct < 20) {
                         AetherNativeBridge.setThermalWorkerCapSafe(4)
-                    } else {
+                    } else if (pct != null && pct < 40) {
                         AetherNativeBridge.setThermalWorkerCapSafe(8)
+                    } else {
+                        AetherNativeBridge.setThermalWorkerCapSafe(16)
                     }
                 }.onFailure {
                     if (it.cause is UnsupportedOperationException || it is UnsupportedOperationException) {
@@ -177,6 +201,10 @@ class TelemetryLedger(
         activeEngineBadgeLabel = badge
     }
 
+    fun recordAntiDipRescue() {
+        kotlinAntiDipRescues.incrementAndGet()
+    }
+
     fun recordEnginePeak(backend: ResolvedEngineBackend, speedBps: Long) {
         if (speedBps <= 0L) return
         when (backend) {
@@ -188,18 +216,32 @@ class TelemetryLedger(
     fun resetSessionPeaks() {
         peakBps.set(0L)
         wifiPeakBps.set(0L)
+        wifi2PeakBps.set(0L)
         cellPeakBps.set(0L)
         ethPeakBps.set(0L)
         rustPeakBps.set(0L)
         kotlinPeakBps.set(0L)
+        kotlinAntiDipRescues.set(0L)
         synchronized(sampleLock) {
+            aggActiveSum = 0L; aggActiveCount = 0L
+            wifiActiveSum = 0L; wifiActiveCount = 0L
+            wifi2ActiveSum = 0L; wifi2ActiveCount = 0L
+            cellActiveSum = 0L; cellActiveCount = 0L
+            ethActiveSum = 0L; ethActiveCount = 0L
             cachedSnapshot = cachedSnapshot.copy(
                 peakBps = 0L,
+                avgBps = 0L,
                 wifiPeakBps = 0L,
+                wifi2PeakBps = 0L,
                 cellPeakBps = 0L,
                 ethPeakBps = 0L,
+                wifiAvgBps = 0L,
+                wifi2AvgBps = 0L,
+                cellAvgBps = 0L,
+                ethAvgBps = 0L,
                 rustPeakBps = 0L,
                 kotlinPeakBps = 0L,
+                antiDipRescues = 0L,
             )
         }
     }
@@ -229,7 +271,11 @@ class TelemetryLedger(
                 cellBytesWindow.addAndGet(bytes)
                 cellBytesCumulative.addAndGet(bytes)
             }
-            linkKeyId?.startsWith("eth:") == true -> {
+            linkKeyId?.startsWith("wifi2:") == true -> {
+                wifi2BytesWindow.addAndGet(bytes)
+                wifi2BytesCumulative.addAndGet(bytes)
+            }
+            linkKeyId?.startsWith("eth:") == true || linkKeyId?.startsWith("usb:") == true -> {
                 ethBytesWindow.addAndGet(bytes)
                 ethBytesCumulative.addAndGet(bytes)
             }
@@ -256,7 +302,8 @@ class TelemetryLedger(
         activeWorkers.incrementAndGet()
         when {
             linkKeyId?.startsWith("cell:") == true -> cellularWorkers.incrementAndGet()
-            linkKeyId?.startsWith("eth:") == true -> ethWorkers.incrementAndGet()
+            linkKeyId?.startsWith("wifi2:") == true -> wifi2Workers.incrementAndGet()
+            linkKeyId?.startsWith("eth:") == true || linkKeyId?.startsWith("usb:") == true -> ethWorkers.incrementAndGet()
             else -> wifiWorkers.incrementAndGet()
         }
     }
@@ -269,7 +316,9 @@ class TelemetryLedger(
         activeWorkers.updateAndGet { (it - 1).coerceAtLeast(0) }
         when {
             linkKeyId?.startsWith("cell:") == true -> cellularWorkers.updateAndGet { (it - 1).coerceAtLeast(0) }
-            linkKeyId?.startsWith("eth:") == true -> ethWorkers.updateAndGet { (it - 1).coerceAtLeast(0) }
+            linkKeyId?.startsWith("wifi2:") == true -> wifi2Workers.updateAndGet { (it - 1).coerceAtLeast(0) }
+            linkKeyId?.startsWith("eth:") == true || linkKeyId?.startsWith("usb:") == true ->
+                ethWorkers.updateAndGet { (it - 1).coerceAtLeast(0) }
             else -> wifiWorkers.updateAndGet { (it - 1).coerceAtLeast(0) }
         }
     }
@@ -288,10 +337,6 @@ class TelemetryLedger(
         quotaSessionStartMs.set(0L)
     }
 
-    /**
-     * Used by background service notifications: reuses the fresh UI sample when foregrounded
-     * so the 1 Hz service never steals window bytes from the 4 Hz UI speedometers.
-     */
     fun sampleSnapshotIfStale(hasActiveDownloads: Boolean, maxAgeMs: Long = 600L): TelemetrySnapshot {
         val now = System.currentTimeMillis()
         if (lastSampleTimestampMs > 0L && (now - lastSampleTimestampMs) < maxAgeMs) {
@@ -312,11 +357,13 @@ class TelemetryLedger(
 
         val windowTotal = bytesWindow.getAndSet(0L)
         val windowWifi = wifiBytesWindow.getAndSet(0L)
+        val windowWifi2 = wifi2BytesWindow.getAndSet(0L)
         val windowCell = cellBytesWindow.getAndSet(0L)
         val windowEth = ethBytesWindow.getAndSet(0L)
 
         val kotlinTotalBps = if (hasActiveDownloads || windowTotal > 0L) (windowTotal * 1000L) / dtMs else 0L
         val kotlinWifiBps = if (hasActiveDownloads || windowWifi > 0L) (windowWifi * 1000L) / dtMs else 0L
+        val kotlinWifi2Bps = if (hasActiveDownloads || windowWifi2 > 0L) (windowWifi2 * 1000L) / dtMs else 0L
         val kotlinCellBps = if (hasActiveDownloads || windowCell > 0L) (windowCell * 1000L) / dtMs else 0L
         val kotlinEthBps = if (hasActiveDownloads || windowEth > 0L) (windowEth * 1000L) / dtMs else 0L
 
@@ -327,12 +374,13 @@ class TelemetryLedger(
             0L
         }
         val rustWifiBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.wifiGoodputBps / 8L else 0L
+        val rustWifi2Bps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.wifi2GoodputBps / 8L else 0L
         val rustCellBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.cellGoodputBps / 8L else 0L
         val rustEthBps = if (memfdSnap != null && rustTotalBps > 0L) memfdSnap.ethGoodputBps / 8L else 0L
 
-        // Combine both engines cleanly if a Rust task and Kotlin task execute concurrently
         val totalBps = rustTotalBps + kotlinTotalBps
         val wifiBpsNow = rustWifiBps + kotlinWifiBps
+        val wifi2BpsNow = rustWifi2Bps + kotlinWifi2Bps
         val cellBpsNow = rustCellBps + kotlinCellBps
         val ethBpsNow = rustEthBps + kotlinEthBps
 
@@ -341,22 +389,42 @@ class TelemetryLedger(
 
         val peakAll = peakBps.updateAndGet { maxOf(it, totalBps) }
         val peakWifi = wifiPeakBps.updateAndGet { maxOf(it, wifiBpsNow) }
+        val peakWifi2 = wifi2PeakBps.updateAndGet { maxOf(it, wifi2BpsNow) }
         val peakCell = cellPeakBps.updateAndGet { maxOf(it, cellBpsNow) }
         val peakEth = ethPeakBps.updateAndGet { maxOf(it, ethBpsNow) }
 
+        // Accumulate true active averages only while traffic is flowing
+        if (totalBps > 0L) { aggActiveSum += totalBps; aggActiveCount += 1L }
+        if (wifiBpsNow > 0L) { wifiActiveSum += wifiBpsNow; wifiActiveCount += 1L }
+        if (wifi2BpsNow > 0L) { wifi2ActiveSum += wifi2BpsNow; wifi2ActiveCount += 1L }
+        if (cellBpsNow > 0L) { cellActiveSum += cellBpsNow; cellActiveCount += 1L }
+        if (ethBpsNow > 0L) { ethActiveSum += ethBpsNow; ethActiveCount += 1L }
+
+        val avgAll = if (aggActiveCount > 0L) aggActiveSum / aggActiveCount else 0L
+        val avgWifi = if (wifiActiveCount > 0L) wifiActiveSum / wifiActiveCount else 0L
+        val avgWifi2 = if (wifi2ActiveCount > 0L) wifi2ActiveSum / wifi2ActiveCount else 0L
+        val avgCell = if (cellActiveCount > 0L) cellActiveSum / cellActiveCount else 0L
+        val avgEth = if (ethActiveCount > 0L) ethActiveSum / ethActiveCount else 0L
+
         if (speedRing.size >= 48) speedRing.removeFirst()
         if (wifiRing.size >= 48) wifiRing.removeFirst()
+        if (wifi2Ring.size >= 48) wifi2Ring.removeFirst()
         if (cellRing.size >= 48) cellRing.removeFirst()
         if (ethRing.size >= 48) ethRing.removeFirst()
         speedRing.addLast(totalBps)
         wifiRing.addLast(wifiBpsNow)
+        wifi2Ring.addLast(wifi2BpsNow)
         cellRing.addLast(cellBpsNow)
         ethRing.addLast(ethBpsNow)
 
         val historyCopy = speedRing.toList()
         val wifiHistCopy = wifiRing.toList()
+        val wifi2HistCopy = wifi2Ring.toList()
         val cellHistCopy = cellRing.toList()
         val ethHistCopy = ethRing.toList()
+
+        // Stability index: how consistently sustained speed holds near active average (100% = zero dips)
+        val stabilityPct = computeStabilityPercent(historyCopy)
 
         val rt = Runtime.getRuntime()
         val jvmUsedMb = (rt.totalMemory() - rt.freeMemory()) / (1024f * 1024f)
@@ -388,6 +456,7 @@ class TelemetryLedger(
 
         val rustWTotal = memfdSnap?.totalWorkers ?: 0
         val rustWWifi = memfdSnap?.wifiWorkers ?: 0
+        val rustWWifi2 = memfdSnap?.wifi2Workers ?: 0
         val rustWCell = memfdSnap?.cellWorkers ?: 0
         val rustWEth = memfdSnap?.ethWorkers ?: 0
 
@@ -396,25 +465,37 @@ class TelemetryLedger(
         val snap = TelemetrySnapshot(
             instantBps = totalBps,
             peakBps = peakAll,
+            avgBps = avgAll,
             wifiBps = wifiBpsNow,
+            wifi2Bps = wifi2BpsNow,
             cellBps = cellBpsNow,
             ethBps = ethBpsNow,
             wifiPeakBps = peakWifi,
+            wifi2PeakBps = peakWifi2,
             cellPeakBps = peakCell,
             ethPeakBps = peakEth,
+            wifiAvgBps = avgWifi,
+            wifi2AvgBps = avgWifi2,
+            cellAvgBps = avgCell,
+            ethAvgBps = avgEth,
             rustPeakBps = rustPeakBps.get(),
             kotlinPeakBps = kotlinPeakBps.get(),
             wifiBytesTotal = (memfdSnap?.wifiBytesTotal ?: 0L) + wifiBytesCumulative.get(),
+            wifi2BytesTotal = (memfdSnap?.wifi2BytesTotal ?: 0L) + wifi2BytesCumulative.get(),
             cellBytesTotal = (memfdSnap?.cellBytesTotal ?: 0L) + cellBytesCumulative.get(),
-            ethBytesTotal = ethBytesCumulative.get(),
+            ethBytesTotal = (memfdSnap?.ethBytesTotal ?: 0L) + ethBytesCumulative.get(),
             speedHistoryBps = historyCopy,
             wifiHistoryBps = wifiHistCopy,
+            wifi2HistoryBps = wifi2HistCopy,
             cellHistoryBps = cellHistCopy,
             ethHistoryBps = ethHistCopy,
             activeWorkers = rustWTotal + activeWorkers.get(),
             wifiWorkers = rustWWifi + wifiWorkers.get(),
+            wifi2Workers = rustWWifi2 + wifi2Workers.get(),
             cellularWorkers = rustWCell + cellularWorkers.get(),
             ethWorkers = rustWEth + ethWorkers.get(),
+            antiDipRescues = (memfdSnap?.antiDipRescues ?: 0L) + kotlinAntiDipRescues.get(),
+            stabilityPercent = stabilityPct,
             activeConnections = combinedConns,
             slabAllocatedMb = slabAllocMb,
             slabInUseMb = slabInUseMb,
@@ -439,10 +520,16 @@ class TelemetryLedger(
         snap
     }
 
-    /**
-     * Exact discriminant mapping matching Rust `NetworkBlockedReason` enum (`transport.rs`):
-     * 0=None, 1=DataSaver, 2=Oem, 3=Doze, 4=LocalNetwork, 5=UnknownPolicy.
-     */
+    private fun computeStabilityPercent(samples: List<Long>): Int {
+        val active = samples.takeLast(16).filter { it > 0L }
+        if (active.size < 3) return 100
+        val mean = active.average()
+        if (mean <= 0.0) return 100
+        val avgAbsDev = active.map { kotlin.math.abs(it - mean) }.average()
+        val ratio = (1.0 - (avgAbsDev / mean)).coerceIn(0.0, 1.0)
+        return (ratio * 100.0).toInt().coerceIn(0, 100)
+    }
+
     private fun decodeBlockedReason(code: Long): String = when (code) {
         0L -> "None"
         1L -> "Data Saver (BLOCKED_REASON_DATA_SAVER)"

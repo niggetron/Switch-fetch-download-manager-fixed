@@ -1,4 +1,4 @@
-//! Rotating redacted local diagnostics log + runtime feature-flag kill switches.
+//! Rotating redacted local diagnostics log + runtime feature-flag kill switches (v9.0).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -12,12 +12,16 @@ pub const FLAG_IO_URING_PROBE: u32 = 1 << 3;
 pub const FLAG_ARIA2_RPC: u32 = 1 << 4;
 pub const FLAG_TAIL_HEDGE: u32 = 1 << 5;
 pub const FLAG_AUTO_SPEED_UP: u32 = 1 << 6;
+pub const FLAG_TURBO_MULTI_SOCKET: u32 = 1 << 7;
+pub const FLAG_ANTI_DIP_WATCHDOG: u32 = 1 << 8;
 
 const DEFAULT_FLAGS: u32 = FLAG_MULTI_LINK
     | FLAG_HTTP3_QUIC
     | FLAG_WREQ_EMULATION
     | FLAG_TAIL_HEDGE
-    | FLAG_AUTO_SPEED_UP;
+    | FLAG_AUTO_SPEED_UP
+    | FLAG_TURBO_MULTI_SOCKET
+    | FLAG_ANTI_DIP_WATCHDOG;
 
 const MAX_LOG_ENTRIES: usize = 256;
 
@@ -30,7 +34,7 @@ fn log_ring() -> &'static Mutex<VecDeque<String>> {
 
 pub fn set_feature_flags(mask: u32) {
     FEATURE_FLAGS.store(mask, Ordering::Release);
-    record_diag("FLAGS", &format!("Updated runtime feature mask=0x{mask:02X}"));
+    record_diag("FLAGS", &format!("Updated runtime feature mask=0x{mask:03X}"));
 }
 
 pub fn feature_flags() -> u32 {
@@ -94,7 +98,7 @@ pub fn export_diagnostics_text() -> String {
     let guard = log_ring().lock().unwrap_or_else(|p| p.into_inner());
     if guard.is_empty() {
         return format!(
-            "AetherIO Rust v8.0 · feature_mask=0x{:02X} · ring empty",
+            "AetherIO Rust v9.0 · feature_mask=0x{:03X} · ring empty",
             feature_flags()
         );
     }

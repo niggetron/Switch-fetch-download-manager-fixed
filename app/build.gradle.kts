@@ -8,18 +8,20 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
-// CI overrides: the GitHub Actions workflow passes these to bump the version and
-// restrict the build to arm64-v8a. Locally they are absent and the defaults below apply.
+// CI overrides: the GitHub Actions workflow passes these to bump the version, assign a
+// unique package name per build (-PciApplicationId), and restrict the build to arm64-v8a.
+// Locally they are absent and the defaults below apply.
 val ciVersionCode = (findProperty("ciVersionCode") as String?)?.toIntOrNull() ?: 1
-val ciVersionName = (findProperty("ciVersionName") as String?) ?: "1.0"
+val ciVersionName = (findProperty("ciVersionName") as String?) ?: "9.0"
 val ciAbiFilter = findProperty("ciAbiFilter") as String?
+val ciApplicationId = (findProperty("ciApplicationId") as String?)?.takeIf { it.isNotBlank() }
 
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.aetherio.xkqmzp"
+    applicationId = ciApplicationId ?: "com.aistudio.aetherio.xkqmzp"
     minSdk = 24
     targetSdk = 36
     versionCode = ciVersionCode

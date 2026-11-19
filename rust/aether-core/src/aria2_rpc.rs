@@ -182,8 +182,8 @@ pub fn handle_json_rpc_payload(
     let (result, error) = match req.method.as_str() {
         "aria2.getVersion" => (
             Some(json!({
-                "version": "1.37.0-aetherio-v8.0",
-                "enabledFeatures": ["HTTPS", "HTTP2", "HTTP3-QUIC", "MultiLink", "BLAKE3"]
+                "version": "1.37.0-aetherio-v9.0",
+                "enabledFeatures": ["HTTPS", "HTTP2", "HTTP3-QUIC", "QuadLink", "AntiDip", "BLAKE3"]
             })),
             None,
         ),

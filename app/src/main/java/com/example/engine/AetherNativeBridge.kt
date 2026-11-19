@@ -12,21 +12,16 @@ data class NativeTaskOutcome(
     val downloadedBytes: Long,
     val totalBytes: Long,
     val wifiBytes: Long,
+    val wifi2Bytes: Long,
     val cellBytes: Long,
+    val usbBytes: Long,
     val sha256Hex: String,
     val ttfbMs: Long,
     val errorMessage: String,
 )
 
 /**
- * Tier-2 JNI Control Bridge to `libaether_core.so` (Rust `aether-core` v8.0).
- *
- * When `libaether_core.so` is packaged in `jniLibs/arm64-v8a/` (via `cargo-ndk` in CI or locally),
- * exposes full Rust async engine (wreq prefix-symbols + quinn/h3 0-RTT), BoundedSlabPool (8.0 MiB),
- * memfd_create() telemetry page, per-LinkKey handle/localIp updates, feature flags,
- * Aria2 loopback JSON-RPC (:6800), and BLAKE3/SHA-256 verification.
- *
- * Also co-exists seamlessly with Kotlin OkHttp engine for user-controlled A/B benchmarking.
+ * Tier-2 JNI Control Bridge to `libaether_core.so` (Rust `aether-core` v9.0).
  */
 object AetherNativeBridge {
     val isNativeLoaded: Boolean by lazy {
@@ -39,9 +34,9 @@ object AetherNativeBridge {
     val engineBackendLabel: String
         get() = if (isNativeLoaded) {
             runCatching { nativeEngineVersion() }
-                .getOrDefault("libaether_core.so v8.0 (Rust JNI Active)")
+                .getOrDefault("libaether_core.so v9.0 (Rust JNI Active)")
         } else {
-            "Kotlin OkHttp + DirectByteBuffer (libaether_core.so not bundled)"
+            "Kotlin OkHttp Turbo Engine (Install GitHub Releases arm64 APK for bundled Rust libaether_core.so)"
         }
 
     fun updateLinkHandleSafe(
@@ -81,7 +76,7 @@ object AetherNativeBridge {
 
     fun setThermalWorkerCapSafe(maxWorkers: Int) {
         if (!isNativeLoaded) return
-        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 8)) }
+        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 16)) }
     }
 
     fun startDownloadSafe(
@@ -103,7 +98,7 @@ object AetherNativeBridge {
                 outputPath = outputPath,
                 ledgerPath = ledgerPath,
                 directFd = directFd,
-                maxWorkers = maxWorkers.coerceIn(1, 8),
+                maxWorkers = maxWorkers.coerceIn(1, 16),
                 maxCellularBytes = maxCellularBytes,
                 browserProfile = browserProfile,
                 protocolMode = protocolMode,
@@ -142,7 +137,9 @@ object AetherNativeBridge {
                 downloadedBytes = obj.optLong("downloaded_bytes", 0L),
                 totalBytes = obj.optLong("total_bytes", 0L),
                 wifiBytes = obj.optLong("wifi_bytes", 0L),
+                wifi2Bytes = obj.optLong("wifi2_bytes", 0L),
                 cellBytes = obj.optLong("cell_bytes", 0L),
+                usbBytes = obj.optLong("usb_bytes", 0L),
                 sha256Hex = obj.optString("sha256_hex", ""),
                 ttfbMs = obj.optLong("ttfb_ms", 0L),
                 errorMessage = obj.optString("error_message", ""),

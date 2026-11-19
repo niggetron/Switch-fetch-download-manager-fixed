@@ -7,6 +7,7 @@ import com.example.data.repository.DownloadRepository
 import com.example.engine.AetherDownloadEngine
 import com.example.engine.AetherNativeBridge
 import com.example.engine.DiagnosticsCenter
+import com.example.engine.DualWifiConnector
 import com.example.engine.MemfdTelemetryReader
 import com.example.engine.NetworkMonitor
 import com.example.engine.SlabBufferPool
@@ -31,6 +32,7 @@ class AetherApplication : Application() {
     val slabBufferPool by lazy { SlabBufferPool() }
     val memfdTelemetryReader by lazy { MemfdTelemetryReader() }
     val networkMonitor by lazy { NetworkMonitor(this) }
+    val dualWifiConnector by lazy { DualWifiConnector(this, networkMonitor) }
     val telemetryLedger by lazy { TelemetryLedger(this, slabBufferPool, memfdTelemetryReader) }
     val downloadEngine by lazy {
         AetherDownloadEngine(
@@ -67,6 +69,7 @@ class AetherApplication : Application() {
         telemetryLedger.startCpuHeadroomMonitor(appScope)
         appScope.launch {
             val saved = settingsRepository.current()
+            dualWifiConnector.probeCapabilities()
             networkMonitor.start(saved)
             downloadEngine.reconcileLedgersOnStartup()
             syncAria2RpcState(saved.enableAria2Rpc)

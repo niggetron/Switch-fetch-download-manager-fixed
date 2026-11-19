@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -14,10 +19,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.WifiFind
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +40,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,12 +50,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.data.local.DownloadEntity
 import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
 import com.example.data.model.EngineBackendPreference
 import com.example.data.model.EngineSettings
 import com.example.data.model.NetworkRouteMode
+import com.example.data.model.SpeedometerStyle
+import com.example.data.model.ThroughputProfile
 import com.example.engine.AetherNativeBridge
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
@@ -83,6 +100,11 @@ fun TelemetryScreen(
     onPruneCas: () -> Unit,
     onCopyDiagnostics: () -> Unit,
     onCopyAria2Secret: () -> Unit,
+    onOpenDualWifi: () -> Unit = {},
+    isSimulating: Boolean = false,
+    motionSpeedMultiplier: Float = 1.0f,
+    onOpenSimulator: () -> Unit = {},
+    onSelectGauge: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -91,6 +113,29 @@ fun TelemetryScreen(
     var wifiProxyPortDraft by remember(settings.proxyPort) { mutableStateOf(settings.proxyPort.toString()) }
     var cellProxyHostDraft by remember(settings.cellularProxyHost) { mutableStateOf(settings.cellularProxyHost) }
     var cellProxyPortDraft by remember(settings.cellularProxyPort) { mutableStateOf(settings.cellularProxyPort.toString()) }
+    var permRefreshTick by remember { mutableIntStateOf(0) }
+
+    val multiPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        permRefreshTick++
+    }
+
+    val notifGranted = remember(permRefreshTick) {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+    val wifiScanPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+        Manifest.permission.ACCESS_FINE_LOCATION
+    }
+    val wifiScanGranted = remember(permRefreshTick) {
+        ContextCompat.checkSelfPermission(context, wifiScanPerm) == PackageManager.PERMISSION_GRANTED
+    }
+    val batteryUnrestricted = remember(permRefreshTick) {
+        AetherDownloadService.isIgnoringBatteryOptimizations(context)
+    }
 
     val completed = downloads.filter { it.statusEnum == DownloadStatus.COMPLETED }
     val peakMbps = ((telemetry.peakBps * 8.0) / 1_000_000.0).toFloat()
@@ -99,20 +144,21 @@ fun TelemetryScreen(
     val ttfbScore = if (telemetry.lastTtfbMs > 0L) (100f * (1f - telemetry.lastTtfbMs / 500f)).coerceIn(40f, 98.5f) else 95.0f
     val breakersHealthy = networkMatrix.activeValidatedLinks.all { it.breakerState == BreakerState.CLOSED }
     val multipathScore = when {
-        networkMatrix.isMultipathReady && breakersHealthy -> 99.4f
+        networkMatrix.activeValidatedLinks.size >= 3 && breakersHealthy -> 99.8f
+        networkMatrix.isMultipathReady && breakersHealthy -> 96.5f
         networkMatrix.hasAnyInternet && breakersHealthy -> 91.0f
         else -> 70.0f
     }
 
     val radarAxes = listOf(
         RadarAxis("1. Lock", lockAxis),
-        RadarAxis("2. RAM/8M", ramAxis),
+        RadarAxis("2. RAM/12M", ramAxis),
         RadarAxis("3. Thermal", if (telemetry.thermalHeadroomClear) 96.4f else 62f),
-        RadarAxis("4. pwrite", if (settings.enableAutoSpeedUp) 98.5f else 91.0f),
+        RadarAxis("4. pwrite", if (settings.enableAutoSpeedUp) 98.8f else 91.0f),
         RadarAxis("5. CAS/SHA", if (settings.enableCasVerification) 99.4f else 75f),
-        RadarAxis("6. 1G FD", if (settings.stagedSafPlacement) 98.0f else 84.0f),
+        RadarAxis("6. AntiDip", telemetry.stabilityPercent.toFloat().coerceIn(60f, 99.5f)),
         RadarAxis("7. TTFB", ttfbScore),
-        RadarAxis("8. 5G/Brk", multipathScore),
+        RadarAxis("8. QuadLnk", multipathScore),
     )
 
     LazyColumn(
@@ -122,40 +168,111 @@ fun TelemetryScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Per-Network Live Radial Speedometers (Aggregate, Wi-Fi, 5G/LTE, USB-C Eth) + A/B Engine Benchmark
+        // Per-Network Live Speedometers (Aggregate, Wi-Fi 1, Mobile 5G, Wi-Fi 2, USB/Eth) + A/B Benchmark
         item(key = "per_network_speedometers") {
             FullSpeedometerDashboardCard(
                 telemetry = telemetry,
                 networkMatrix = networkMatrix,
                 useMBpsUnit = useMBpsSpeedUnit,
+                speedometerStyle = settings.speedometerStyle,
                 onToggleUnit = onToggleSpeedUnit,
                 onResetPeaks = onResetPeaks,
+                onSelectGauge = onSelectGauge,
+                onOpenSimulator = onOpenSimulator,
+                isSimulating = isSimulating,
             )
+        }
+
+        // User-Selectable Bike / Vehicle Speedometer Layout Selector
+        item(key = "speedometer_style_selector") {
+            EngineSectionCard(title = "BIKE / VEHICLE SPEEDOMETER COCKPIT LAYOUT") {
+                Text(
+                    text = "Pick your preferred motorsport gauge cluster under the Aggregate Throughput card. Switching layouts morphs all 4 gauges smoothly with Jetpack Compose Shared Element Transitions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SpeedometerStyle.entries.forEach { style ->
+                        FilterChip(
+                            selected = settings.speedometerStyle == style,
+                            onClick = { onUpdateSettings { it.copy(speedometerStyle = style) } },
+                            label = { Text(style.label) },
+                            modifier = Modifier.testTag("speedometer_style_${style.name.lowercase()}"),
+                        )
+                    }
+                }
+            }
+        }
+
+        // Interactive Speed & Animation Simulator Lab Launch Card
+        item(key = "speed_animation_sim_lab") {
+            EngineSectionCard(title = "SPEED & ANIMATION SIMULATOR LAB") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusPill(
+                        label = if (isSimulating) "SIMULATION LIVE" else "SANDBOX READY",
+                        color = if (isSimulating) ext.amber else ext.cyan,
+                    )
+                    StatusPill(
+                        label = String.format("MOTION %.2f×", motionSpeedMultiplier),
+                        color = ext.violet,
+                    )
+                }
+                Text(
+                    text = "Preview all 4 speedometer needle/LED redline sweeps, test Anti-Dip rescue waves, scrub global shared-element slow-motion (0.25×–1.5×), and trigger every card/FAB/gauge morph in the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = onOpenSimulator,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_open_sim_lab_button"),
+                ) {
+                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (isSimulating) "Open Running Speed & Animation Lab" else "Launch Speed & Animation Simulator Lab")
+                }
+            }
         }
 
         // Dual-Engine Individual A/B Toggles
         item(key = "dual_engine_toggles") {
-            EngineSectionCard(title = "DUAL-ENGINE A/B SWITCHBOARD (INDIVIDUAL TOGGLES)") {
+            EngineSectionCard(title = "DUAL-ENGINE A/B SWITCHBOARD (RUST + KOTLIN)") {
                 StatusPill(
                     label = if (telemetry.isNativeRustActive) {
                         "libaether_core.so LOADED · Both Engines Ready"
                     } else {
-                        "Kotlin OkHttp Active · libaether_core.so builds in CI"
+                        "Kotlin OkHttp Turbo Active · CI arm64 APK bundles Rust .so"
                     },
                     color = if (telemetry.isNativeRustActive) ext.emerald else ext.amber,
                 )
 
+                if (!telemetry.isNativeRustActive) {
+                    Text(
+                        text = "Tip: AI Studio preview builds omit cargo-ndk so only Kotlin OkHttp Turbo runs in preview. Download the arm64-v8a release APK from GitHub Releases to benchmark BOTH Rust libaether_core.so and Kotlin OkHttp side-by-side!",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
                 EngineToggleRow(
-                    title = "Rust Native Engine (libaether_core.so)",
-                    subtitle = "wreq BoringSSL + quinn/h3 0-RTT + Semaphore SlabPool 8 MiB + memfd",
+                    title = "Rust Native Engine (libaether_core.so v9.0)",
+                    subtitle = "Persistent wreq BoringSSL pool + quinn/h3 0-RTT + Decoupled Disk Writer + 12 MiB SlabPool",
                     checked = settings.enableRustEngine,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableRustEngine = on) } },
                     modifier = Modifier.testTag("toggle_rust_engine"),
                 )
 
                 EngineToggleRow(
-                    title = "Kotlin OkHttp Multi-Network Engine",
-                    subtitle = "DirectByteBuffer FileChannel + Bound Network socketFactory + AETHLDG2",
+                    title = "Kotlin OkHttp Turbo Multi-Network Engine",
+                    subtitle = "Persistent per-link pools (32 sockets/host) + Lock-Free pwrite + Live Range Bisection",
                     checked = settings.enableKotlinOkHttpEngine,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableKotlinOkHttpEngine = on) } },
                     modifier = Modifier.testTag("toggle_kotlin_engine"),
@@ -182,9 +299,115 @@ fun TelemetryScreen(
             }
         }
 
+        // Quad-Link Dual-Wi-Fi & USB Tethering Boost Controls
+        item(key = "quad_link_controls") {
+            EngineSectionCard(title = "QUAD-LINK BONDING (WI-FI 1 + WI-FI 2 + 5G + USB)") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusPill(
+                        label = when {
+                            networkMatrix.activeValidatedLinks.size >= 4 -> "QUAD-LINK 4/4 ACTIVE"
+                            networkMatrix.activeValidatedLinks.size == 3 -> "TRI-LINK 3/4 ACTIVE"
+                            networkMatrix.isMultipathReady -> "DUAL-LINK ${networkMatrix.activeValidatedLinks.size}/4 ACTIVE"
+                            else -> "SINGLE LINK (${networkMatrix.activeValidatedLinks.size}/4)"
+                        },
+                        color = if (networkMatrix.isMultipathReady) ext.emerald else ext.cyan,
+                    )
+                    OutlinedButton(onClick = onRefreshNetwork, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                        Text("Probe Links")
+                    }
+                }
+
+                Button(
+                    onClick = onOpenDualWifi,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_open_dual_wifi_button"),
+                ) {
+                    Icon(Icons.Filled.Router, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Configure Wi-Fi 2 Connector & USB Tethering")
+                }
+
+                EngineToggleRow(
+                    title = "Dual-Band Wi-Fi 2 Boost (Direct Dual-STA / Relay)",
+                    subtitle = "Bond a second Wi-Fi network alongside Wi-Fi 1, 5G/LTE, and USB.",
+                    checked = settings.dualWifiEnabled,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(dualWifiEnabled = on) } },
+                )
+                EngineToggleRow(
+                    title = "USB Tethering & USB-C Ethernet Bonding",
+                    subtitle = "Automatically schedule streams onto TRANSPORT_USB / TRANSPORT_ETHERNET.",
+                    checked = settings.usbBondingEnabled,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(usbBondingEnabled = on) } },
+                )
+
+                LinkHardeningCard(title = "Wi-Fi 1 Primary LinkKey", endpoint = networkMatrix.wifiLink)
+                LinkHardeningCard(title = "Wi-Fi 2 Secondary / Relay LinkKey", endpoint = networkMatrix.wifi2Link)
+                LinkHardeningCard(title = "Mobile 5G/LTE Logical LinkKey", endpoint = networkMatrix.cellularLink)
+                LinkHardeningCard(title = "USB Tethering / USB-C Eth LinkKey", endpoint = networkMatrix.ethernetLink)
+
+                Text(
+                    text = "Completed zero-merge tasks: ${completed.size} · Last TTFB: ${telemetry.lastTtfbMs} ms · Anti-Dip Rescues: ${telemetry.antiDipRescues}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        // Non-Root Permissions Readiness Card
+        item(key = "non_root_permissions") {
+            EngineSectionCard(title = "NON-ROOT PERMISSIONS & OS SURVIVAL READINESS") {
+                Text(
+                    text = "Grant these zero-root Android permissions to keep full quad-link Wi-Fi + 5G + USB speed running without OEM throttling or background sleep.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                PermissionRow(
+                    icon = Icons.Filled.NotificationsActive,
+                    title = "Foreground Live Speed Notification",
+                    granted = notifGranted,
+                    actionLabel = "Grant",
+                    onAction = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            multiPermLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                        }
+                    },
+                )
+                PermissionRow(
+                    icon = Icons.Filled.WifiFind,
+                    title = "Nearby Wi-Fi 2 Discovery Scan",
+                    granted = wifiScanGranted,
+                    actionLabel = "Grant",
+                    onAction = { multiPermLauncher.launch(arrayOf(wifiScanPerm)) },
+                )
+                PermissionRow(
+                    icon = Icons.Filled.BatteryChargingFull,
+                    title = "Unrestricted Battery (Anti-Doze)",
+                    granted = batteryUnrestricted,
+                    actionLabel = "Allow",
+                    onAction = {
+                        runCatching { context.startActivity(AetherDownloadService.createBatteryExemptionIntent(context)) }
+                            .onFailure { runCatching { context.startActivity(AetherDownloadService.createAppBatteryDetailsIntent(context)) } }
+                        permRefreshTick++
+                    },
+                )
+                PermissionRow(
+                    icon = Icons.Filled.Shield,
+                    title = "Wi-Fi / Cellular Multi-Network Lease (Normal)",
+                    granted = true,
+                    actionLabel = "Granted",
+                    onAction = {},
+                )
+            }
+        }
+
         // 4-Layer Telemetry Summary
         item(key = "four_layer_cards") {
-            EngineSectionCard(title = "v8.0 4-LAYER ENGINE TELEMETRY") {
+            EngineSectionCard(title = "v9.0 4-LAYER ENGINE TELEMETRY") {
                 EngineLayerRow(
                     title = "L1 · OS Control & dataSync Quota Guard",
                     detail = "Thermal: ${telemetry.thermalStatusLabel} · Quota left ${Formatters.formatDurationHms(telemetry.quotaRemainingMs)}",
@@ -196,14 +419,14 @@ fun TelemetryScreen(
                     color = ext.violet,
                 )
                 EngineLayerRow(
-                    title = "L3 · Multi-Network Earliest-Arrival Matrix",
-                    detail = "Peak ${Formatters.formatSpeedMbps(telemetry.peakBps)} · Workers ${telemetry.activeWorkers} (${telemetry.wifiWorkers}W/${telemetry.cellularWorkers}C/${telemetry.ethWorkers}E)",
+                    title = "L3 · Quad-Link Anti-Dip Earliest-Arrival Matrix",
+                    detail = "Peak ${Formatters.formatSpeedMbps(telemetry.peakBps)} · Avg ${Formatters.formatSpeedMbps(telemetry.avgBps)} · Workers ${telemetry.activeWorkers} (${telemetry.wifiWorkers}W1/${telemetry.wifi2Workers}W2/${telemetry.cellularWorkers}C/${telemetry.ethWorkers}U)",
                     color = ext.emerald,
                 )
                 EngineLayerRow(
-                    title = "L4 · BoundedSlabPool (8.0 MiB) & AETHLDG2",
+                    title = "L4 · BoundedSlabPool (12.0 MiB) & Async Disk Writer",
                     detail = String.format(
-                        "%s\nSlabs %.1f / 8.0 MB (in-use %.1f MB) · JVM %.1f MB · Native %.1f MB · %d batches",
+                        "%s\nSlabs %.1f / 12.0 MB (in-use %.1f MB) · JVM %.1f MB · Native %.1f MB · %d batches",
                         AetherNativeBridge.engineBackendLabel,
                         telemetry.slabAllocatedMb,
                         telemetry.slabInUseMb,
@@ -235,43 +458,9 @@ fun TelemetryScreen(
             }
         }
 
-        // Multi-Network Hardening & Circuit Breakers
-        item(key = "network_matrix") {
-            EngineSectionCard(title = "MULTI-NETWORK HARDENING & CIRCUIT BREAKERS (F1–F10)") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    StatusPill(
-                        label = when {
-                            networkMatrix.isMultipathReady -> "MULTI-LINK BOND READY (${networkMatrix.activeValidatedLinks.size})"
-                            networkMatrix.cellularLeaseRequested -> "5G LEASE ARMED"
-                            else -> "SINGLE LINK"
-                        },
-                        color = if (networkMatrix.isMultipathReady) ext.emerald else ext.cyan,
-                    )
-                    OutlinedButton(onClick = onRefreshNetwork, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                        Text("Probe Links")
-                    }
-                }
-
-                LinkHardeningCard(title = "Wi-Fi Logical LinkKey", endpoint = networkMatrix.wifiLink)
-                LinkHardeningCard(title = "Cellular 5G/LTE Logical LinkKey", endpoint = networkMatrix.cellularLink)
-                networkMatrix.ethernetLink?.let { eth ->
-                    LinkHardeningCard(title = "USB-C Ethernet Hot-Plug LinkKey", endpoint = eth)
-                }
-                Text(
-                    text = "Completed zero-merge tasks: ${completed.size} · Last TTFB: ${telemetry.lastTtfbMs} ms",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
         // 8-Axis Radar Audit
         item(key = "eight_axis_radar") {
-            EngineSectionCard(title = "v8.0 8-AXIS ARCHITECTURE AUDIT") {
+            EngineSectionCard(title = "v9.0 8-AXIS ARCHITECTURE AUDIT") {
                 EightAxisRadarChart(axes = radarAxes, modifier = Modifier.fillMaxWidth())
             }
         }
@@ -281,7 +470,7 @@ fun TelemetryScreen(
             OsSurvivalAndDiagnosticsCard(
                 telemetry = telemetry,
                 networkMatrix = networkMatrix,
-                isIgnoringBatteryOpt = AetherDownloadService.isIgnoringBatteryOptimizations(context),
+                isIgnoringBatteryOpt = batteryUnrestricted,
                 fontLicenseAudit = fontLicenseAudit,
                 diagnosticsPreview = diagnosticsPreview,
                 onOpenBatterySettings = {
@@ -292,9 +481,24 @@ fun TelemetryScreen(
             )
         }
 
-        // Feature Kill Switches & Policy
+        // Feature Kill Switches & Anti-Dip Policy
         item(key = "engine_config") {
-            EngineSectionCard(title = "PROTOCOL KILL SWITCHES, ARIA2 RPC & PROXY POLICY") {
+            EngineSectionCard(title = "ANTI-DIP TUNING, KILL SWITCHES & PROXY POLICY") {
+                Text("THROUGHPUT & ANTI-DIP PROFILE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    ThroughputProfile.entries.forEach { profile ->
+                        FilterChip(
+                            selected = settings.throughputProfile == profile,
+                            onClick = { onUpdateSettings { it.copy(throughputProfile = profile) } },
+                            label = { Text(profile.label) },
+                            modifier = Modifier.testTag("throughput_profile_${profile.name.lowercase()}"),
+                        )
+                    }
+                }
+
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Default Worker Concurrency", style = MaterialTheme.typography.titleSmall)
@@ -306,8 +510,8 @@ fun TelemetryScreen(
                             val count = it.roundToInt()
                             onUpdateSettings { s -> s.copy(maxConcurrentWorkers = count) }
                         },
-                        valueRange = 1f..8f,
-                        steps = 6,
+                        valueRange = 1f..16f,
+                        steps = 14,
                     )
                 }
 
@@ -325,19 +529,19 @@ fun TelemetryScreen(
                 )
                 EngineToggleRow(
                     title = "wreq Chrome TLS/H2 Fingerprint Emulation",
-                    subtitle = "BoringSSL ALPS/GREASE emulation with .no_proxy() cellular isolation",
+                    subtitle = "BoringSSL ALPS/GREASE emulation with persistent keep-alive pools",
                     checked = settings.enableWreqEmulation,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableWreqEmulation = on) } },
                 )
                 EngineToggleRow(
                     title = "Bidirectional autoSpeedUp Controller",
-                    subtitle = "Dynamically scales workers +2 / -2 based on Δgoodput & ΔRTT",
+                    subtitle = "Dynamically scales workers up to 16 based on Δgoodput & ΔRTT",
                     checked = settings.enableAutoSpeedUp,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableAutoSpeedUp = on) } },
                 )
                 EngineToggleRow(
-                    title = "Tail Shadow-Hedge Work-Stealing",
-                    subtitle = "Idle workers race & bisect slow extents with pinned LinkKeys",
+                    title = "Anti-Dip Live Range Bisection & Tail Hedge",
+                    subtitle = "Idle workers atomically split lagging segments in flight without stalling",
                     checked = settings.enableTailHedge,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableTailHedge = on) } },
                 )
@@ -393,7 +597,7 @@ fun TelemetryScreen(
                     OutlinedTextField(
                         value = wifiProxyHostDraft,
                         onValueChange = { wifiProxyHostDraft = it; onUpdateSettings { s -> s.copy(proxyHost = it) } },
-                        label = { Text("Wi-Fi SOCKS5h") },
+                        label = { Text("Wi-Fi 1 SOCKS5h") },
                         placeholder = { Text("Direct") },
                         singleLine = true,
                         modifier = Modifier.weight(2f),
@@ -452,6 +656,51 @@ fun TelemetryScreen(
         }
 
         item { Spacer(modifier = Modifier.height(76.dp)) }
+    }
+}
+
+@Composable
+private fun PermissionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    granted: Boolean,
+    actionLabel: String,
+    onAction: () -> Unit,
+) {
+    val ext = LocalAetherColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .border(1.dp, ext.cardBorder, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (granted) ext.emerald else ext.amber,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(text = title, style = MaterialTheme.typography.bodySmall)
+        }
+        if (granted) {
+            StatusPill(label = "READY", color = ext.emerald)
+        } else {
+            OutlinedButton(
+                onClick = onAction,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                Text(actionLabel, style = MaterialTheme.typography.labelSmall)
+            }
+        }
     }
 }
 

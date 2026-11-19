@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +43,8 @@ import com.example.data.model.ActiveConnectionInfo
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
+import com.example.ui.motion.LocalMotionSpeedMultiplier
+import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
 import com.example.ui.theme.MonoMetricStyle
 import com.example.util.Formatters
@@ -104,9 +107,10 @@ fun PerNetworkLiveSpeedPanel(
             )
         }
 
-        if (telemetry.wifiBytesTotal + telemetry.cellBytesTotal + telemetry.ethBytesTotal > 0L) {
+        if (telemetry.wifiBytesTotal + telemetry.wifi2BytesTotal + telemetry.cellBytesTotal + telemetry.ethBytesTotal > 0L) {
             SankeyLinkSplitBar(
                 wifiBytes = telemetry.wifiBytesTotal,
+                wifi2Bytes = telemetry.wifi2BytesTotal,
                 cellBytes = telemetry.cellBytesTotal,
                 ethBytes = telemetry.ethBytesTotal,
                 modifier = Modifier.fillMaxWidth(),
@@ -195,6 +199,7 @@ fun KetchConnectionsInspectorCard(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
     var expanded by remember { mutableStateOf(true) }
 
     Column(
@@ -203,6 +208,7 @@ fun KetchConnectionsInspectorCard(
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, ext.cardBorder, RoundedCornerShape(16.dp))
+            .animateContentSize(aetherSpringSpec(motionSpeed))
             .padding(14.dp)
             .testTag("ketch_connections_inspector"),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -241,8 +247,9 @@ fun KetchConnectionsInspectorCard(
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 connections.forEach { conn ->
                     val linkAccent = when {
-                        conn.linkKeyId.startsWith("cell:") -> ext.violet
-                        conn.linkKeyId.startsWith("eth:") -> ext.emerald
+                        conn.linkKeyId.startsWith("wifi2:") -> ext.violet
+                        conn.linkKeyId.startsWith("cell:") -> ext.amber
+                        conn.linkKeyId.startsWith("eth:") || conn.linkKeyId.startsWith("usb:") -> ext.emerald
                         else -> ext.cyan
                     }
                     Column(

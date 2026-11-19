@@ -117,10 +117,13 @@ class MultiNetworkAndSchedulerTest {
     }
 
     @Test
-    fun `v7_1 adaptive BDP sizing and bidirectional autoSpeedUp scaling`() {
+    fun `v9_0 adaptive BDP sizing up to 32 MiB and bidirectional autoSpeedUp scaling up to 16 workers`() {
         assertEquals(1L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(33_000))
         assertEquals(4L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(90_000))
         assertEquals(8L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(163_000))
+        assertEquals(16L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(400_000))
+        assertEquals(32L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(900_000))
+        assertEquals(16, LinkScheduler.effectiveWorkerCount(userMaxConnections = 24, validatedLinksCount = 4))
 
         // Goodput improves > 6% with low RTT growth -> +2 workers
         assertEquals(
@@ -293,16 +296,62 @@ class MultiNetworkAndSchedulerTest {
     }
 
     @Test
-    fun `Ethernet hot-plug LinkKey, multi-mirror selection, and range bisection`() {
-        val eth = LinkKey.Ethernet("eth0")
+    fun `Quad-Link LinkKeys, 4-way mirror distribution, memfd quad worker packing, and range bisection`() {
+        val wifi2 = LinkKey.WifiSecondary("wlan1")
+        assertTrue(wifi2.isWifiSecondary)
+        assertFalse(wifi2.isCellular)
+        assertEquals("wifi2:wlan1", wifi2.id)
+
+        val eth = LinkKey.Ethernet("usb0")
         assertTrue(eth.isEthernet)
         assertFalse(eth.isCellular)
-        assertEquals("eth:eth0", eth.id)
+        assertEquals("eth:usb0", eth.id)
 
-        val mirrors = listOf("https://m0.cdn/a.bin", "https://m1.cdn/a.bin", "https://m2.cdn/a.bin")
+        val mirrors = listOf(
+            "https://m0.cdn/a.bin",
+            "https://m1.cdn/a.bin",
+            "https://m2.cdn/a.bin",
+            "https://m3.cdn/a.bin",
+        )
         assertEquals("https://m0.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "wifi:wlan0", 0))
         assertEquals("https://m1.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "cell:rmnet0", 0))
-        assertEquals("https://m2.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "eth:eth0", 0))
+        assertEquals("https://m2.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "wifi2:wlan1", 0))
+        assertEquals("https://m3.cdn/a.bin", LinkScheduler.selectMirrorForLink(mirrors, "eth:usb0", 0))
+
+        val packed = com.example.engine.MemfdPageSnapshot.packQuadWorkerCounts(
+            total = 16,
+            wifi1 = 4,
+            wifi2 = 4,
+            cell = 4,
+            usb = 4,
+        )
+        val snap = com.example.engine.MemfdPageSnapshot(
+            totalWritten = 0L,
+            totalExpected = 0L,
+            goodputBps = 0L,
+            stateFlags = 0L,
+            wifiGoodputBps = 0L,
+            cellGoodputBps = 0L,
+            ethGoodputBps = 0L,
+            ttfbMs = 0L,
+            producerSeq = 0L,
+            wifiBytesTotal = 0L,
+            cellBytesTotal = 0L,
+            workerCountsPacked = packed,
+            blockedReasonCode = 0L,
+            contiguousVerifiedOffset = 0L,
+            cellularQuotaRemaining = 0L,
+            wifi2GoodputBps = 0L,
+            consumerSeq = 0L,
+            wifi2BytesTotal = 0L,
+            ethBytesTotal = 0L,
+            antiDipRescues = 0L,
+        )
+        assertEquals(4, snap.wifiWorkers)
+        assertEquals(4, snap.cellWorkers)
+        assertEquals(4, snap.wifi2Workers)
+        assertEquals(4, snap.ethWorkers)
+        assertEquals(16, snap.totalWorkers)
 
         val bisected = LinkScheduler.bisectRange(0L, 4L * 1024L * 1024L - 1L)
         assertNotNull(bisected)

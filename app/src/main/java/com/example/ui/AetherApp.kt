@@ -5,18 +5,23 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +32,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Speed
@@ -48,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,13 +69,23 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.Lifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.ui.components.FocusedGaugeOverlay
+import com.example.ui.motion.AetherSharedKey
+import com.example.ui.motion.LocalAnimatedVisibilityScope
+import com.example.ui.motion.LocalMotionSpeedMultiplier
+import com.example.ui.motion.LocalSharedTransitionScope
+import com.example.ui.motion.SharedPart
+import com.example.ui.motion.aetherOverlayZIndex
+import com.example.ui.motion.aetherSharedBounds
+import com.example.ui.screens.AnimationSimulatorSheet
+import com.example.ui.screens.DualWifiConnectorSheet
 import com.example.ui.screens.FilesScreen
 import com.example.ui.screens.NewDownloadSheet
 import com.example.ui.screens.TelemetryScreen
@@ -94,7 +111,7 @@ private val destinations = listOf(
     NavDestination(ROUTE_ENGINE, "Engine", Icons.Filled.Speed, Icons.Outlined.Speed),
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun AetherApp(viewModel: AetherViewModel) {
     val context = LocalContext.current
@@ -113,6 +130,10 @@ fun AetherApp(viewModel: AetherViewModel) {
     val diagnosticsPreview by viewModel.diagnosticsPreview.collectAsStateWithLifecycle()
     val aria2Secret by viewModel.aria2Secret.collectAsStateWithLifecycle()
     val useMBpsSpeedUnit by viewModel.useMBpsSpeedUnit.collectAsStateWithLifecycle()
+    val dualWifiCapabilities by viewModel.dualWifiCapabilities.collectAsStateWithLifecycle()
+    val nearbyWifiNetworks by viewModel.nearbyWifiNetworks.collectAsStateWithLifecycle()
+    val isConnectingWifi2 by viewModel.isConnectingWifi2.collectAsStateWithLifecycle()
+    val simulationState by viewModel.simulationState.collectAsStateWithLifecycle()
 
     // Lifecycle-aware 4 Hz active / 0 Hz ON_STOP telemetry polling
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
@@ -146,6 +167,10 @@ fun AetherApp(viewModel: AetherViewModel) {
     }
 
     var showNewDownloadSheet by remember { mutableStateOf(false) }
+    var showDualWifiSheet by remember { mutableStateOf(false) }
+    var showSimulatorSheet by remember { mutableStateOf(false) }
+    var focusedGaugeId by remember { mutableStateOf<String?>(null) }
+
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: ROUTE_TRANSFERS
@@ -153,228 +178,398 @@ fun AetherApp(viewModel: AetherViewModel) {
     AetherTheme(themeMode = settings.themeMode) {
         val ext = LocalAetherColors.current
 
-        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val isCompact = maxWidth < 600.dp
+        SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
+            CompositionLocalProvider(
+                LocalSharedTransitionScope provides this,
+                LocalMotionSpeedMultiplier provides simulationState.motionSpeedMultiplier,
+            ) {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val isCompact = maxWidth < 600.dp
 
-            Scaffold(
-                modifier = Modifier.fillMaxSize(),
-                containerColor = MaterialTheme.colorScheme.background,
-                contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                snackbarHost = { SnackbarHost(snackbarHostState) },
-                topBar = {
-                    TopAppBar(
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
-                        colors = TopAppBarDefaults.topAppBarColors(
-                            containerColor = MaterialTheme.colorScheme.background,
-                        ),
-                        title = {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Text(
-                                    text = "AetherIO",
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Text(
-                                    text = "v8.0",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ext.cyan,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(ext.cyan.copy(alpha = 0.14f))
-                                        .border(1.dp, ext.cyan.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                                )
-                            }
-                        },
-                        actions = {
-                            val activeCount = downloads.count { it.statusEnum.isActive }
-                            if (activeCount > 0) {
-                                Text(
-                                    text = Formatters.formatSpeed(telemetry.instantBps, useMBpsSpeedUnit),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = ext.emerald,
-                                    modifier = Modifier.padding(end = 16.dp),
-                                )
-                            }
-                        },
-                    )
-                },
-                bottomBar = {
-                    if (isCompact) {
-                        NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            windowInsets = WindowInsets.navigationBars,
-                        ) {
-                            destinations.forEach { dest ->
-                                val selected = currentRoute == dest.route
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = {
-                                        if (currentRoute != dest.route) {
-                                            navController.navigate(dest.route) {
-                                                popUpTo(ROUTE_TRANSFERS) { saveState = true }
-                                                launchSingleTop = true
-                                                restoreState = true
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        containerColor = MaterialTheme.colorScheme.background,
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                        snackbarHost = { SnackbarHost(snackbarHostState) },
+                        topBar = {
+                            TopAppBar(
+                                modifier = Modifier
+                                    .windowInsetsPadding(WindowInsets.statusBars)
+                                    .aetherOverlayZIndex(2f),
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.background,
+                                ),
+                                title = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(
+                                            text = "AetherIO",
+                                            style = MaterialTheme.typography.headlineSmall,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        Text(
+                                            text = "v9.0",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ext.cyan,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(ext.cyan.copy(alpha = 0.14f))
+                                                .border(1.dp, ext.cyan.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                },
+                                actions = {
+                                    val activeCount = downloads.count { it.statusEnum.isActive }
+                                    if (activeCount > 0 || simulationState.isRunning) {
+                                        Text(
+                                            text = Formatters.formatSpeed(telemetry.instantBps, useMBpsSpeedUnit),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = if (simulationState.isRunning) ext.amber else ext.emerald,
+                                            modifier = Modifier.padding(end = 8.dp),
+                                        )
+                                    }
+                                    // Morphing "Sim Lab" pill -> AnimationSimulatorSheet
+                                    AnimatedVisibility(
+                                        visible = !showSimulatorSheet,
+                                        enter = fadeIn(tween(180)),
+                                        exit = fadeOut(tween(150)),
+                                    ) {
+                                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .padding(end = 12.dp)
+                                                    .aetherSharedBounds(
+                                                        key = AetherSharedKey("sim_lab", SharedPart.SIM_LAB_PILL),
+                                                        clipShape = RoundedCornerShape(14.dp),
+                                                        zIndexInOverlay = 2.5f,
+                                                    )
+                                                    .clip(RoundedCornerShape(14.dp))
+                                                    .background(
+                                                        if (simulationState.isRunning) ext.amber.copy(alpha = 0.18f)
+                                                        else ext.cyan.copy(alpha = 0.14f)
+                                                    )
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (simulationState.isRunning) ext.amber.copy(alpha = 0.65f)
+                                                        else ext.cyan.copy(alpha = 0.45f),
+                                                        shape = RoundedCornerShape(14.dp),
+                                                    )
+                                                    .clickable { showSimulatorSheet = true }
+                                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                    .testTag("topbar_sim_lab_button"),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.AutoAwesome,
+                                                    contentDescription = "Open Speed and Animation Simulator",
+                                                    tint = if (simulationState.isRunning) ext.amber else ext.cyan,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Text(
+                                                    text = if (simulationState.isRunning) "Sim ON" else "Sim Lab",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = if (simulationState.isRunning) ext.amber else ext.cyan,
+                                                )
                                             }
                                         }
-                                    },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
-                                            contentDescription = dest.label,
+                                    }
+                                },
+                            )
+                        },
+                        bottomBar = {
+                            if (isCompact) {
+                                NavigationBar(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    windowInsets = WindowInsets.navigationBars,
+                                    modifier = Modifier.aetherOverlayZIndex(2f),
+                                ) {
+                                    destinations.forEach { dest ->
+                                        val selected = currentRoute == dest.route
+                                        NavigationBarItem(
+                                            selected = selected,
+                                            onClick = {
+                                                if (currentRoute != dest.route) {
+                                                    navController.navigate(dest.route) {
+                                                        popUpTo(ROUTE_TRANSFERS) { saveState = true }
+                                                        launchSingleTop = true
+                                                        restoreState = true
+                                                    }
+                                                }
+                                            },
+                                            icon = {
+                                                Icon(
+                                                    imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
+                                                    contentDescription = dest.label,
+                                                )
+                                            },
+                                            label = { Text(dest.label) },
+                                            modifier = Modifier.testTag("nav_${dest.route}"),
                                         )
-                                    },
-                                    label = { Text(dest.label) },
-                                    modifier = Modifier.testTag("nav_${dest.route}"),
-                                )
+                                    }
+                                }
+                            }
+                        },
+                        floatingActionButton = {
+                            AnimatedVisibility(
+                                visible = !showNewDownloadSheet && (currentRoute == ROUTE_TRANSFERS || currentRoute == ROUTE_FILES),
+                                enter = fadeIn(tween(180)),
+                                exit = fadeOut(tween(140)),
+                            ) {
+                                CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                                    FloatingActionButton(
+                                        onClick = { showNewDownloadSheet = true },
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier
+                                            .aetherOverlayZIndex(2f)
+                                            .aetherSharedBounds(
+                                                key = AetherSharedKey("fab_new_download", SharedPart.FAB_NEW_DOWNLOAD),
+                                                clipShape = RoundedCornerShape(16.dp),
+                                                zIndexInOverlay = 3f,
+                                            )
+                                            .testTag("fab_new_download"),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Add,
+                                            contentDescription = "New Download",
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                    ) { innerPadding ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding),
+                        ) {
+                            if (!isCompact) {
+                                NavigationRail(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .windowInsetsPadding(WindowInsets.navigationBars)
+                                        .aetherOverlayZIndex(2f),
+                                ) {
+                                    Spacer(modifier = Modifier.size(12.dp))
+                                    destinations.forEach { dest ->
+                                        val selected = currentRoute == dest.route
+                                        NavigationRailItem(
+                                            selected = selected,
+                                            onClick = {
+                                                if (currentRoute != dest.route) {
+                                                    navController.navigate(dest.route) {
+                                                        popUpTo(ROUTE_TRANSFERS) { saveState = true }
+                                                        launchSingleTop = true
+                                                        restoreState = true
+                                                    }
+                                                }
+                                            },
+                                            icon = {
+                                                Icon(
+                                                    imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
+                                                    contentDescription = dest.label,
+                                                )
+                                            },
+                                            label = { Text(dest.label) },
+                                            modifier = Modifier.testTag("rail_${dest.route}"),
+                                        )
+                                    }
+                                }
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight(),
+                                contentAlignment = Alignment.TopCenter,
+                            ) {
+                                NavHost(
+                                    navController = navController,
+                                    startDestination = ROUTE_TRANSFERS,
+                                    enterTransition = { fadeIn(tween(240)) },
+                                    exitTransition = { fadeOut(tween(180)) },
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .widthIn(max = 840.dp),
+                                ) {
+                                    composable(ROUTE_TRANSFERS) {
+                                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this@composable) {
+                                            TransfersScreen(
+                                                downloads = filteredDownloads,
+                                                selectedFilter = transferFilter,
+                                                telemetry = telemetry,
+                                                networkMatrix = networkMatrix,
+                                                useMBpsSpeedUnit = useMBpsSpeedUnit,
+                                                speedometerStyle = settings.speedometerStyle,
+                                                isSimulating = simulationState.isRunning,
+                                                onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
+                                                onCycleSpeedometerStyle = viewModel::cycleSpeedometerStyle,
+                                                onOpenDualWifi = { showDualWifiSheet = true },
+                                                onOpenSimulator = { showSimulatorSheet = true },
+                                                onStopSimulation = viewModel::stopSpeedSimulation,
+                                                onSelectGauge = { gaugeId -> focusedGaugeId = gaugeId },
+                                                onResetPeaks = viewModel::resetTelemetryPeaks,
+                                                onSelectFilter = viewModel::setTransferFilter,
+                                                onPause = viewModel::pauseDownload,
+                                                onResume = viewModel::resumeDownload,
+                                                onSwitchToKotlinAndResume = viewModel::switchTaskToKotlinAndResume,
+                                                onPauseAll = viewModel::pauseAll,
+                                                onResumeAll = viewModel::resumeAll,
+                                                onDelete = viewModel::deleteDownload,
+                                                onRefreshUrl = viewModel::updateExpiredUrl,
+                                                onRegrantSaf = viewModel::regrantSafUri,
+                                                onPruneCas = viewModel::pruneCasCache,
+                                                onOpenFile = viewModel::openFile,
+                                                onShareFile = viewModel::shareFile,
+                                                onOpenNewDownload = { showNewDownloadSheet = true },
+                                            )
+                                        }
+                                    }
+                                    composable(ROUTE_FILES) {
+                                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this@composable) {
+                                            FilesScreen(
+                                                files = completedFiles,
+                                                storageStats = storageStats,
+                                                casChunkCount = casChunkCount,
+                                                casTotalBytes = casTotalBytes,
+                                                selectedCategory = fileCategory,
+                                                searchQuery = fileSearchQuery,
+                                                onSelectCategory = viewModel::setFileCategory,
+                                                onSearchQueryChange = viewModel::setFileSearchQuery,
+                                                onOpenFile = viewModel::openFile,
+                                                onShareFile = viewModel::shareFile,
+                                                onDeleteFile = { entity -> viewModel.deleteDownload(entity.id, true) },
+                                                onPruneCas = viewModel::pruneCasCache,
+                                            )
+                                        }
+                                    }
+                                    composable(ROUTE_ENGINE) {
+                                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this@composable) {
+                                            TelemetryScreen(
+                                                telemetry = telemetry,
+                                                networkMatrix = networkMatrix,
+                                                settings = settings,
+                                                downloads = downloads,
+                                                fontLicenseAudit = viewModel.fontLicenseAudit,
+                                                diagnosticsPreview = diagnosticsPreview,
+                                                aria2Secret = aria2Secret,
+                                                useMBpsSpeedUnit = useMBpsSpeedUnit,
+                                                isSimulating = simulationState.isRunning,
+                                                motionSpeedMultiplier = simulationState.motionSpeedMultiplier,
+                                                onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
+                                                onResetPeaks = viewModel::resetTelemetryPeaks,
+                                                onOpenDualWifi = { showDualWifiSheet = true },
+                                                onOpenSimulator = { showSimulatorSheet = true },
+                                                onSelectGauge = { gaugeId -> focusedGaugeId = gaugeId },
+                                                onUpdateSettings = viewModel::updateSettings,
+                                                onRefreshNetwork = viewModel::refreshNetworkMatrix,
+                                                onPruneCas = viewModel::pruneCasCache,
+                                                onCopyDiagnostics = viewModel::copyDiagnosticsToClipboard,
+                                                onCopyAria2Secret = viewModel::copyAria2SecretToClipboard,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                },
-                floatingActionButton = {
-                    if (currentRoute == ROUTE_TRANSFERS || currentRoute == ROUTE_FILES) {
-                        FloatingActionButton(
-                            onClick = { showNewDownloadSheet = true },
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.testTag("fab_new_download"),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = "New Download",
+
+                    // 1. In-tree Container Transform: FAB -> New Download Sheet
+                    AnimatedVisibility(
+                        visible = showNewDownloadSheet,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180)),
+                    ) {
+                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                            NewDownloadSheet(
+                                defaultSettings = settings,
+                                networkMatrix = networkMatrix,
+                                onDismiss = { showNewDownloadSheet = false },
+                                onLaunchDownload = { req ->
+                                    viewModel.enqueueDownload(req)
+                                    showNewDownloadSheet = false
+                                },
                             )
                         }
                     }
-                },
-            ) { innerPadding ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding),
-                ) {
-                    if (!isCompact) {
-                        NavigationRail(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .windowInsetsPadding(WindowInsets.navigationBars),
-                        ) {
-                            Spacer(modifier = Modifier.size(12.dp))
-                            destinations.forEach { dest ->
-                                val selected = currentRoute == dest.route
-                                NavigationRailItem(
-                                    selected = selected,
-                                    onClick = {
-                                        if (currentRoute != dest.route) {
-                                            navController.navigate(dest.route) {
-                                                popUpTo(ROUTE_TRANSFERS) { saveState = true }
-                                                launchSingleTop = true
-                                                restoreState = true
-                                            }
-                                        }
-                                    },
-                                    icon = {
-                                        Icon(
-                                            imageVector = if (selected) dest.selectedIcon else dest.unselectedIcon,
-                                            contentDescription = dest.label,
-                                        )
-                                    },
-                                    label = { Text(dest.label) },
-                                    modifier = Modifier.testTag("rail_${dest.route}"),
-                                )
-                            }
+
+                    // 2. In-tree Container Transform: "+ Wi-Fi 2" Pill -> Dual Wi-Fi Connector Sheet
+                    AnimatedVisibility(
+                        visible = showDualWifiSheet,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180)),
+                    ) {
+                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                            DualWifiConnectorSheet(
+                                settings = settings,
+                                networkMatrix = networkMatrix,
+                                capabilities = dualWifiCapabilities,
+                                nearbyNetworks = nearbyWifiNetworks,
+                                isConnecting = isConnectingWifi2,
+                                onProbeCapabilities = viewModel::probeDualWifi,
+                                onScanNearbyWifi = viewModel::scanNearbyWifi,
+                                onConnectDirectWifi2 = viewModel::connectDirectWifi2,
+                                onConnectWifi2Relay = viewModel::connectWifi2Relay,
+                                onDisconnectWifi2 = viewModel::disconnectWifi2,
+                                onDismiss = { showDualWifiSheet = false },
+                            )
                         }
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                        contentAlignment = Alignment.TopCenter,
+                    // 3. In-tree Container Transform: TopAppBar "Sim Lab" Pill -> Speed & Animation Simulator
+                    AnimatedVisibility(
+                        visible = showSimulatorSheet,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180)),
                     ) {
-                        NavHost(
-                            navController = navController,
-                            startDestination = ROUTE_TRANSFERS,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .widthIn(max = 840.dp),
-                        ) {
-                            composable(ROUTE_TRANSFERS) {
-                                TransfersScreen(
-                                    downloads = filteredDownloads,
-                                    selectedFilter = transferFilter,
+                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                            AnimationSimulatorSheet(
+                                simState = simulationState,
+                                currentStyle = settings.speedometerStyle,
+                                useMBpsUnit = useMBpsSpeedUnit,
+                                liveAggregateBps = telemetry.instantBps,
+                                livePeakBps = telemetry.peakBps,
+                                onStartSimulation = viewModel::startSpeedSimulation,
+                                onStopSimulation = viewModel::stopSpeedSimulation,
+                                onUpdateCustomSpeeds = viewModel::updateCustomSimSpeeds,
+                                onToggleAutoCycleLayouts = viewModel::setAutoCycleSpeedometerLayouts,
+                                onSetMotionSpeed = viewModel::setMotionSpeedMultiplier,
+                                onCycleSpeedometerStyle = viewModel::cycleSpeedometerStyle,
+                                onTriggerNewDownloadMorph = { showNewDownloadSheet = true },
+                                onTriggerWifi2Morph = { showDualWifiSheet = true },
+                                onTriggerFocusedGaugeMorph = { focusedGaugeId = "wifi1" },
+                                onDismiss = { showSimulatorSheet = false },
+                            )
+                        }
+                    }
+
+                    // 4. In-tree Container Transform: Any Speedometer Gauge Card -> Full-Screen Cockpit Zoom
+                    AnimatedVisibility(
+                        visible = focusedGaugeId != null,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180)),
+                    ) {
+                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
+                            focusedGaugeId?.let { id ->
+                                FocusedGaugeOverlay(
+                                    gaugeId = id,
                                     telemetry = telemetry,
                                     networkMatrix = networkMatrix,
-                                    useMBpsSpeedUnit = useMBpsSpeedUnit,
-                                    onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
-                                    onResetPeaks = viewModel::resetTelemetryPeaks,
-                                    onSelectFilter = viewModel::setTransferFilter,
-                                    onPause = viewModel::pauseDownload,
-                                    onResume = viewModel::resumeDownload,
-                                    onPauseAll = viewModel::pauseAll,
-                                    onResumeAll = viewModel::resumeAll,
-                                    onDelete = viewModel::deleteDownload,
-                                    onRefreshUrl = viewModel::updateExpiredUrl,
-                                    onRegrantSaf = viewModel::regrantSafUri,
-                                    onPruneCas = viewModel::pruneCasCache,
-                                    onOpenFile = viewModel::openFile,
-                                    onShareFile = viewModel::shareFile,
-                                    onOpenNewDownload = { showNewDownloadSheet = true },
-                                )
-                            }
-                            composable(ROUTE_FILES) {
-                                FilesScreen(
-                                    files = completedFiles,
-                                    storageStats = storageStats,
-                                    casChunkCount = casChunkCount,
-                                    casTotalBytes = casTotalBytes,
-                                    selectedCategory = fileCategory,
-                                    searchQuery = fileSearchQuery,
-                                    onSelectCategory = viewModel::setFileCategory,
-                                    onSearchQueryChange = viewModel::setFileSearchQuery,
-                                    onOpenFile = viewModel::openFile,
-                                    onShareFile = viewModel::shareFile,
-                                    onDeleteFile = { entity -> viewModel.deleteDownload(entity.id, true) },
-                                    onPruneCas = viewModel::pruneCasCache,
-                                )
-                            }
-                            composable(ROUTE_ENGINE) {
-                                TelemetryScreen(
-                                    telemetry = telemetry,
-                                    networkMatrix = networkMatrix,
-                                    settings = settings,
-                                    downloads = downloads,
-                                    fontLicenseAudit = viewModel.fontLicenseAudit,
-                                    diagnosticsPreview = diagnosticsPreview,
-                                    aria2Secret = aria2Secret,
-                                    useMBpsSpeedUnit = useMBpsSpeedUnit,
-                                    onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
-                                    onResetPeaks = viewModel::resetTelemetryPeaks,
-                                    onUpdateSettings = viewModel::updateSettings,
-                                    onRefreshNetwork = viewModel::refreshNetworkMatrix,
-                                    onPruneCas = viewModel::pruneCasCache,
-                                    onCopyDiagnostics = viewModel::copyDiagnosticsToClipboard,
-                                    onCopyAria2Secret = viewModel::copyAria2SecretToClipboard,
+                                    useMBpsUnit = useMBpsSpeedUnit,
+                                    isSimulating = simulationState.isRunning,
+                                    onPulseLinkBurst = viewModel::pulseLinkBurst,
+                                    onDismiss = { focusedGaugeId = null },
                                 )
                             }
                         }
                     }
                 }
-            }
-
-            if (showNewDownloadSheet) {
-                NewDownloadSheet(
-                    defaultSettings = settings,
-                    networkMatrix = networkMatrix,
-                    onDismiss = { showNewDownloadSheet = false },
-                    onLaunchDownload = { req ->
-                        viewModel.enqueueDownload(req)
-                        showNewDownloadSheet = false
-                    },
-                )
             }
         }
     }

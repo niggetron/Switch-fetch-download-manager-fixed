@@ -1,12 +1,25 @@
-name: Build & Publish Release APK
+name: Build & Publish Release APK (arm64-v8a + Rust Core)
 
-# Builds Pure Rust `libaether_core.so` (arm64-v8a) via cargo-ndk + Gradle buildRustCore,
-# compiles BoringSSL with ARMv8 hardware AES/SHA ASM (-DANDROID_ABI=arm64-v8a),
-# runs Rust & Android unit tests, verifies .so packaging, and publishes GitHub Release.
+# Automated CI/CD pipeline for AetherIO Engine v9.0:
+# 1. Compiles Pure Rust `libaether_core.so` (arm64-v8a) via cargo-ndk (BoringSSL + QUIC + Anti-Dip)
+# 2. Runs Rust unit tests, Android Robolectric unit tests, and Android Release Lint
+# 3. Assigns a UNIQUE APK package name (`com.aistudio.aetherio.b<run_number>`) on every new build
+# 4. Verifies `lib/arm64-v8a/libaether_core.so` is bundled inside the APK and computes SHA-256
+# 5. Generates structured release notes (Added, Upgraded & Enhanced, Fixed, Changed, Removed)
+#    and publishes the APK + checksum to GitHub Releases.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      version_override:
+        description: "Optional version override (e.g. 9.1.0); leave blank for auto 9.0.<run_number>"
+        required: false
+        default: ""
+      extra_notes:
+        description: "Optional custom highlight to prepend to GitHub Release notes"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,8 +32,10 @@ jobs:
   build-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout full history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -69,7 +84,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/aether-core/target
-          key: ${{ runner.os }}-cargo-ndk-v8-${{ hashFiles('rust/aether-core/Cargo.toml', 'rust/aether-core/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-ndk-v9-${{ hashFiles('rust/aether-core/Cargo.toml', 'rust/aether-core/Cargo.lock') }}
 
       - name: Verify bundled font assets & SIL OFL licenses
         run: |
@@ -78,7 +93,7 @@ jobs:
           test -f app/src/main/res/font/jetbrains_mono.ttf
           test -f app/src/main/assets/font_licenses.txt
 
-      - name: Run Rust host unit tests (aether-core v8.0)
+      - name: Run Rust host unit tests (aether-core v9.0)
         working-directory: rust/aether-core
         run: cargo test --lib
 
@@ -96,15 +111,24 @@ jobs:
           gradle :app:buildRustCore -PrequireRustBuild=true --stacktrace
           ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so
 
-      - name: Compute version
+      - name: Compute version & unique package name per build
         id: ver
         run: |
           BASE="$(grep -oP 'ciVersionName.*?\?:\s*"\K[^"]+' app/build.gradle.kts | head -n1)"
-          BASE="${BASE:-1.0}"
-          VERSION="${BASE}.${GITHUB_RUN_NUMBER}"
+          BASE="${BASE:-9.0}"
+          OVERRIDE="${{ inputs.version_override }}"
+          if [ -n "$OVERRIDE" ]; then
+            VERSION="$OVERRIDE"
+          else
+            VERSION="${BASE}.${GITHUB_RUN_NUMBER}"
+          fi
+          SHORT_SHA="$(git rev-parse --short=6 HEAD)"
+          UNIQUE_PKG="com.aistudio.aetherio.b${GITHUB_RUN_NUMBER}"
           echo "version_name=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version_code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "Building version ${VERSION} (versionCode ${GITHUB_RUN_NUMBER})"
+          echo "package_name=${UNIQUE_PKG}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Building AetherIO v${VERSION} (versionCode ${GITHUB_RUN_NUMBER}) with unique applicationId=${UNIQUE_PKG}"
 
       - name: Prepare signing key
         run: |
@@ -112,20 +136,24 @@ jobs:
           echo "STORE_PASSWORD=aetherio-ci" >> "$GITHUB_ENV"
           echo "KEY_PASSWORD=aetherio-ci" >> "$GITHUB_ENV"
 
-      - name: Run Android Unit & Multi-Network Tests
-        run: gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace
+      - name: Run Android Unit Tests & Release Vital Lint
+        run: |
+          gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace
+          gradle :app:lintVitalRelease -PskipRustBuild=true --stacktrace
 
-      - name: Build arm64-v8a release APK
+      - name: Build arm64-v8a release APK (Dual-Engine Rust + Kotlin, Unique Package Name)
         run: |
           test -f app/src/main/jniLibs/arm64-v8a/libaether_core.so
           gradle :app:assembleRelease \
             -PskipRustBuild=true \
             -PciVersionCode=${{ steps.ver.outputs.version_code }} \
             -PciVersionName=${{ steps.ver.outputs.version_name }} \
+            -PciApplicationId=${{ steps.ver.outputs.package_name }} \
             -PciAbiFilter=arm64-v8a \
             --stacktrace
 
-      - name: Verify libaether_core.so is packaged in APK & Stage Release
+      - name: Verify libaether_core.so is packaged in APK & Generate SHA-256
+        id: pkg
         run: |
           VERSION="${{ steps.ver.outputs.version_name }}"
           mkdir -p dist
@@ -135,17 +163,66 @@ jobs:
             echo "::error::libaether_core.so missing from packaged APK!";
             exit 1;
           }
-          cp "$APK" "dist/AetherIO-v${VERSION}-arm64-v8a.apk"
+          SO_SIZE="$(ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so | awk '{print $5}')"
+          OUT_APK="dist/AetherIO-v${VERSION}-arm64-v8a.apk"
+          cp "$APK" "$OUT_APK"
+          APK_SIZE="$(ls -lh "$OUT_APK" | awk '{print $5}')"
+          SHA256="$(sha256sum "$OUT_APK" | awk '{print $1}')"
+          printf "%s  %s\n" "$SHA256" "$(basename "$OUT_APK")" > "${OUT_APK}.sha256"
+          echo "so_size=${SO_SIZE}" >> "$GITHUB_OUTPUT"
+          echo "apk_size=${APK_SIZE}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
           ls -lh dist
 
-      - name: Publish to GitHub Releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.version_name }}
+      - name: Generate Categorized Release Notes (Added / Upgraded / Fixed / Changed / Removed)
         run: |
-          gh release create "v${VERSION}" \
-            "dist/AetherIO-v${VERSION}-arm64-v8a.apk" \
-            --title "AetherIO v${VERSION}" \
-            --latest \
-            --notes "$(printf 'Automated arm64-v8a release build (AetherIO Engine v8.0)\n\n- **Version name:** %s\n- **Version code:** %s\n- **Native core:** libaether_core.so (arm64-v8a, panic=unwind, BoundedSlabPool Semaphore(16)+ArrayQueue, wreq prefix-symbols + quinn/h3 0-RTT, AETHLDG2 + memfd)\n- **Commit:** %s\n- **Branch:** %s\n' \
-              "${VERSION}" "${{ github.run_number }}" "${{ github.sha }}" "${{ github.ref_name }}")"
+          VERSION="${{ steps.ver.outputs.version_name }}"
+          PKG_NAME="${{ steps.ver.outputs.package_name }}"
+          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$PREV_TAG" ]; then
+            COMMIT_RANGE="${PREV_TAG}..HEAD"
+          else
+            COMMIT_RANGE="HEAD~20..HEAD"
+          fi
+
+          {
+            echo "# AetherIO v${VERSION} (arm64-v8a Dual-Engine Release)"
+            echo ""
+            if [ -n "${{ inputs.extra_notes }}" ]; then
+              echo "> ${{ inputs.extra_notes }}"
+              echo ""
+            fi
+            echo "## Build & Binary Verification"
+            echo "| Field | Value |"
+            echo "| :--- | :--- |"
+            echo "| **Version** | \`v${VERSION}\` (build \`${{ steps.ver.outputs.version_code }}\`) |"
+            echo "| **Unique APK Package Name** | \`${PKG_NAME}\` *(changes on every CI build for clean side-by-side installs)* |"
+            echo "| **ABI Architecture** | \`arm64-v8a\` |"
+            echo "| **Bundled Dual Engines** | **Pure Rust \`libaether_core.so\` (${{ steps.pkg.outputs.so_size }})** + **Kotlin OkHttp Turbo** |"
+            echo "| **APK Size** | \`${{ steps.pkg.outputs.apk_size }}\` |"
+            echo "| **SHA-256** | \`${{ steps.pkg.outputs.sha256 }}\` |"
+            echo "| **Commit / Branch** | \`${{ steps.ver.outputs.short_sha }}\` on \`${{ github.ref_name }}\` |"
+            echo ""
+
+            if [ -f CHANGELOG.md ]; then
+              echo "## Release Changelog (Added · Upgraded · Fixed · Changed · Removed)"
+              awk '/^## \[/{flag++} flag==1{print}' CHANGELOG.md
+              echo ""
+            fi
+
+            echo "## Git Commits Included (${COMMIT_RANGE})"
+            git log "${COMMIT_RANGE}" --no-merges --pretty=format:"- \`%h\` %s (%an)" 2>/dev/null || git log -n 10 --pretty=format:"- \`%h\` %s (%an)"
+            echo ""
+          } > dist/RELEASE_NOTES.md
+          cat dist/RELEASE_NOTES.md
+
+      - name: Publish APK & Checksum to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version_name }}
+          name: AetherIO v${{ steps.ver.outputs.version_name }} (${{ steps.ver.outputs.package_name }})
+          body_path: dist/RELEASE_NOTES.md
+          make_latest: true
+          files: |
+            dist/AetherIO-v${{ steps.ver.outputs.version_name }}-arm64-v8a.apk
+            dist/AetherIO-v${{ steps.ver.outputs.version_name }}-arm64-v8a.apk.sha256

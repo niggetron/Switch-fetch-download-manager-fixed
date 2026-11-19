@@ -148,7 +148,7 @@ class AetherDownloadEngine(
             downloadedBytes = 0L,
             status = DownloadStatus.QUEUED.name,
             routeMode = request.routeMode.name,
-            workerCount = request.workers.coerceIn(1, 8),
+            workerCount = request.workers.coerceIn(1, 16),
             destinationUri = destUri,
             isSafDestination = isSaf,
             supportsRange = false,
@@ -280,6 +280,25 @@ class AetherDownloadEngine(
         launchDownload(id)
     }
 
+    suspend fun switchTaskToKotlinAndResume(id: String) {
+        val current = repository.getById(id) ?: return
+        settingsRepository.update {
+            it.copy(
+                enableKotlinOkHttpEngine = true,
+                preferredEngineBackend = com.example.data.model.EngineBackendPreference.FORCE_KOTLIN_OKHTTP,
+            )
+        }
+        repository.update(
+            current.copy(
+                engineBackendUsed = ResolvedEngineBackend.KOTLIN_OKHTTP.id,
+                status = DownloadStatus.QUEUED.name,
+                errorMessage = null,
+                updatedAt = System.currentTimeMillis(),
+            )
+        )
+        launchDownload(id)
+    }
+
     private suspend fun executeDownload(id: String) {
         val entity = repository.getById(id) ?: return
         val settings = settingsRepository.current()
@@ -363,7 +382,7 @@ class AetherDownloadEngine(
             outputPath = entity.destinationUri,
             ledgerPath = ledgerFile(id).absolutePath,
             directFd = directFd,
-            maxWorkers = entity.workerCount.coerceIn(1, 8),
+            maxWorkers = entity.workerCount.coerceIn(1, 16),
             maxCellularBytes = cellCap,
             browserProfile = entity.browserProfile,
             protocolMode = entity.protocolMode,

@@ -5,11 +5,11 @@ import com.example.data.model.NetworkRouteMode
 import kotlin.math.max
 
 /**
- * 3-State Per-Link Circuit Breaker (Fix F7):
- * Closed -> Open (10s cooldown after 3 errors or >= 1,500 ms stall) -> HalfOpen -> Closed.
+ * 3-State Per-Link Circuit Breaker (v9.0 Anti-Flip-Flop):
+ * Closed -> Open (6s cooldown after 3 consecutive errors) -> HalfOpen -> Closed.
  */
 class LinkCircuitBreaker(
-    private val cooldownMs: Long = 10_000L,
+    private val cooldownMs: Long = 6_000L,
 ) {
     @Volatile
     private var state: BreakerState = BreakerState.CLOSED
@@ -64,14 +64,13 @@ data class LinkLaneMetrics(
 )
 
 /**
- * Deterministic Multi-Network Scheduler implementing v8.0 & Fixes F5–F8:
- * - Adaptive BDP segment sizing (1 MiB < 50M, 4 MiB 50–120M, 8 MiB > 120M)
+ * Deterministic Quad-Link Scheduler (v9.0 Superbike & Anti-Dip):
+ * - Adaptive BDP segment sizing: 1 MiB (<50M), 4 MiB (50-120M), 8 MiB (120-250M),
+ *   16 MiB (250-600M), 32 MiB (>600M Gigabit Wi-Fi 6 / 5G mmWave)
  * - Earliest-Arrival dispatch F_k = (Q_k + S) / R_k + r_k / 2
- * - Lowest-RTT link pinning for HEAD / 1-1 pre-flight probes
- * - Multi-mirror URL selection per LinkKey (Wi-Fi vs 5G vs Eth)
- * - Slowest active extent bisection (`bisectSlowestRange`) & `_emptyRightOf` absorption
- * - effective_connections = max(userMaxConnections, validatedActiveLinks)
- * - Bidirectional autoSpeedUp (+2 / -2 worker scaling)
+ * - Lowest-RTT link pinning for Stream 0 pre-flight probes
+ * - Quad-Link mirror distribution (`wifi:`, `cell:`, `wifi2:`, `eth:`/`usb:`)
+ * - Slowest active extent bisection (`bisectRange`) & bidirectional autoSpeedUp up to 16 workers
  */
 object LinkScheduler {
 
@@ -80,18 +79,20 @@ object LinkScheduler {
         return when {
             mbps < 50.0 -> 1L * 1024L * 1024L // 1 MiB
             mbps <= 120.0 -> 4L * 1024L * 1024L // 4 MiB
-            else -> 8L * 1024L * 1024L // 8 MiB
+            mbps <= 250.0 -> 8L * 1024L * 1024L // 8 MiB
+            mbps <= 600.0 -> 16L * 1024L * 1024L // 16 MiB
+            else -> 32L * 1024L * 1024L // 32 MiB
         }
     }
 
     /**
-     * F8: Guarantees at least one active worker per validated selected network.
+     * Guarantees at least one active worker per validated selected network, up to 16 workers.
      */
     fun effectiveWorkerCount(userMaxConnections: Int, validatedLinksCount: Int): Int =
-        max(userMaxConnections, validatedLinksCount).coerceAtLeast(1)
+        max(userMaxConnections, validatedLinksCount).coerceIn(1, 16)
 
     /**
-     * F5: Earliest-Arrival dispatch minimizing F_k = (Q_k + S) / R_k + r_k / 2.
+     * Earliest-Arrival dispatch minimizing F_k = (Q_k + S) / R_k + r_k / 2.
      */
     fun selectEarliestArrivalLink(
         lanes: List<LinkLaneMetrics>,
@@ -110,7 +111,7 @@ object LinkScheduler {
     }
 
     /**
-     * F5: Pin HEAD / Range 0-0 probes strictly to the lowest-RTT healthy link.
+     * Pin Stream 0 probe strictly to the lowest-RTT healthy link.
      */
     fun selectLowestRttLink(
         lanes: List<LinkLaneMetrics>,
@@ -126,22 +127,22 @@ object LinkScheduler {
     }
 
     /**
-     * Distributes distinct mirror URLs cleanly across independent links (`wifi:*` vs `cell:*` vs `eth:*`).
+     * Distributes distinct mirror URLs cleanly across all 4 links (`wifi:`, `cell:`, `wifi2:`, `eth:`/`usb:`).
      */
     fun selectMirrorForLink(urls: List<String>, linkKeyId: String, segIndex: Int): String {
         if (urls.isEmpty()) return ""
         if (urls.size == 1) return urls.first()
         val baseIdx = when {
             linkKeyId.startsWith("cell:") -> 1
-            linkKeyId.startsWith("eth:") -> 2
+            linkKeyId.startsWith("wifi2:") -> 2
+            linkKeyId.startsWith("eth:") || linkKeyId.startsWith("usb:") -> 3
             else -> 0
         }
         return urls[(baseIdx + segIndex) % urls.size]
     }
 
     /**
-     * Splits the largest remaining range cleanly in half when tail workers become idle
-     * and the remaining extent exceeds 512 KiB.
+     * Splits the largest remaining range cleanly in half when tail workers become idle.
      */
     fun bisectRange(startOffset: Long, endOffset: Long): Pair<Long, Long>? {
         val remaining = endOffset - startOffset + 1L
@@ -157,7 +158,7 @@ object LinkScheduler {
         mode: NetworkRouteMode,
     ): List<LinkLaneMetrics> {
         val links = when (mode) {
-            NetworkRouteMode.WIFI_ONLY -> listOfNotNull(matrix.wifiLink)
+            NetworkRouteMode.WIFI_ONLY -> listOfNotNull(matrix.wifiLink, matrix.wifi2Link)
             NetworkRouteMode.CELLULAR_ONLY -> listOfNotNull(matrix.cellularLink)
             NetworkRouteMode.AUTO_MULTIPATH,
             NetworkRouteMode.PROXY_SOCKS5 -> matrix.activeValidatedLinks
@@ -166,18 +167,19 @@ object LinkScheduler {
             LinkLaneMetrics(
                 linkKeyId = info.linkKey.id,
                 queuedBytes = 0.0,
-                ewmaBytesPerSec = (info.ewmaMbps * 125_000.0).coerceAtLeast(125_000.0),
+                ewmaBytesPerSec = (info.ewmaMbps * 125_000.0).coerceAtLeast(250_000.0),
                 rttMinSecs = when {
-                    info.linkKey.isEthernet -> 0.010
-                    info.linkKey.isCellular -> 0.028
-                    else -> 0.018
+                    info.linkKey.isEthernet -> 0.008
+                    info.linkKey.isCellular -> 0.026
+                    info.linkKey.isWifiSecondary -> 0.016
+                    else -> 0.014
                 },
             )
         }
     }
 
     /**
-     * Bidirectional closed-loop autoSpeedUp controller (v3.0 + v8.0).
+     * Bidirectional closed-loop autoSpeedUp controller (v9.0 up to 16 workers).
      */
     fun adjustAutoSpeedUp(
         currentWorkers: Int,

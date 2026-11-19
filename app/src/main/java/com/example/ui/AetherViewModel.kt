@@ -5,21 +5,32 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.AetherApplication
 import com.example.data.local.DownloadEntity
+import com.example.data.model.ActiveConnectionInfo
+import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
 import com.example.data.model.EngineSettings
 import com.example.data.model.FileCategory
+import com.example.data.model.LinkKey
 import com.example.data.model.NewDownloadRequest
+import com.example.data.model.SpeedometerStyle
 import com.example.data.model.TransferFilter
+import com.example.data.model.WifiBandPreference
 import com.example.data.repository.StorageStats
 import com.example.engine.AetherNativeBridge
 import com.example.engine.DiagnosticsCenter
+import com.example.engine.DualWifiCapabilityReport
+import com.example.engine.LinkEndpointInfo
+import com.example.engine.NearbyWifiNetwork
 import com.example.engine.NetworkMatrixState
 import com.example.engine.TelemetrySnapshot
+import com.example.ui.screens.AnimationSimulationState
+import com.example.ui.screens.SpeedSimulationPreset
 import com.example.util.FileOpener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +47,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 class AetherViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as AetherApplication
@@ -44,6 +58,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     private val engine = app.downloadEngine
     private val telemetryLedger = app.telemetryLedger
     private val networkMonitor = app.networkMonitor
+    private val dualWifiConnector = app.dualWifiConnector
 
     private val _transferFilter = MutableStateFlow(TransferFilter.ALL)
     val transferFilter: StateFlow<TransferFilter> = _transferFilter.asStateFlow()
@@ -54,8 +69,17 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     private val _fileSearchQuery = MutableStateFlow("")
     val fileSearchQuery: StateFlow<String> = _fileSearchQuery.asStateFlow()
 
-    private val _telemetry = MutableStateFlow(telemetryLedger.sampleSnapshot(false))
-    val telemetry: StateFlow<TelemetrySnapshot> = _telemetry.asStateFlow()
+    private val _realTelemetry = MutableStateFlow(telemetryLedger.sampleSnapshot(false))
+    private val _simulatedTelemetry = MutableStateFlow<TelemetrySnapshot?>(null)
+    private val _simulatedMatrix = MutableStateFlow<NetworkMatrixState?>(null)
+
+    private val _simulationState = MutableStateFlow(AnimationSimulationState())
+    val simulationState: StateFlow<AnimationSimulationState> = _simulationState.asStateFlow()
+
+    val telemetry: StateFlow<TelemetrySnapshot> =
+        combine(_realTelemetry, _simulatedTelemetry) { real, sim ->
+            sim ?: real
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), _realTelemetry.value)
 
     private val _diagnosticsPreview = MutableStateFlow("")
     val diagnosticsPreview: StateFlow<String> = _diagnosticsPreview.asStateFlow()
@@ -65,6 +89,10 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _useMBpsSpeedUnit = MutableStateFlow(false)
     val useMBpsSpeedUnit: StateFlow<Boolean> = _useMBpsSpeedUnit.asStateFlow()
+
+    val dualWifiCapabilities: StateFlow<DualWifiCapabilityReport> = dualWifiConnector.capabilities
+    val nearbyWifiNetworks: StateFlow<List<NearbyWifiNetwork>> = dualWifiConnector.nearbyNetworks
+    val isConnectingWifi2: StateFlow<Boolean> = dualWifiConnector.isConnecting
 
     val fontLicenseAudit: String by lazy {
         DiagnosticsCenter.verifyBundledFontLicenses(app)
@@ -135,7 +163,10 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     val settings: StateFlow<EngineSettings> = settingsRepo.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), EngineSettings())
 
-    val networkMatrix: StateFlow<NetworkMatrixState> = networkMonitor.state
+    val networkMatrix: StateFlow<NetworkMatrixState> =
+        combine(networkMonitor.state, _simulatedMatrix) { real, sim ->
+            sim ?: real
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), networkMonitor.state.value)
 
     val casChunkCount: StateFlow<Int> = repository.casChunkCount
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -144,6 +175,9 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     private var telemetryPollJob: Job? = null
+    private var simulationJob: Job? = null
+    private var autoCycleLayoutsJob: Job? = null
+    private var burstClearJob: Job? = null
 
     /**
      * Lifecycle-aware telemetry sampling: 4 Hz (250ms) when UI is active, 0 Hz on ON_STOP.
@@ -156,7 +190,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                 while (isActive) {
                     val hasActive = downloads.value.any { it.statusEnum.isActive }
                     val snap = telemetryLedger.sampleSnapshot(hasActive)
-                    _telemetry.value = snap
+                    _realTelemetry.value = snap
                     if (ticks % 4 == 0) {
                         _diagnosticsPreview.value = DiagnosticsCenter.exportReport(
                             context = app,
@@ -174,11 +208,404 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Speed & Animation Simulation Lab (completely isolated from real metrics)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    fun startSpeedSimulation(preset: SpeedSimulationPreset) {
+        _simulationState.value = _simulationState.value.copy(
+            isRunning = true,
+            preset = preset,
+        )
+        if (simulationJob?.isActive == true) return
+        simulationJob = viewModelScope.launch(Dispatchers.Default) {
+            val totalHist = ArrayDeque<Long>(48)
+            val wifi1Hist = ArrayDeque<Long>(48)
+            val wifi2Hist = ArrayDeque<Long>(48)
+            val cellHist = ArrayDeque<Long>(48)
+            val ethHist = ArrayDeque<Long>(48)
+
+            var t = 0.0
+            var peakTotal = 0L
+            var peakW1 = 0L
+            var peakW2 = 0L
+            var peakCell = 0L
+            var peakEth = 0L
+            var sumTotal = 0L
+            var sumW1 = 0L
+            var sumW2 = 0L
+            var sumCell = 0L
+            var sumEth = 0L
+            var samples = 0L
+            var bytesW1 = 0L
+            var bytesW2 = 0L
+            var bytesCell = 0L
+            var bytesEth = 0L
+            var rescues = 0L
+            var rustPeak = 0L
+            var kotlinPeak = 0L
+
+            val cm = runCatching {
+                app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            }.getOrNull()
+
+            while (isActive && _simulationState.value.isRunning) {
+                val st = _simulationState.value
+                val (rawW1Mbps, rawCellMbps, rawW2Mbps, rawUsbMbps) = when (st.preset) {
+                    SpeedSimulationPreset.QUAD_GIGABIT_REDLINE -> {
+                        val w1 = 310.0 + 135.0 * sin(t * 0.95) + 45.0 * cos(t * 2.1)
+                        val cell = 360.0 + 145.0 * sin(t * 0.72 + 1.1) + 55.0 * sin(t * 1.9)
+                        val w2 = 225.0 + 95.0 * cos(t * 0.85 + 0.5) + 30.0 * sin(t * 2.4)
+                        val usb = 210.0 + 120.0 * sin(t * 0.62 + 2.2) + 35.0 * cos(t * 1.7)
+                        QuadMbps(w1, cell, w2, usb)
+                    }
+                    SpeedSimulationPreset.ANTI_DIP_RESCUE -> {
+                        val cycle = t % 7.0
+                        val inDip = cycle in 1.8..3.1
+                        val inRescue = cycle in 3.1..4.8
+                        val w1 = when {
+                            inDip -> 38.0 + 14.0 * sin(t * 4.0)
+                            inRescue -> 395.0 + 55.0 * sin(t * 2.3)
+                            else -> 335.0 + 35.0 * sin(t * 1.1)
+                        }
+                        val cell = when {
+                            inDip -> 440.0 + 45.0 * cos(t * 2.0) // 5G absorbs dip via live bisection
+                            inRescue -> 375.0 + 35.0 * sin(t * 1.5)
+                            else -> 285.0 + 40.0 * sin(t * 0.9)
+                        }
+                        val w2 = if (inDip || inRescue) 265.0 + 30.0 * sin(t * 1.6) else 190.0 + 25.0 * cos(t * 1.2)
+                        val usb = if (inDip) 240.0 + 25.0 * sin(t * 1.8) else 175.0 + 20.0 * sin(t * 0.8)
+                        if (inRescue && (samples % 6L == 0L)) rescues++
+                        QuadMbps(w1, cell, w2, usb)
+                    }
+                    SpeedSimulationPreset.DUAL_LINK_RACE -> {
+                        val w1 = 240.0 + 185.0 * sin(t * 0.85)
+                        val cell = 240.0 + 185.0 * cos(t * 0.85)
+                        val w2 = 120.0 + 70.0 * abs(sin(t * 0.55))
+                        val usb = 95.0 + 60.0 * abs(cos(t * 0.48))
+                        QuadMbps(w1, cell, w2, usb)
+                    }
+                    SpeedSimulationPreset.CUSTOM_SLIDERS -> {
+                        val jitter = 1.0 + 0.03 * sin(t * 3.1)
+                        QuadMbps(
+                            st.customWifi1Mbps * jitter,
+                            st.customCellMbps * (1.0 + 0.03 * cos(t * 2.7)),
+                            st.customWifi2Mbps * jitter,
+                            st.customUsbMbps * (1.0 + 0.025 * sin(t * 2.2)),
+                        )
+                    }
+                }
+
+                // Apply optional single-link Redline Burst boost from FocusedGaugeOverlay
+                val burstId = st.focusedBurstLinkId
+                val w1Mbps = (rawW1Mbps + if (burstId == "wifi1") 340.0 else 0.0).coerceAtLeast(0.0)
+                val cellMbps = (rawCellMbps + if (burstId == "cell") 360.0 else 0.0).coerceAtLeast(0.0)
+                val w2Mbps = (rawW2Mbps + if (burstId == "wifi2") 290.0 else 0.0).coerceAtLeast(0.0)
+                val usbMbps = (rawUsbMbps + if (burstId == "usb") 320.0 else 0.0).coerceAtLeast(0.0)
+
+                val w1Bps = ((w1Mbps * 1_000_000.0) / 8.0).toLong()
+                val cellBps = ((cellMbps * 1_000_000.0) / 8.0).toLong()
+                val w2Bps = ((w2Mbps * 1_000_000.0) / 8.0).toLong()
+                val usbBps = ((usbMbps * 1_000_000.0) / 8.0).toLong()
+                val totalBps = w1Bps + cellBps + w2Bps + usbBps
+
+                peakW1 = maxOf(peakW1, w1Bps)
+                peakW2 = maxOf(peakW2, w2Bps)
+                peakCell = maxOf(peakCell, cellBps)
+                peakEth = maxOf(peakEth, usbBps)
+                peakTotal = maxOf(peakTotal, totalBps)
+
+                samples++
+                sumTotal += totalBps
+                sumW1 += w1Bps
+                sumW2 += w2Bps
+                sumCell += cellBps
+                sumEth += usbBps
+
+                // 100ms tick -> 0.1s worth of bytes
+                bytesW1 += w1Bps / 10L
+                bytesW2 += w2Bps / 10L
+                bytesCell += cellBps / 10L
+                bytesEth += usbBps / 10L
+
+                rustPeak = maxOf(rustPeak, (totalBps * 1.08).toLong())
+                kotlinPeak = maxOf(kotlinPeak, (totalBps * 0.94).toLong())
+
+                pushRing(totalHist, totalBps)
+                pushRing(wifi1Hist, w1Bps)
+                pushRing(wifi2Hist, w2Bps)
+                pushRing(cellHist, cellBps)
+                pushRing(ethHist, usbBps)
+
+                val simConnections = listOf(
+                    ActiveConnectionInfo(
+                        connId = "sim-w1",
+                        taskId = "sim-pipeline",
+                        url = "https://cdn-edge-1.aether.sim/linux-6.12-arm64.tar.zst",
+                        linkKeyId = "wifi:wlan0",
+                        protocol = "H3 QUIC 0-RTT",
+                        speedBps = w1Bps,
+                        bytesReceived = bytesW1,
+                        rangeStart = 0L,
+                        rangeEnd = 256L * 1024L * 1024L,
+                        ttfbMs = 14L,
+                        socketState = "SIM-STREAM",
+                    ),
+                    ActiveConnectionInfo(
+                        connId = "sim-cell",
+                        taskId = "sim-pipeline",
+                        url = "https://cdn-edge-2.aether.sim/linux-6.12-arm64.tar.zst",
+                        linkKeyId = "cell:rmnet0",
+                        protocol = "wreq H2 ALPS",
+                        speedBps = cellBps,
+                        bytesReceived = bytesCell,
+                        rangeStart = 256L * 1024L * 1024L,
+                        rangeEnd = 512L * 1024L * 1024L,
+                        ttfbMs = 24L,
+                        socketState = "SIM-STREAM",
+                    ),
+                    ActiveConnectionInfo(
+                        connId = "sim-w2",
+                        taskId = "sim-pipeline",
+                        url = "https://cdn-edge-3.aether.sim/linux-6.12-arm64.tar.zst",
+                        linkKeyId = "wifi2:wlan1",
+                        protocol = "Dual-STA Relay",
+                        speedBps = w2Bps,
+                        bytesReceived = bytesW2,
+                        rangeStart = 512L * 1024L * 1024L,
+                        rangeEnd = 768L * 1024L * 1024L,
+                        ttfbMs = 19L,
+                        socketState = "SIM-STREAM",
+                    ),
+                    ActiveConnectionInfo(
+                        connId = "sim-usb",
+                        taskId = "sim-pipeline",
+                        url = "https://cdn-edge-4.aether.sim/linux-6.12-arm64.tar.zst",
+                        linkKeyId = "eth:usb0",
+                        protocol = "USB-C Gigabit",
+                        speedBps = usbBps,
+                        bytesReceived = bytesEth,
+                        rangeStart = 768L * 1024L * 1024L,
+                        rangeEnd = 1024L * 1024L * 1024L,
+                        ttfbMs = 9L,
+                        socketState = "SIM-STREAM",
+                    ),
+                )
+
+                val stability = if (peakTotal > 0L) {
+                    ((totalBps.toDouble() / peakTotal.toDouble()) * 100.0).toInt().coerceIn(72, 99)
+                } else {
+                    98
+                }
+
+                _simulatedTelemetry.value = TelemetrySnapshot(
+                    instantBps = totalBps,
+                    peakBps = peakTotal,
+                    avgBps = sumTotal / samples,
+                    wifiBps = w1Bps,
+                    wifi2Bps = w2Bps,
+                    cellBps = cellBps,
+                    ethBps = usbBps,
+                    wifiPeakBps = peakW1,
+                    wifi2PeakBps = peakW2,
+                    cellPeakBps = peakCell,
+                    ethPeakBps = peakEth,
+                    wifiAvgBps = sumW1 / samples,
+                    wifi2AvgBps = sumW2 / samples,
+                    cellAvgBps = sumCell / samples,
+                    ethAvgBps = sumEth / samples,
+                    rustPeakBps = rustPeak,
+                    kotlinPeakBps = kotlinPeak,
+                    wifiBytesTotal = bytesW1,
+                    wifi2BytesTotal = bytesW2,
+                    cellBytesTotal = bytesCell,
+                    ethBytesTotal = bytesEth,
+                    speedHistoryBps = totalHist.toList(),
+                    wifiHistoryBps = wifi1Hist.toList(),
+                    wifi2HistoryBps = wifi2Hist.toList(),
+                    cellHistoryBps = cellHist.toList(),
+                    ethHistoryBps = ethHist.toList(),
+                    activeWorkers = 16,
+                    wifiWorkers = if (w1Bps > 0L) 4 else 0,
+                    wifi2Workers = if (w2Bps > 0L) 4 else 0,
+                    cellularWorkers = if (cellBps > 0L) 4 else 0,
+                    ethWorkers = if (usbBps > 0L) 4 else 0,
+                    antiDipRescues = rescues,
+                    stabilityPercent = stability,
+                    activeConnections = simConnections,
+                    slabAllocatedMb = 10.4f,
+                    slabInUseMb = (6.2f + 2.4f * abs(sin(t)).toFloat()),
+                    jvmHeapUsedMb = 28.5f,
+                    nativeHeapMb = 14.2f,
+                    totalSyscallWriteBatches = samples * 12L,
+                    lastTtfbMs = 14L,
+                    thermalStatusLabel = "Nominal (Sim)",
+                    thermalHeadroomClear = true,
+                    pollingHzLabel = "10 Hz Sim",
+                    isNativeRustActive = _realTelemetry.value.isNativeRustActive,
+                    isMemfdMapped = false,
+                    activeEngineBadge = "SIMULATOR",
+                )
+
+                val realMatrix = networkMonitor.state.value
+                val activeNet = cm?.activeNetwork
+                _simulatedMatrix.value = if (activeNet != null) {
+                    realMatrix.copy(
+                        wifiLink = LinkEndpointInfo(
+                            linkKey = LinkKey.Wifi("wlan0"),
+                            network = activeNet,
+                            label = "Wi-Fi 1 (Sim)",
+                            interfaceName = "wlan0",
+                            localIp = "192.168.1.24",
+                            netHandle = 1001L,
+                            downstreamKbps = 600_000,
+                            upstreamKbps = 150_000,
+                            isMetered = false,
+                            isValidated = true,
+                            breakerState = BreakerState.CLOSED,
+                            ewmaMbps = w1Mbps,
+                            bandLabel = "5 GHz",
+                        ),
+                        wifi2Link = LinkEndpointInfo(
+                            linkKey = LinkKey.WifiSecondary("wlan1"),
+                            network = activeNet,
+                            label = "Wi-Fi 2 (Sim)",
+                            interfaceName = "wlan1",
+                            localIp = "192.168.2.42",
+                            netHandle = 1002L,
+                            downstreamKbps = 450_000,
+                            upstreamKbps = 100_000,
+                            isMetered = false,
+                            isValidated = true,
+                            breakerState = BreakerState.CLOSED,
+                            ewmaMbps = w2Mbps,
+                            bandLabel = "6 GHz",
+                        ),
+                        cellularLink = LinkEndpointInfo(
+                            linkKey = LinkKey.Cellular("rmnet0"),
+                            network = activeNet,
+                            label = "Mobile 5G (Sim)",
+                            interfaceName = "rmnet0",
+                            localIp = "10.42.8.15",
+                            netHandle = 1003L,
+                            downstreamKbps = 650_000,
+                            upstreamKbps = 120_000,
+                            isMetered = true,
+                            isValidated = true,
+                            breakerState = BreakerState.CLOSED,
+                            ewmaMbps = cellMbps,
+                        ),
+                        ethernetLink = LinkEndpointInfo(
+                            linkKey = LinkKey.Ethernet("usb0"),
+                            network = activeNet,
+                            label = "USB Tether (Sim)",
+                            interfaceName = "usb0",
+                            localIp = "192.168.42.129",
+                            netHandle = 1004L,
+                            downstreamKbps = 500_000,
+                            upstreamKbps = 250_000,
+                            isMetered = false,
+                            isValidated = true,
+                            breakerState = BreakerState.CLOSED,
+                            ewmaMbps = usbMbps,
+                        ),
+                        hasAnyInternet = true,
+                        cellularLeaseRequested = true,
+                    )
+                } else {
+                    realMatrix.copy(hasAnyInternet = true)
+                }
+
+                val stepScale = st.motionSpeedMultiplier.coerceIn(0.25f, 1.5f)
+                t += 0.14 * stepScale
+                delay(100L)
+            }
+        }
+    }
+
+    fun stopSpeedSimulation() {
+        simulationJob?.cancel()
+        simulationJob = null
+        burstClearJob?.cancel()
+        burstClearJob = null
+        _simulationState.value = _simulationState.value.copy(
+            isRunning = false,
+            focusedBurstLinkId = null,
+        )
+        _simulatedTelemetry.value = null
+        _simulatedMatrix.value = null
+        _snackbarEvents.tryEmit("Speed simulation stopped · Showing live device telemetry")
+    }
+
+    fun updateCustomSimSpeeds(wifi1: Float, cell: Float, wifi2: Float, usb: Float) {
+        _simulationState.value = _simulationState.value.copy(
+            preset = SpeedSimulationPreset.CUSTOM_SLIDERS,
+            customWifi1Mbps = wifi1,
+            customCellMbps = cell,
+            customWifi2Mbps = wifi2,
+            customUsbMbps = usb,
+        )
+        if (!_simulationState.value.isRunning) {
+            startSpeedSimulation(SpeedSimulationPreset.CUSTOM_SLIDERS)
+        }
+    }
+
+    fun setMotionSpeedMultiplier(multiplier: Float) {
+        val clamped = multiplier.coerceIn(0.25f, 1.5f)
+        _simulationState.value = _simulationState.value.copy(motionSpeedMultiplier = clamped)
+    }
+
+    fun setAutoCycleSpeedometerLayouts(enabled: Boolean) {
+        _simulationState.value = _simulationState.value.copy(autoCycleSpeedometerLayouts = enabled)
+        autoCycleLayoutsJob?.cancel()
+        autoCycleLayoutsJob = null
+        if (enabled) {
+            autoCycleLayoutsJob = viewModelScope.launch {
+                while (isActive && _simulationState.value.autoCycleSpeedometerLayouts) {
+                    val mult = _simulationState.value.motionSpeedMultiplier.coerceIn(0.25f, 1.5f)
+                    delay((1800f / mult).toLong().coerceIn(900L, 6000L))
+                    val all = SpeedometerStyle.entries
+                    val current = settings.value.speedometerStyle
+                    val next = all[(all.indexOf(current) + 1) % all.size]
+                    updateSettings { it.copy(speedometerStyle = next) }
+                }
+            }
+        }
+    }
+
+    fun pulseLinkBurst(gaugeId: String) {
+        _simulationState.value = _simulationState.value.copy(focusedBurstLinkId = gaugeId)
+        if (!_simulationState.value.isRunning) {
+            startSpeedSimulation(_simulationState.value.preset)
+        }
+        burstClearJob?.cancel()
+        burstClearJob = viewModelScope.launch {
+            delay(2400L)
+            _simulationState.value = _simulationState.value.copy(focusedBurstLinkId = null)
+        }
+    }
+
+    private fun pushRing(q: ArrayDeque<Long>, v: Long) {
+        if (q.size >= 48) q.removeFirst()
+        q.addLast(v)
+    }
+
+    private data class QuadMbps(
+        val w1: Double,
+        val cell: Double,
+        val w2: Double,
+        val usb: Double,
+    )
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Real Engine, Downloads, Network & Settings Controls
+    // ──────────────────────────────────────────────────────────────────────────
+
     fun copyDiagnosticsToClipboard() {
         val report = DiagnosticsCenter.exportReport(
             context = app,
             backendLabel = AetherNativeBridge.engineBackendLabel,
-            telemetry = _telemetry.value,
+            telemetry = _realTelemetry.value,
         )
         _diagnosticsPreview.value = report
         val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -223,7 +650,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             engine.enqueue(request)
-            _snackbarEvents.tryEmit("Pipeline queued · Dual-engine scheduler armed")
+            _snackbarEvents.tryEmit("Pipeline queued · Quad-Link Anti-Dip scheduler armed")
         }
     }
 
@@ -233,6 +660,13 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     fun resumeDownload(id: String) {
         engine.launchDownload(id)
+    }
+
+    fun switchTaskToKotlinAndResume(id: String) {
+        viewModelScope.launch {
+            engine.switchTaskToKotlinAndResume(id)
+            _snackbarEvents.tryEmit("Switched task to Kotlin OkHttp Turbo & resuming")
+        }
     }
 
     fun pauseAll() {
@@ -309,16 +743,83 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     fun refreshNetworkMatrix() {
         networkMonitor.refreshState()
+        dualWifiConnector.probeCapabilities()
     }
 
     fun toggleSpeedDisplayUnit() {
         _useMBpsSpeedUnit.value = !_useMBpsSpeedUnit.value
     }
 
+    fun cycleSpeedometerStyle() {
+        val all = SpeedometerStyle.entries
+        val current = settings.value.speedometerStyle
+        val next = all[(all.indexOf(current) + 1) % all.size]
+        updateSettings { it.copy(speedometerStyle = next) }
+        _snackbarEvents.tryEmit("Speedometer layout: ${next.label}")
+    }
+
+    fun probeDualWifi() {
+        dualWifiConnector.probeCapabilities()
+    }
+
+    fun scanNearbyWifi() {
+        val list = dualWifiConnector.scanNearbyNetworks()
+        if (list.isEmpty()) {
+            _snackbarEvents.tryEmit("No nearby Wi-Fi results yet (check permission or retry)")
+        } else {
+            _snackbarEvents.tryEmit("Found ${list.size} nearby Wi-Fi networks")
+        }
+    }
+
+    fun connectDirectWifi2(ssid: String, passphrase: String, band: WifiBandPreference) {
+        dualWifiConnector.connectDirectWifi2(ssid, passphrase, band)
+        updateSettings {
+            it.copy(
+                dualWifiEnabled = true,
+                wifi2Ssid = ssid.trim(),
+                wifi2BandPreference = band,
+            )
+        }
+        _snackbarEvents.tryEmit("Requesting Direct Wi-Fi 2 (${ssid.trim()})…")
+    }
+
+    fun connectWifi2Relay(host: String, port: Int, isHttp: Boolean) {
+        val ok = dualWifiConnector.connectCompanionRelay(host, port, isHttp)
+        if (ok) {
+            updateSettings {
+                it.copy(
+                    dualWifiEnabled = true,
+                    wifi2RelayHost = host.trim(),
+                    wifi2RelayPort = port.coerceIn(1, 65535),
+                    wifi2RelayIsHttp = isHttp,
+                )
+            }
+            _snackbarEvents.tryEmit("Wi-Fi 2 Companion Relay armed (${host.trim()}:$port)")
+        } else {
+            _snackbarEvents.tryEmit("Enter a valid Relay LAN IP and Port")
+        }
+    }
+
+    fun disconnectWifi2() {
+        dualWifiConnector.disconnectDirectWifi2(silent = false)
+        updateSettings {
+            it.copy(
+                wifi2RelayHost = "",
+            )
+        }
+        _snackbarEvents.tryEmit("Wi-Fi 2 disconnected")
+    }
+
     fun resetTelemetryPeaks() {
         telemetryLedger.resetSessionPeaks()
-        _telemetry.value = telemetryLedger.latestSnapshot()
-        _snackbarEvents.tryEmit("Speedometer peaks & engine benchmarks reset")
+        _realTelemetry.value = telemetryLedger.latestSnapshot()
+        if (_simulationState.value.isRunning) {
+            val preset = _simulationState.value.preset
+            simulationJob?.cancel()
+            simulationJob = null
+            startSpeedSimulation(preset)
+        }
+        _snackbarEvents.tryEmit("Speedometer peaks, averages & benchmarks reset")
     }
 
     fun updateSettings(transform: (EngineSettings) -> EngineSettings) {
