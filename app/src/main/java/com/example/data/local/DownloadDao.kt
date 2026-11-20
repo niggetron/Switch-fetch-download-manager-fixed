@@ -27,6 +27,12 @@ interface DownloadDao {
     @Update
     suspend fun update(entity: DownloadEntity)
 
+    @Query("UPDATE downloads SET actualMd5 = :md5, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateMd5(id: String, md5: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE downloads SET actualSha256 = :sha256, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateSha256(id: String, sha256: String, updatedAt: Long = System.currentTimeMillis())
+
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: String)
 }

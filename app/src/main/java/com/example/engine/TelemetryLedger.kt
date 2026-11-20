@@ -70,6 +70,7 @@ data class TelemetrySnapshot(
     val isNativeRustActive: Boolean = false,
     val isMemfdMapped: Boolean = false,
     val activeEngineBadge: String = "STANDBY",
+    val recentLiveSegments: List<String> = emptyList(),
 )
 
 /**
@@ -153,6 +154,15 @@ class TelemetryLedger(
     private val wifi2Ring = ArrayDeque<Long>(60)
     private val cellRing = ArrayDeque<Long>(60)
     private val ethRing = ArrayDeque<Long>(60)
+    private val liveSegmentRing = ArrayDeque<String>(12)
+
+    fun recordLiveSegment(label: String) {
+        if (label.isBlank()) return
+        synchronized(sampleLock) {
+            if (liveSegmentRing.size >= 10) liveSegmentRing.removeFirst()
+            liveSegmentRing.addLast(label)
+        }
+    }
 
     fun attachMemfdIfAvailable() {
         memfdReader.attachIfNativeAvailable()
@@ -180,11 +190,11 @@ class TelemetryLedger(
                     val pct = value?.toFloat()?.coerceIn(0f, 100f)?.toInt()
                     cachedCpuHeadroomPct = pct
                     if (pct != null && pct < 20) {
-                        AetherNativeBridge.setThermalWorkerCapSafe(4)
-                    } else if (pct != null && pct < 40) {
-                        AetherNativeBridge.setThermalWorkerCapSafe(8)
-                    } else {
                         AetherNativeBridge.setThermalWorkerCapSafe(16)
+                    } else if (pct != null && pct < 40) {
+                        AetherNativeBridge.setThermalWorkerCapSafe(32)
+                    } else {
+                        AetherNativeBridge.setThermalWorkerCapSafe(64)
                     }
                 }.onFailure {
                     if (it.cause is UnsupportedOperationException || it is UnsupportedOperationException) {
@@ -515,8 +525,12 @@ class TelemetryLedger(
             isNativeRustActive = AetherNativeBridge.isNativeLoaded,
             isMemfdMapped = memfdReader.isMapped,
             activeEngineBadge = activeEngineBadgeLabel,
+            recentLiveSegments = liveSegmentRing.toList(),
         )
         cachedSnapshot = snap
+        if (hasActiveDownloads || totalBps > 0L) {
+            DiagnosticsCenter.recordFlightSample(snap)
+        }
         snap
     }
 

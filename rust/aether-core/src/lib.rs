@@ -121,24 +121,28 @@ mod tests {
                 queued_bytes: 0.0,
                 ewma_bytes_per_sec: 12_500_000.0,
                 rtt_min_secs: 0.012,
+                active_workers_on_link: 2,
             },
             LinkDispatchStats {
                 link_id: "wifi2:wlan1".into(),
                 queued_bytes: 0.0,
                 ewma_bytes_per_sec: 15_000_000.0,
                 rtt_min_secs: 0.015,
+                active_workers_on_link: 2,
             },
             LinkDispatchStats {
                 link_id: "cell:rmnet0".into(),
                 queued_bytes: 0.0,
                 ewma_bytes_per_sec: 22_000_000.0,
                 rtt_min_secs: 0.025,
+                active_workers_on_link: 2,
             },
             LinkDispatchStats {
                 link_id: "eth:usb0".into(),
                 queued_bytes: 0.0,
                 ewma_bytes_per_sec: 28_000_000.0,
                 rtt_min_secs: 0.008,
+                active_workers_on_link: 2,
             },
         ];
 
@@ -182,14 +186,15 @@ mod tests {
         assert_eq!(adaptive_bdp_segment_bytes(400_000), 16 * 1024 * 1024);
         assert_eq!(adaptive_bdp_segment_bytes(800_000), 32 * 1024 * 1024);
         assert_eq!(effective_worker_count(1, 2), 2);
-        assert_eq!(effective_worker_count(16, 4), 16);
+        assert_eq!(effective_worker_count(64, 4), 64);
 
         let mut states = vec![2u8, 1u8, 0u8, 0u8];
         assert_eq!(absorb_empty_right_of(&mut states, 1), Some(2));
         assert_eq!(states[2], 1);
 
-        assert_eq!(adjust_auto_speed_up(4, 2, 16, 50.0, 60.0, 8.0, false), 6);
-        assert_eq!(adjust_auto_speed_up(6, 2, 16, 60.0, 60.0, 42.0, false), 4);
+        assert_eq!(adjust_auto_speed_up(4, 2, 64, 50.0, 60.0, 8.0, false), 8);
+        assert_eq!(adjust_auto_speed_up(28, 2, 64, 50.0, 60.0, 8.0, false), 30);
+        assert_eq!(adjust_auto_speed_up(6, 2, 64, 60.0, 60.0, 42.0, false), 4);
         let lease = SegmentLease {
             index: 2,
             start: 0,
@@ -200,8 +205,8 @@ mod tests {
         assert_eq!(lease.pinned_link, "wifi2:wlan1");
 
         let ctx = TransportContext::new();
-        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134").is_ok());
-        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134").is_ok());
+        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134", 0).is_ok());
+        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134", 3).is_ok());
     }
 
     #[test]

@@ -2,6 +2,28 @@
 
 All notable changes to **AetherIO** are documented in this file. The automated GitHub Actions release pipeline embeds the latest release section below directly into every GitHub Release.
 
+## [9.1] - Hyperion 64-Stream Force-All-Links Engine, Rayburst UI, 1DM+ Properties, Shizuku Wi-Fi 2 Picker & 18-Theme Color Studio
+
+### Added
+- **Rayburst-Style Download Cards & 1:1 Simulator Parity**: Striped 64-lane multi-socket progress bars, 64-cell piece matrix, animated live segment pills, and full per-file telemetry (**LIVE, MAX, AVG, Active/Max Connections, Remaining, Active Time, Started/Ended timestamps, and ETA**) on both live transfer cards and the simulated Rayburst card in Simulation Mode.
+- **1DM+ Super-Properties Inspector (`DownloadPropertiesSheet`)**: Tapping any real or simulated transfer/file opens a detailed properties modal showing Name, URL, Save Path, Wi-Fi Only, Resume/Range support, exact byte sizes, LIVE/MAX/AVG speeds, Active/Max Connections, Date Added, Active Time, Date Modified/Ended, Engine Backend, Per-Link Byte Breakdown, async `MediaMetadataRetriever` stream info (Bitrate, Duration, Resolution, Video/Audio codecs), and on-demand **MD5 & SHA-256 CALCULATE** buttons with shimmer loading.
+- **Telegram-Style Color Studio with 18 High-Contrast Themes & App-Wide Neon Glow**: Live interactive mini phone mockup, 18 WCAG AA-verified themes (Obsidian Cyan, Emerald Matrix, Crimson Nitro, Solar Amber, Royal Violet, Vaporwave Neon, Arctic Daylight, Pure OLED Stealth, Dracula Velvet, Nord Frost, Catppuccin Mocha, Gruvbox Ember, Tokyo Night, Solarized Dusk, Sakura Blossom, Cyber Lime, Deep Ocean, Monograph Crisp), 8 per-element color pickers, live contrast score meter, and global **Neon Glow** toggle + intensity slider.
+- **3 New Speedometer / Progress Styles (6 Total)**: Added **F1 Telemetry HUD**, **Neon Plasma Arc**, and **Rayburst Matrix Bar** alongside Superbike Grid, Auto Sport Dash, and Compact Tach Strip.
+- **In-App Auto Wi-Fi 2 Picker + Shizuku Privilege Helper (`ShizukuWifiHelper`)**: Auto-fetches connected Wi-Fi 1 SSID + nearby Wi-Fi networks with signal strength, band tags, inline password prompt, Shizuku unthrottled scan + low-latency Wi-Fi boost, Single-STA rollback, and Relay/USB fallback.
+- **Skeleton UI & Luminance-Adaptive Shimmer Animations**: Added across Wi-Fi scanning, Stream 0 header probing, Remote `.zip` EOCD probing, and on-demand media/hash inspection.
+- **Deep Diagnostic Flight Recorder**: Records 1 Hz snapshots (goodput, per-link speeds, active workers, TTFB, stalls, socket states, network matrix, Shizuku state) and exports redacted **TXT** + structured **JSON** traces via Save to Storage (SAF) or Share Bundle (`FileProvider`).
+- **Remote `.zip` Selective Extraction (EOCD 64 KB Range Probe)** & **HLS/DASH Parallel Multi-Segment Downloader**.
+
+### Upgraded & Enhanced
+- **64-Stream Sharded Multi-Socket Pools & Force-All-Links (Rust + Kotlin OkHttp)**: Sharded independent TCP sockets (`wreq::Client` & `OkHttpClient` shards) eliminate HTTP/2 single-connection window caps, Ghost-style closed-loop `autoSpeedUp` ramps smoothly up to 64 streams, and **Force-All-Links** guarantees active stream reservations on Mobile 5G/LTE and Wi-Fi 2 so they are never starved by Wi-Fi 1.
+- **8-Color Distinct Architecture Audit Radar**: Each of the 8 axes now renders with its own high-contrast color and interactive legend.
+- **16 KB ELF Alignment CI Verification**: GitHub Actions verifies `0x4000` LOAD alignment on `libaether_core.so` (`arm64-v8a`) for Android 15/16 compliance.
+
+### Fixed
+- **Fixed Blank Gauge Zoom**: Removed nested `SharedTransitionLayout` scopes and fixed `FocusedGaugeOverlay` so tapping any speedometer zooms smoothly without blanking or freezing.
+- **Fixed Shared-Element Jitter & Text Overlap**: Simplified shared-element morph keys to container bounds to eliminate glitching and overlapping labels.
+- **Fixed Dark-on-Dark Low-Contrast Text**: Added automatic WCAG luminance-based `contrastOnColor()` across chips, buttons, and all 18 Color Studio themes.
+
 ## [9.0] - Quad-Link Superbike Bonding, Anti-Dip Turbo Engine & CI Auto-Release
 
 ### Added

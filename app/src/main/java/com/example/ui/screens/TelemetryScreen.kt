@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,12 +26,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DataObject
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +62,7 @@ import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
 import com.example.data.model.EngineBackendPreference
 import com.example.data.model.EngineSettings
+import com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.SpeedometerStyle
 import com.example.data.model.ThroughputProfile
@@ -76,9 +83,11 @@ import com.example.ui.components.OsSurvivalAndDiagnosticsCard
 import com.example.ui.components.RadarAxis
 import com.example.ui.components.RooflineParetoChart
 import com.example.ui.components.StatusPill
+import com.example.ui.theme.AetherThemePresets
 import com.example.ui.theme.LocalAetherColors
 import com.example.ui.theme.MonoMetricStyle
 import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.contrastOnColor
 import com.example.util.Formatters
 import kotlin.math.roundToInt
 
@@ -103,7 +112,12 @@ fun TelemetryScreen(
     onOpenDualWifi: () -> Unit = {},
     isSimulating: Boolean = false,
     motionSpeedMultiplier: Float = 1.0f,
+    flightSampleCount: Int = 0,
     onOpenSimulator: () -> Unit = {},
+    onOpenColorStudio: () -> Unit = {},
+    onSaveDiagnosticsTxt: (Uri) -> Unit = {},
+    onSaveDiagnosticsJson: (Uri) -> Unit = {},
+    onShareDiagnosticsBundle: () -> Unit = {},
     onSelectGauge: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -119,6 +133,16 @@ fun TelemetryScreen(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
     ) {
         permRefreshTick++
+    }
+    val saveTxtLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) onSaveDiagnosticsTxt(uri)
+    }
+    val saveJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) onSaveDiagnosticsJson(uri)
     }
 
     val notifGranted = remember(permRefreshTick) {
@@ -183,11 +207,11 @@ fun TelemetryScreen(
             )
         }
 
-        // User-Selectable Bike / Vehicle Speedometer Layout Selector
+        // User-Selectable Bike / Vehicle Speedometer Layout Selector (6 styles)
         item(key = "speedometer_style_selector") {
-            EngineSectionCard(title = "BIKE / VEHICLE SPEEDOMETER COCKPIT LAYOUT") {
+            EngineSectionCard(title = "SPEEDOMETER & PROGRESS COCKPIT STYLES (6)") {
                 Text(
-                    text = "Pick your preferred motorsport gauge cluster under the Aggregate Throughput card. Switching layouts morphs all 4 gauges smoothly with Jetpack Compose Shared Element Transitions.",
+                    text = "Pick your preferred motorsport, F1 HUD, Neon Plasma Arc, or Rayburst Matrix gauge layout. Switching styles cross-fades cleanly with zero overlap.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -203,6 +227,80 @@ fun TelemetryScreen(
                             modifier = Modifier.testTag("speedometer_style_${style.name.lowercase()}"),
                         )
                     }
+                }
+            }
+        }
+
+        // Telegram-Style Color Studio (18 Themes) + App-Wide Neon Glow Switch
+        item(key = "color_studio_and_neon") {
+            val activePreset = AetherThemePresets.byId(settings.uiThemeConfig.presetId)
+            EngineSectionCard(title = "UI COLOR STUDIO (18 THEMES) & APP-WIDE NEON GLOW") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusPill(
+                        label = "THEME: ${activePreset.name.uppercase()}",
+                        color = ext.cyan,
+                    )
+                    StatusPill(
+                        label = if (settings.uiThemeConfig.neonGlowEnabled) {
+                            "NEON ${(settings.uiThemeConfig.neonGlowIntensity * 100).roundToInt()}%"
+                        } else {
+                            "NEON OFF"
+                        },
+                        color = if (settings.uiThemeConfig.neonGlowEnabled) ext.violet else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                EngineToggleRow(
+                    title = "App-Wide Neon Glow & Animated Halo",
+                    subtitle = "Adds luminous neon glow across cards, speedometers, Rayburst bars, sheets, and buttons",
+                    checked = settings.uiThemeConfig.neonGlowEnabled,
+                    onCheckedChange = { enabled ->
+                        onUpdateSettings { s ->
+                            s.copy(uiThemeConfig = s.uiThemeConfig.copy(neonGlowEnabled = enabled))
+                        }
+                    },
+                    modifier = Modifier.testTag("toggle_app_wide_neon"),
+                )
+
+                if (settings.uiThemeConfig.neonGlowEnabled) {
+                    Column {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Neon Glow Intensity", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "${(settings.uiThemeConfig.neonGlowIntensity * 100).roundToInt()}%",
+                                style = MonoMetricStyle,
+                                color = ext.violet,
+                            )
+                        }
+                        Slider(
+                            value = settings.uiThemeConfig.neonGlowIntensity,
+                            onValueChange = { v ->
+                                onUpdateSettings { s ->
+                                    s.copy(uiThemeConfig = s.uiThemeConfig.copy(neonGlowIntensity = v.coerceIn(0.15f, 1.0f)))
+                                }
+                            },
+                            valueRange = 0.15f..1.0f,
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onOpenColorStudio,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ext.violet,
+                        contentColor = contrastOnColor(ext.violet),
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("open_color_studio_button"),
+                ) {
+                    Icon(Icons.Filled.ColorLens, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Open Telegram-Style Color Studio (${AetherThemePresets.all.size} Themes)")
                 }
             }
         }
@@ -263,8 +361,8 @@ fun TelemetryScreen(
                 }
 
                 EngineToggleRow(
-                    title = "Rust Native Engine (libaether_core.so v9.0)",
-                    subtitle = "Persistent wreq BoringSSL pool + quinn/h3 0-RTT + Decoupled Disk Writer + 12 MiB SlabPool",
+                    title = "Rust Native Engine (libaether_core.so v9.1)",
+                    subtitle = "Sharded 64-stream wreq BoringSSL + quinn/h3 0-RTT + Decoupled Disk Writer + 12 MiB SlabPool",
                     checked = settings.enableRustEngine,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableRustEngine = on) } },
                     modifier = Modifier.testTag("toggle_rust_engine"),
@@ -272,7 +370,7 @@ fun TelemetryScreen(
 
                 EngineToggleRow(
                     title = "Kotlin OkHttp Turbo Multi-Network Engine",
-                    subtitle = "Persistent per-link pools (32 sockets/host) + Lock-Free pwrite + Live Range Bisection",
+                    subtitle = "Sharded 64-stream multi-socket pools + Lock-Free pwrite + Force-All-Links & Live Bisection",
                     checked = settings.enableKotlinOkHttpEngine,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableKotlinOkHttpEngine = on) } },
                     modifier = Modifier.testTag("toggle_kotlin_engine"),
@@ -407,7 +505,7 @@ fun TelemetryScreen(
 
         // 4-Layer Telemetry Summary
         item(key = "four_layer_cards") {
-            EngineSectionCard(title = "v9.0 4-LAYER ENGINE TELEMETRY") {
+            EngineSectionCard(title = "v9.1 4-LAYER ENGINE TELEMETRY") {
                 EngineLayerRow(
                     title = "L1 · OS Control & dataSync Quota Guard",
                     detail = "Thermal: ${telemetry.thermalStatusLabel} · Quota left ${Formatters.formatDurationHms(telemetry.quotaRemainingMs)}",
@@ -447,7 +545,7 @@ fun TelemetryScreen(
                     cellHistoryBps = telemetry.cellHistoryBps,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text("2D BDP CONCURRENCY HEATMAP (WORKERS × RTT)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("2D BDP CONCURRENCY HEATMAP (WORKERS 4..64 × RTT)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 BdpConcurrencyHeatmap(
                     currentWorkers = settings.maxConcurrentWorkers,
                     lastRttMs = telemetry.lastTtfbMs,
@@ -458,10 +556,74 @@ fun TelemetryScreen(
             }
         }
 
-        // 8-Axis Radar Audit
+        // 8-Axis Radar Audit (8 distinct axis colors)
         item(key = "eight_axis_radar") {
-            EngineSectionCard(title = "v9.0 8-AXIS ARCHITECTURE AUDIT") {
+            EngineSectionCard(title = "v9.1 8-AXIS ARCHITECTURE AUDIT (COLOR-CODED)") {
                 EightAxisRadarChart(axes = radarAxes, modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        // Deep Diagnostic Flight Recorder & Save/Share Export (TXT + JSON)
+        item(key = "flight_recorder_export") {
+            EngineSectionCard(title = "DIAGNOSTIC FLIGHT RECORDER · SAVE & SHARE TRACE") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    StatusPill(
+                        label = "$flightSampleCount SAMPLES (1 Hz)",
+                        color = ext.cyan,
+                    )
+                    StatusPill(
+                        label = "REDACTION ACTIVE",
+                        color = ext.emerald,
+                    )
+                }
+                Text(
+                    text = "Captures per-link speeds, worker counts, TTFB, socket blocked reasons, cellular lease state, and Rust/Kotlin logs so you can save or share TXT + JSON traces to diagnose speed dips or unused networks.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { saveTxtLauncher.launch("aetherio_diagnostics.txt") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_diag_txt_button"),
+                    ) {
+                        Icon(Icons.Filled.Description, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save TXT")
+                    }
+                    OutlinedButton(
+                        onClick = { saveJsonLauncher.launch("aetherio_trace.json") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("save_diag_json_button"),
+                    ) {
+                        Icon(Icons.Filled.DataObject, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Save JSON")
+                    }
+                }
+                Button(
+                    onClick = onShareDiagnosticsBundle,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ext.cyan,
+                        contentColor = contrastOnColor(ext.cyan),
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("share_diag_bundle_button"),
+                ) {
+                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Share TXT + JSON Diagnostics Bundle")
+                }
             }
         }
 
@@ -502,24 +664,36 @@ fun TelemetryScreen(
                 Column {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Default Worker Concurrency", style = MaterialTheme.typography.titleSmall)
-                        Text("${settings.maxConcurrentWorkers} streams", style = MonoMetricStyle, color = ext.cyan)
+                        Text("${settings.maxConcurrentWorkers} / $MAX_CONCURRENT_WORKERS_CAP streams", style = MonoMetricStyle, color = ext.cyan)
                     }
                     Slider(
-                        value = settings.maxConcurrentWorkers.toFloat(),
+                        value = settings.maxConcurrentWorkers.toFloat().coerceIn(1f, MAX_CONCURRENT_WORKERS_CAP.toFloat()),
                         onValueChange = {
-                            val count = it.roundToInt()
+                            val count = it.roundToInt().coerceIn(1, MAX_CONCURRENT_WORKERS_CAP)
                             onUpdateSettings { s -> s.copy(maxConcurrentWorkers = count) }
                         },
-                        valueRange = 1f..16f,
-                        steps = 14,
+                        valueRange = 1f..MAX_CONCURRENT_WORKERS_CAP.toFloat(),
                     )
                 }
 
+                EngineToggleRow(
+                    title = "Force-All-Links Aggressive Bonding (Zero Idle Radios)",
+                    subtitle = "Guarantees dedicated parallel streams on EVERY connected network (Wi-Fi 1 + Wi-Fi 2 + Mobile 5G + USB) and auto-recovers 5G lease.",
+                    checked = settings.forceAllLinks,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(forceAllLinks = on) } },
+                    modifier = Modifier.testTag("toggle_force_all_links"),
+                )
                 EngineToggleRow(
                     title = "Retain 5G Radio on Wi-Fi (requestNetwork)",
                     subtitle = "F1 fix: holds active cellular Network lease while Wi-Fi is default.",
                     checked = settings.retainCellularOnWifi,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(retainCellularOnWifi = on) } },
+                )
+                EngineToggleRow(
+                    title = "Shizuku Wi-Fi Low-Latency Boost",
+                    subtitle = "Enables unthrottled Wi-Fi scanning & low-latency Wi-Fi mode when Shizuku is authorized.",
+                    checked = settings.enableShizukuWifiBoost,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(enableShizukuWifiBoost = on) } },
                 )
                 EngineToggleRow(
                     title = "HTTP/3 QUIC 0-RTT (quinn + h3)",
@@ -534,8 +708,8 @@ fun TelemetryScreen(
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableWreqEmulation = on) } },
                 )
                 EngineToggleRow(
-                    title = "Bidirectional autoSpeedUp Controller",
-                    subtitle = "Dynamically scales workers up to 16 based on Δgoodput & ΔRTT",
+                    title = "Ghost-Style Auto-Acceleration (autoSpeedUp)",
+                    subtitle = "Dynamically ramps sharded workers up to $MAX_CONCURRENT_WORKERS_CAP streams based on Δgoodput & ΔRTT",
                     checked = settings.enableAutoSpeedUp,
                     onCheckedChange = { on -> onUpdateSettings { it.copy(enableAutoSpeedUp = on) } },
                 )

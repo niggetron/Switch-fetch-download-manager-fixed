@@ -75,6 +75,10 @@ class DownloadRepository(
 
     suspend fun update(entity: DownloadEntity) = downloadDao.update(entity)
 
+    suspend fun updateMd5(id: String, md5: String) = downloadDao.updateMd5(id, md5)
+
+    suspend fun updateSha256(id: String, sha256: String) = downloadDao.updateSha256(id, sha256)
+
     suspend fun recordCasChunks(chunks: List<CasChunkEntity>) {
         if (chunks.isNotEmpty()) casChunkDao.insertAll(chunks)
     }

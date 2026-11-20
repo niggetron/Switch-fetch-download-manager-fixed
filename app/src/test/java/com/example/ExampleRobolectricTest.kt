@@ -16,13 +16,20 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollToNode
 import com.example.data.model.EngineSettings
+import com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
 import com.example.data.model.SpeedometerStyle
 import com.example.engine.DiagnosticsCenter
+import com.example.engine.LinkCircuitBreaker
+import com.example.engine.LinkLaneMetrics
+import com.example.engine.LinkScheduler
 import com.example.engine.NetworkMatrixState
+import com.example.engine.RemoteZipInspector
 import com.example.engine.TelemetrySnapshot
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
+import com.example.ui.components.DownloadPropertiesSheet
 import com.example.ui.components.FocusedGaugeOverlay
 import com.example.ui.components.PerNetworkLiveSpeedPanel
 import com.example.ui.components.PerNetworkSpeedometerCluster
@@ -31,13 +38,19 @@ import com.example.ui.screens.AnimationSimulationState
 import com.example.ui.screens.AnimationSimulatorSheet
 import com.example.ui.screens.TelemetryScreen
 import com.example.ui.theme.AetherTheme
+import com.example.ui.theme.AetherThemePresets
+import com.example.ui.theme.wcagContrastRatio
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -335,5 +348,163 @@ class ExampleRobolectricTest {
         composeRule.onNodeWithTag("per_network_speedometer_cluster").assertIsDisplayed()
         composeRule.onNodeWithTag("open_sim_from_cluster").assertIsDisplayed()
         composeRule.onNodeWithTag("speedometer_wifi").assertIsDisplayed()
+    }
+
+    @Test
+    fun `all 18 Color Studio theme presets satisfy WCAG AA text contrast ratio`() {
+        val presets = AetherThemePresets.all
+        assertTrue("Expected at least 18 theme presets, got ${presets.size}", presets.size >= 18)
+        presets.forEach { preset ->
+            val ratio = wcagContrastRatio(Color(preset.textPrimary), Color(preset.surface))
+            assertTrue(
+                "Preset '${preset.name}' failed WCAG AA contrast: $ratio",
+                ratio >= 4.5,
+            )
+        }
+    }
+
+    @Test
+    fun `all 6 speedometer styles exist and new Rayburst Matrix Bar renders cleanly`() {
+        assertEquals(6, SpeedometerStyle.entries.size)
+        composeRule.setContent {
+            AetherTheme {
+                PerNetworkSpeedometerCluster(
+                    telemetry = TelemetrySnapshot(
+                        wifiBps = 40_000_000L,
+                        cellBps = 55_000_000L,
+                        wifi2Bps = 30_000_000L,
+                        ethBps = 35_000_000L,
+                    ),
+                    networkMatrix = NetworkMatrixState(),
+                    useMBpsUnit = false,
+                    speedometerStyle = SpeedometerStyle.RAYBURST_MATRIX_BAR,
+                    onToggleUnit = {},
+                    onResetPeaks = {},
+                )
+            }
+        }
+        composeRule.onNodeWithTag("speedometer_wifi").assertIsDisplayed()
+        composeRule.onNodeWithTag("speedometer_cellular").assertIsDisplayed()
+    }
+
+    @Test
+    fun `Ghost autoSpeedUp scales up to 64 workers and Force-All-Links prevents 5G starvation`() {
+        assertEquals(64, MAX_CONCURRENT_WORKERS_CAP)
+        val ramped = LinkScheduler.adjustAutoSpeedUp(
+            currentWorkers = 16,
+            minWorkers = 4,
+            maxWorkers = 64,
+            prevGoodputBps = 20_000_000.0,
+            newGoodputBps = 26_000_000.0,
+            deltaRttMs = 5.0,
+            throttled = false,
+        )
+        assertTrue("Expected ramp above 16, got $ramped", ramped > 16)
+
+        val lanes = listOf(
+            LinkLaneMetrics(linkKeyId = "wifi:wlan0", queuedBytes = 0.0, ewmaBytesPerSec = 100_000_000.0, rttMinSecs = 0.012, activeWorkersOnLink = 4),
+            LinkLaneMetrics(linkKeyId = "cell:rmnet0", queuedBytes = 0.0, ewmaBytesPerSec = 15_000_000.0, rttMinSecs = 0.025, activeWorkersOnLink = 0),
+        )
+        val chosen = LinkScheduler.selectLinkWithForceAll(
+            lanes = lanes,
+            breakers = mapOf("wifi:wlan0" to LinkCircuitBreaker(), "cell:rmnet0" to LinkCircuitBreaker()),
+            segmentBytes = 8.0 * 1024.0 * 1024.0,
+            forceAllLinks = true,
+            workerId = 5,
+            minReservedPerLink = 2,
+        )
+        assertEquals("cell:rmnet0", chosen?.linkKeyId)
+    }
+
+    @Test
+    fun `diagnostics flight recorder redacts secrets and exports TXT and structured JSON`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val redacted = DiagnosticsCenter.redactSensitive("GET https://cdn.test/file.bin?sig=secret123&expires=999 token:abcdef123456")
+        assertTrue(redacted.contains("[REDACTED_SIGNED_PARAMS]"))
+        assertTrue(redacted.contains("[REDACTED]"))
+
+        val snap = TelemetrySnapshot(
+            instantBps = 80_000_000L,
+            peakBps = 100_000_000L,
+            avgBps = 72_000_000L,
+            wifiBps = 50_000_000L,
+            cellBps = 30_000_000L,
+            activeWorkers = 32,
+            activeEngineBadge = "OKHTTP",
+        )
+        DiagnosticsCenter.recordFlightSample(snap)
+        val txt = DiagnosticsCenter.exportReport(context, "Kotlin OkHttp", snap)
+        val json = DiagnosticsCenter.exportStructuredJsonTrace("Kotlin OkHttp", snap)
+        assertTrue(txt.contains("AetherIO Omega v9.1 Hyperion"))
+        assertTrue(json.contains("\"schema\": \"aetherio_flight_trace_v9_1\""))
+    }
+
+    @Test
+    fun `remote zip inspector parses EOCD and Central Directory from real ZIP bytes`() {
+        val baos = ByteArrayOutputStream()
+        ZipOutputStream(baos).use { zos ->
+            zos.putNextEntry(ZipEntry("firmware/boot.img"))
+            zos.write("AETHER_BOOT_IMAGE_PAYLOAD".toByteArray())
+            zos.closeEntry()
+            zos.putNextEntry(ZipEntry("docs/readme.txt"))
+            zos.write("Hello AetherIO".toByteArray())
+            zos.closeEntry()
+        }
+        val zipBytes = baos.toByteArray()
+        val eocdOffset = RemoteZipInspector.findEocdOffset(zipBytes)
+        assertNotNull("Expected EOCD offset", eocdOffset)
+        val buf = java.nio.ByteBuffer.wrap(zipBytes, eocdOffset!!, zipBytes.size - eocdOffset)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        buf.int; buf.short; buf.short; buf.short
+        val totalEntries = buf.short.toInt() and 0xFFFF
+        val cdSize = buf.int
+        val cdOffset = buf.int
+        val cdBytes = zipBytes.copyOfRange(cdOffset, cdOffset + cdSize)
+        val entries = RemoteZipInspector.parseCentralDirectory(cdBytes, totalEntries)
+        assertEquals(2, entries.size)
+        assertTrue(entries.any { it.fileName == "firmware/boot.img" })
+        assertTrue(entries.any { it.fileName == "docs/readme.txt" })
+    }
+
+    @Test
+    fun `download properties sheet renders 1DM+ metadata and MD5 SHA-256 calculate buttons`() {
+        val entity = DownloadEntity(
+            id = "prop-1",
+            url = "https://cdn.example.com/movie_4k.mkv",
+            fileName = "movie_4k.mkv",
+            mimeType = "video/x-matroska",
+            totalBytes = 2_440_000_000L,
+            downloadedBytes = 1_220_000_000L,
+            status = DownloadStatus.STREAMING.name,
+            routeMode = NetworkRouteMode.AUTO_MULTIPATH.name,
+            workerCount = 32,
+            destinationUri = "/storage/emulated/0/Download/AetherIO/movie_4k.mkv",
+            isSafDestination = false,
+            supportsRange = true,
+            peakSpeedBps = 90_000_000L,
+            avgSpeedBps = 65_000_000L,
+            activeDownloadMs = 25_000L,
+            maxConnectionsUsed = 64,
+        )
+        composeRule.setContent {
+            AetherTheme {
+                DownloadPropertiesSheet(
+                    entity = entity,
+                    useMBpsUnit = false,
+                    liveSpeedBps = 75_000_000L,
+                    isSimulatedPreview = true,
+                    onDismiss = {},
+                    onOpenFile = {},
+                    onShareFile = {},
+                    onRefreshUrl = { _, _ -> },
+                    onSaveMd5 = { _, _ -> },
+                    onSaveSha256 = { _, _ -> },
+                )
+            }
+        }
+        composeRule.onNodeWithTag("download_properties_sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("calculate_md5_button").assertExists()
+        composeRule.onNodeWithTag("calculate_sha256_button").assertExists()
+        composeRule.onNodeWithTag("properties_close_button").assertExists()
     }
 }

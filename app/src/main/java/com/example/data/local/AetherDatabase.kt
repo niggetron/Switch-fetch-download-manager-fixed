@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [DownloadEntity::class, CasChunkEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AetherDatabase : RoomDatabase() {
@@ -32,6 +32,18 @@ abstract class AetherDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE downloads ADD COLUMN startedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN activeDownloadMs INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN maxConnectionsUsed INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN wifi2Bytes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN usbBytes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN actualMd5 TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE downloads ADD COLUMN streamType TEXT NOT NULL DEFAULT 'DIRECT'")
+            }
+        }
+
         fun getInstance(context: Context): AetherDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -39,7 +51,7 @@ abstract class AetherDatabase : RoomDatabase() {
                     AetherDatabase::class.java,
                     "aetherio_omega.db",
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

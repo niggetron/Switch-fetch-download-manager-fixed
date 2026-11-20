@@ -35,9 +35,11 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +54,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,15 +63,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.BrowserProfile
 import com.example.data.model.CuratedEndpoints
 import com.example.data.model.EngineBackendPreference
 import com.example.data.model.EngineSettings
+import com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
 import com.example.data.model.NetworkRouteMode
 import com.example.data.model.NewDownloadRequest
 import com.example.data.model.ProtocolMode
+import com.example.data.model.RemoteZipEntry
 import com.example.engine.NetworkMatrixState
+import com.example.engine.RemoteZipInspector
+import com.example.ui.components.SkeletonPropertyRow
 import com.example.ui.components.StatusPill
 import com.example.ui.motion.AetherSharedKey
 import com.example.ui.motion.LocalMotionSpeedMultiplier
@@ -76,12 +84,16 @@ import com.example.ui.motion.SharedPart
 import com.example.ui.motion.aetherSharedBounds
 import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
+import com.example.ui.theme.aetherNeonBorder
+import com.example.ui.theme.contrastOnColor
+import com.example.util.Formatters
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * In-tree Container Transform Overlay for Launching a Zero-Merge Pipeline.
- * Morphs directly from the FloatingActionButton (`FAB_NEW_DOWNLOAD`) via official
- * Jetpack Compose `sharedBounds` inside the root `SharedTransitionLayout`.
+ * In-tree Container Transform Overlay for Launching a Zero-Merge 64-Stream Pipeline,
+ * including Remote `.zip` EOCD 64 KB selective extraction preview.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -93,7 +105,9 @@ fun NewDownloadSheet(
 ) {
     val context = LocalContext.current
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     val motionSpeed = LocalMotionSpeedMultiplier.current
+    val scope = rememberCoroutineScope()
 
     BackHandler(onBack = onDismiss)
 
@@ -102,16 +116,24 @@ fun NewDownloadSheet(
     var fileNameText by remember { mutableStateOf("") }
     var expectedSha256 by remember { mutableStateOf("") }
     var routeMode by remember { mutableStateOf(defaultSettings.defaultRouteMode) }
-    var workerCount by remember { mutableFloatStateOf(defaultSettings.maxConcurrentWorkers.toFloat()) }
+    var workerCount by remember { mutableFloatStateOf(defaultSettings.maxConcurrentWorkers.coerceIn(1, MAX_CONCURRENT_WORKERS_CAP).toFloat()) }
     var backendOverride by remember { mutableStateOf<EngineBackendPreference?>(null) }
     var protocolMode by remember { mutableStateOf(defaultSettings.defaultProtocolMode) }
     var browserProfile by remember { mutableStateOf(defaultSettings.defaultBrowserProfile) }
     var cellularCapBytes by remember { mutableLongStateOf(defaultSettings.maxCellularBytesPerSession) }
     var safDestinationUri by remember { mutableStateOf<Uri?>(null) }
 
+    var zipProbing by remember { mutableStateOf(false) }
+    var zipEntries by remember { mutableStateOf<List<RemoteZipEntry>>(emptyList()) }
+    var zipError by remember { mutableStateOf<String?>(null) }
+    var selectedZipEntry by remember { mutableStateOf<RemoteZipEntry?>(null) }
+
     val isAdaptiveManifest = remember(urlText) {
         val clean = urlText.substringBefore('?').lowercase()
         clean.endsWith(".m3u8") || clean.endsWith(".mpd")
+    }
+    val isRemoteZipUrl = remember(urlText) {
+        urlText.substringBefore('?').lowercase().endsWith(".zip")
     }
 
     val safCreateLauncher = rememberLauncherForActivityResult(
@@ -123,7 +145,7 @@ fun NewDownloadSheet(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.62f))
+            .background(Color.Black.copy(alpha = 0.68f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -144,7 +166,13 @@ fun NewDownloadSheet(
                 )
                 .clip(RoundedCornerShape(24.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .border(1.2.dp, ext.cyan.copy(alpha = 0.48f), RoundedCornerShape(24.dp))
+                .aetherNeonBorder(
+                    neon = neon,
+                    accent = ext.cyan,
+                    cornerRadius = 24.dp,
+                    borderWidth = 1.2.dp,
+                    fallbackBorderColor = ext.cyan.copy(alpha = 0.48f),
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -168,7 +196,11 @@ fun NewDownloadSheet(
                         modifier = Modifier.size(22.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Launch Zero-Merge Pipeline", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = "Launch Zero-Merge Pipeline",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
                 IconButton(
                     onClick = onDismiss,
@@ -176,15 +208,20 @@ fun NewDownloadSheet(
                         .size(48.dp)
                         .testTag("close_new_download_sheet_button"),
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close new download panel")
+                    Icon(Icons.Filled.Close, contentDescription = "Close new download panel", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
 
             OutlinedTextField(
                 value = urlText,
-                onValueChange = { urlText = it },
-                label = { Text("Primary HTTP / HTTPS / HLS / DASH URL") },
-                placeholder = { Text("https://example.com/archive.tar.gz") },
+                onValueChange = {
+                    urlText = it
+                    selectedZipEntry = null
+                    zipEntries = emptyList()
+                    zipError = null
+                },
+                label = { Text("Primary HTTP / HTTPS / HLS / DASH / .ZIP URL") },
+                placeholder = { Text("https://example.com/archive.zip") },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -204,7 +241,94 @@ fun NewDownloadSheet(
             )
 
             AnimatedVisibility(visible = isAdaptiveManifest) {
-                StatusPill(label = "HLS/DASH Adaptive Segment Extractor Armed", color = ext.cyan)
+                StatusPill(label = "HLS/DASH Parallel Segment Extractor Armed", color = ext.cyan)
+            }
+
+            // Remote .ZIP EOCD 64 KB Selective Preview Panel
+            AnimatedVisibility(visible = isRemoteZipUrl) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ext.violet.copy(alpha = 0.10f))
+                        .border(1.dp, ext.violet.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Filled.FolderZip, contentDescription = null, tint = ext.violet, modifier = Modifier.size(18.dp))
+                            Text("Remote .ZIP Selective Extractor", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                zipProbing = true
+                                zipError = null
+                                scope.launch {
+                                    val res = RemoteZipInspector.inspectRemoteZip(urlText)
+                                    zipProbing = false
+                                    res.onSuccess { zipEntries = it }
+                                        .onFailure { zipError = it.message ?: "EOCD probe failed" }
+                                }
+                            },
+                            enabled = !zipProbing,
+                            modifier = Modifier.testTag("probe_remote_zip_button"),
+                        ) {
+                            Text(if (zipProbing) "Reading EOCD…" else "Preview Contents", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    if (zipProbing) {
+                        SkeletonPropertyRow()
+                        SkeletonPropertyRow()
+                        SkeletonPropertyRow()
+                    }
+                    zipError?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = ext.rose)
+                    }
+                    if (zipEntries.isNotEmpty()) {
+                        Text(
+                            text = "Tap any file to extract ONLY that file via HTTP Range (or leave unselected for full ZIP):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        zipEntries.take(8).forEach { entry ->
+                            val picked = selectedZipEntry == entry
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (picked) ext.emerald.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surface)
+                                    .border(1.dp, if (picked) ext.emerald else ext.cardBorder, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        selectedZipEntry = if (picked) null else entry
+                                        if (!picked) fileNameText = entry.fileName.substringAfterLast('/')
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = entry.fileName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = Formatters.formatBytes(entry.uncompressedSize),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (picked) ext.emerald else ext.cyan,
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             OutlinedTextField(
@@ -239,7 +363,7 @@ fun NewDownloadSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(sample.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text(sample.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
                             Text(sample.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
@@ -269,7 +393,6 @@ fun NewDownloadSheet(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            // Engine Backend A/B Selector
             Text(
                 text = "ENGINE EXECUTION BACKEND (A/B BENCHMARK)",
                 style = MaterialTheme.typography.labelSmall,
@@ -298,7 +421,6 @@ fun NewDownloadSheet(
                 )
             }
 
-            // Protocol & TLS Fingerprint Profile
             Text(
                 text = "PROTOCOL & TLS FINGERPRINT PROFILE",
                 style = MaterialTheme.typography.labelSmall,
@@ -385,10 +507,22 @@ fun NewDownloadSheet(
 
             Column {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Adaptive BDP Segment Workers", style = MaterialTheme.typography.titleSmall)
-                    Text("${workerCount.roundToInt()} parallel streams", style = MaterialTheme.typography.labelMedium, color = ext.emerald)
+                    Text(
+                        text = "Adaptive BDP Streams (Ghost Auto-Boost)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "${workerCount.roundToInt()} / $MAX_CONCURRENT_WORKERS_CAP streams",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ext.emerald,
+                    )
                 }
-                Slider(value = workerCount, onValueChange = { workerCount = it }, valueRange = 1f..16f, steps = 14)
+                Slider(
+                    value = workerCount,
+                    onValueChange = { workerCount = it },
+                    valueRange = 1f..MAX_CONCURRENT_WORKERS_CAP.toFloat(),
+                )
             }
 
             Row(
@@ -407,10 +541,12 @@ fun NewDownloadSheet(
                 ) {
                     Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (safDestinationUri != null) "SAF Target Locked" else "Pick SAF File…")
+                    Text(if (safDestinationUri != null) "SAF Target Locked" else "Pick SAF File…", color = MaterialTheme.colorScheme.onSurface)
                 }
                 if (safDestinationUri != null) {
-                    OutlinedButton(onClick = { safDestinationUri = null }) { Text("Use Vault") }
+                    OutlinedButton(onClick = { safDestinationUri = null }) {
+                        Text("Use Vault", color = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             }
 
@@ -430,10 +566,15 @@ fun NewDownloadSheet(
                             protocolMode = protocolMode,
                             browserProfile = browserProfile,
                             maxCellularBytes = cellularCapBytes,
-                        )
+                            selectedZipEntry = selectedZipEntry,
+                        ),
                     )
                 },
                 enabled = urlText.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ext.cyan,
+                    contentColor = contrastOnColor(ext.cyan),
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
@@ -441,7 +582,10 @@ fun NewDownloadSheet(
             ) {
                 Icon(Icons.Filled.RocketLaunch, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Arm Pipeline & Download")
+                Text(
+                    text = if (selectedZipEntry != null) "Extract Selected File from .ZIP" else "Arm Pipeline & Download",
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

@@ -1,9 +1,11 @@
 package com.example.data.model
 
 import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.UiThemeConfig
 
 const val F2FS_SEGMENT_BYTES: Long = 4L * 1024L * 1024L // 4 MiB default adaptive BDP base
 const val MEDIASTORE_DIRECT_FD_THRESHOLD_BYTES: Long = 1L * 1024L * 1024L * 1024L // 1 GiB FUSE threshold
+const val MAX_CONCURRENT_WORKERS_CAP: Int = 64
 
 enum class DownloadStatus {
     QUEUED,
@@ -70,6 +72,21 @@ enum class SpeedometerStyle(val label: String, val shortLabel: String, val subti
         label = "Racing Tachometer Strip",
         shortLabel = "Tach Strip",
         subtitle = "Slim horizontal RPM shift-light bars for maximum download list density",
+    ),
+    F1_TELEMETRY_HUD(
+        label = "F1 Telemetry Shift HUD",
+        shortLabel = "F1 HUD",
+        subtitle = "Formula shift-light LED array, active-stream gear readout & live peak-hold rail",
+    ),
+    NEON_PLASMA_ARC(
+        label = "Neon Plasma Orbit",
+        shortLabel = "Plasma Arc",
+        subtitle = "Concentric luminous plasma rings with pulsing neon aura & digital telemetry core",
+    ),
+    RAYBURST_MATRIX_BAR(
+        label = "Rayburst 64-Lane Matrix",
+        shortLabel = "Rayburst",
+        subtitle = "64-connection striped surge bars with live emerald completion flashes",
     );
 
     fun next(): SpeedometerStyle = entries[(ordinal + 1) % entries.size]
@@ -78,7 +95,7 @@ enum class SpeedometerStyle(val label: String, val shortLabel: String, val subti
 enum class ThroughputProfile(val label: String, val subtitle: String) {
     TURBO_ANTI_DIP(
         label = "Turbo + Anti-Dip (Both)",
-        subtitle = "Up to 16 warm pooled sockets + live range bisection + decoupled async disk I/O",
+        subtitle = "Up to 64 sharded multi-socket lanes + live range bisection + decoupled async I/O",
     ),
     SUSTAINED_ANTI_DIP(
         label = "Sustained Anti-Dip",
@@ -86,7 +103,7 @@ enum class ThroughputProfile(val label: String, val subtitle: String) {
     ),
     MAX_MULTI_SOCKET(
         label = "Max Multi-Socket Burst",
-        subtitle = "Maximum concurrent sockets per link to saturate Gigabit Wi-Fi 6/6E & 5G mmWave",
+        subtitle = "Maximum concurrent independent sockets per link to saturate Gigabit Wi-Fi & 5G",
     ),
 }
 
@@ -129,7 +146,7 @@ enum class TransferFilter(val label: String) {
 }
 
 /**
- * Logical Android network identity (Quad-Link v9.0):
+ * Logical Android network identity (Quad-Link v9.1):
  * Keyed by transport + interface rather than rotating raw networkHandle.
  */
 sealed class LinkKey(
@@ -173,21 +190,38 @@ data class ActiveConnectionInfo(
     val rangeEnd: Long,
 )
 
+/**
+ * Remote `.zip` EOCD Central Directory entry parsed from a 64 KB HTTP Range suffix.
+ */
+data class RemoteZipEntry(
+    val fileName: String,
+    val compressedSize: Long,
+    val uncompressedSize: Long,
+    val localHeaderOffset: Long,
+    val compressionMethod: Int,
+    val crc32: Long,
+) {
+    val isStored: Boolean get() = compressionMethod == 0
+    val isDeflated: Boolean get() = compressionMethod == 8
+}
+
 data class EngineSettings(
-    val maxConcurrentWorkers: Int = 8,
+    val maxConcurrentWorkers: Int = 16,
     val segmentSizeBytes: Long = F2FS_SEGMENT_BYTES,
     val enableTailHedge: Boolean = true,
     val enableAutoSpeedUp: Boolean = true,
     val enableCasVerification: Boolean = true,
     val stagedSafPlacement: Boolean = true,
     val retainCellularOnWifi: Boolean = true,
+    val forceAllLinks: Boolean = true,
     val defaultRouteMode: NetworkRouteMode = NetworkRouteMode.AUTO_MULTIPATH,
     val proxyHost: String = "",
     val proxyPort: Int = 1080,
     val cellularProxyHost: String = "",
     val cellularProxyPort: Int = 1080,
     val themeMode: ThemeMode = ThemeMode.DARK_OBSIDIAN,
-    // Dual-engine A/B toggles & v8.0/v9.0 feature flags
+    val uiThemeConfig: UiThemeConfig = UiThemeConfig(),
+    // Dual-engine A/B toggles & v8.0/v9.1 feature flags
     val enableRustEngine: Boolean = true,
     val enableKotlinOkHttpEngine: Boolean = true,
     val preferredEngineBackend: EngineBackendPreference = EngineBackendPreference.AUTO_PREFER_RUST,
@@ -198,11 +232,12 @@ data class EngineSettings(
     val maxCellularBytesPerSession: Long = 0L, // 0 = unlimited
     val defaultBrowserProfile: BrowserProfile = BrowserProfile.CHROME_134,
     val defaultProtocolMode: ProtocolMode = ProtocolMode.AUTO_HYBRID,
-    // v9.0 Quad-Link Superbike & Anti-Dip settings
+    // v9.1 Quad-Link Superbike, Anti-Dip & Shizuku settings
     val speedometerStyle: SpeedometerStyle = SpeedometerStyle.SUPERBIKE_GRID,
     val throughputProfile: ThroughputProfile = ThroughputProfile.TURBO_ANTI_DIP,
     val dualWifiEnabled: Boolean = true,
     val usbBondingEnabled: Boolean = true,
+    val enableShizukuWifiBoost: Boolean = true,
     val wifi2Ssid: String = "",
     val wifi2BandPreference: WifiBandPreference = WifiBandPreference.BAND_5GHZ,
     val wifi2RelayHost: String = "",
@@ -211,7 +246,9 @@ data class EngineSettings(
 ) {
     fun toNativeFeatureMask(): Int {
         var mask = 0
-        if (retainCellularOnWifi && defaultRouteMode != NetworkRouteMode.WIFI_ONLY) mask = mask or (1 shl 0)
+        if ((retainCellularOnWifi || forceAllLinks) && defaultRouteMode != NetworkRouteMode.WIFI_ONLY) {
+            mask = mask or (1 shl 0)
+        }
         if (enableHttp3Quic) mask = mask or (1 shl 1)
         if (enableWreqEmulation) mask = mask or (1 shl 2)
         if (enableIoUringProbe) mask = mask or (1 shl 3)
@@ -228,6 +265,7 @@ data class EngineSettings(
         ) {
             mask = mask or (1 shl 8)
         }
+        if (forceAllLinks) mask = mask or (1 shl 9)
         return mask
     }
 }
@@ -238,12 +276,13 @@ data class NewDownloadRequest(
     val customFileName: String? = null,
     val expectedSha256: String? = null,
     val routeMode: NetworkRouteMode = NetworkRouteMode.AUTO_MULTIPATH,
-    val workers: Int = 8,
+    val workers: Int = 16,
     val safUriString: String? = null,
     val backendOverride: EngineBackendPreference? = null,
     val protocolMode: ProtocolMode = ProtocolMode.AUTO_HYBRID,
     val browserProfile: BrowserProfile = BrowserProfile.CHROME_134,
     val maxCellularBytes: Long = 0L,
+    val selectedZipEntry: RemoteZipEntry? = null,
 )
 
 data class PublicTestEndpoint(
@@ -265,7 +304,7 @@ object CuratedEndpoints {
         ),
         PublicTestEndpoint(
             title = "Cloudflare 100 MB High-Speed Test",
-            subtitle = "Sustained throughput stress test for Anti-Dip & 4-link speedometers",
+            subtitle = "Sustained throughput stress test for 64-stream Anti-Dip & 4-link speedometers",
             url = "https://speed.cloudflare.com/__down?bytes=104857600",
             fileName = "cloudflare_100mb_turbo.bin",
             approximateSizeLabel = "100.0 MB",

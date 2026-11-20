@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+pub const MAX_WORKERS_CAP: usize = 64;
+
 /// Adaptive BDP extent sizing for high-speed Wi-Fi 6 / 5G / Quad-Link pipes:
 /// - < 50 Mbps -> 1 MiB
 /// - 50..120 Mbps -> 4 MiB
@@ -24,11 +26,11 @@ pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     }
 }
 
-/// Guarantees at least one active worker per validated active link (and up to 16 total).
+/// Guarantees at least one active worker per validated active link (and up to 64 total).
 pub fn effective_worker_count(user_max_connections: usize, validated_active_links: usize) -> usize {
     user_max_connections
         .max(validated_active_links)
-        .clamp(1, 16)
+        .clamp(1, MAX_WORKERS_CAP)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,19 +104,23 @@ pub struct LinkDispatchStats {
     pub queued_bytes: f64,
     pub ewma_bytes_per_sec: f64,
     pub rtt_min_secs: f64,
+    pub active_workers_on_link: usize,
 }
 
-/// Earliest-Arrival scheduler minimizing F_k = (Q_k + S) / R_k + r_k / 2.
-/// Because `queued_bytes` reflects live in-flight bytes per link, multiple healthy links
-/// (Wi-Fi 1 + Wi-Fi 2 + Mobile 5G + USB) pull simultaneously in exact proportion to their
-/// real measured throughput instead of flipping back and forth.
-pub fn select_earliest_arrival_link<'a>(
+/// Force-All-Links + Earliest-Arrival dispatcher (v9.1):
+/// When `force_all_links` is true, every healthy link (Wi-Fi 1, Wi-Fi 2, 5G/LTE, USB)
+/// is guaranteed at least `min_reserved_per_link` active streams before Earliest-Arrival
+/// weighting applies — guaranteeing Mobile Data & Wi-Fi 2 are never starved by Wi-Fi 1!
+pub fn select_link_with_force_all<'a>(
     candidates: &'a [LinkDispatchStats],
     breakers: &mut HashMap<String, LinkCircuitBreaker>,
     segment_bytes: f64,
+    force_all_links: bool,
+    worker_idx: usize,
+    min_reserved_per_link: usize,
     now: Instant,
 ) -> Option<&'a str> {
-    candidates
+    let healthy: Vec<&LinkDispatchStats> = candidates
         .iter()
         .filter(|c| {
             let b = breakers
@@ -122,12 +128,53 @@ pub fn select_earliest_arrival_link<'a>(
                 .or_insert_with(|| LinkCircuitBreaker::new(Duration::from_secs(6)));
             b.allow_request(now) && c.ewma_bytes_per_sec > 0.0
         })
+        .collect();
+
+    if healthy.is_empty() {
+        return None;
+    }
+    if healthy.len() == 1 {
+        return Some(healthy[0].link_id.as_str());
+    }
+
+    if force_all_links {
+        let starved: Vec<&LinkDispatchStats> = healthy
+            .iter()
+            .copied()
+            .filter(|c| c.active_workers_on_link < min_reserved_per_link)
+            .collect();
+        if !starved.is_empty() {
+            let min_w = starved
+                .iter()
+                .map(|c| c.active_workers_on_link)
+                .min()
+                .unwrap_or(0);
+            let least_loaded: Vec<&LinkDispatchStats> = starved
+                .into_iter()
+                .filter(|c| c.active_workers_on_link == min_w)
+                .collect();
+            return Some(least_loaded[worker_idx % least_loaded.len()].link_id.as_str());
+        }
+    }
+
+    healthy
+        .into_iter()
         .min_by(|a, b| {
             let fa = (a.queued_bytes + segment_bytes) / a.ewma_bytes_per_sec + (a.rtt_min_secs * 0.5);
             let fb = (b.queued_bytes + segment_bytes) / b.ewma_bytes_per_sec + (b.rtt_min_secs * 0.5);
             fa.total_cmp(&fb)
         })
         .map(|c| c.link_id.as_str())
+}
+
+/// Earliest-Arrival scheduler minimizing F_k = (Q_k + S) / R_k + r_k / 2.
+pub fn select_earliest_arrival_link<'a>(
+    candidates: &'a [LinkDispatchStats],
+    breakers: &mut HashMap<String, LinkCircuitBreaker>,
+    segment_bytes: f64,
+    now: Instant,
+) -> Option<&'a str> {
+    select_link_with_force_all(candidates, breakers, segment_bytes, false, 0, 1, now)
 }
 
 /// Route Stream-0 probes strictly to the lowest-RTT healthy link.
@@ -206,7 +253,7 @@ pub fn select_mirror_for_link<'a>(urls: &'a [String], link_key: &str, seg_index:
     urls[(base + seg_index) % urls.len()].as_str()
 }
 
-/// Bidirectional closed-loop autoSpeedUp controller scaling cleanly up to 16 workers.
+/// Ghost-style bidirectional closed-loop autoSpeedUp controller scaling cleanly up to 64 workers.
 pub fn adjust_auto_speed_up(
     current_workers: usize,
     min_workers: usize,
@@ -216,16 +263,22 @@ pub fn adjust_auto_speed_up(
     delta_rtt_ms: f64,
     throttled: bool,
 ) -> usize {
-    if throttled || delta_rtt_ms > 35.0 {
-        return current_workers.saturating_sub(2).max(min_workers);
+    let clamped_max = max_workers.clamp(1, MAX_WORKERS_CAP);
+    let clamped_min = min_workers.clamp(1, clamped_max);
+    if throttled || delta_rtt_ms > 40.0 {
+        return current_workers.saturating_sub(2).max(clamped_min);
     }
-    if prev_goodput_bps > 0.0 && delta_rtt_ms < 15.0 {
+    if prev_goodput_bps <= 0.0 && new_goodput_bps > 0.0 && delta_rtt_ms < 20.0 {
+        return (current_workers + 4).min(clamped_max);
+    }
+    if prev_goodput_bps > 0.0 && delta_rtt_ms < 18.0 {
         let gain = (new_goodput_bps - prev_goodput_bps) / prev_goodput_bps;
-        if gain > 0.06 {
-            return (current_workers + 2).min(max_workers);
+        if gain > 0.05 {
+            let step = if current_workers < 24 { 4 } else { 2 };
+            return (current_workers + step).min(clamped_max);
         }
     }
-    current_workers.clamp(min_workers, max_workers)
+    current_workers.clamp(clamped_min, clamped_max)
 }
 
 #[derive(Debug, Clone, Serialize)]

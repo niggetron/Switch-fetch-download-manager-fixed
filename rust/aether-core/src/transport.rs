@@ -74,6 +74,7 @@ pub struct BoundLinkState {
     pub downstream_kbps: AtomicU64,
     pub measured_ewma_bps: AtomicU64, // Real measured bytes/sec EWMA (updated live during transfers)
     pub in_flight_bytes: AtomicU64,   // Real active queued bytes on this link
+    pub active_workers: AtomicU64,    // Active parallel streams pinned to this link
     pub rtt_ms: AtomicU64,
     pub is_cellular: bool,
     pub local_ip: RwLock<Option<IpAddr>>,
@@ -93,13 +94,16 @@ impl BoundLinkState {
         local_ip: Option<IpAddr>,
         proxy_override: Option<ProxyOverride>,
     ) -> Self {
-        let initial_bytes_per_sec = (downstream_kbps.max(4_000) * 125).max(500_000);
+        // Cap initial unmeasured bootstrap EWMA at 10 MB/s (80 Mbps) so Android's fake 866 Mbps
+        // Wi-Fi PHY rate never starves Mobile 5G/LTE or Wi-Fi 2 before real measurements arrive!
+        let initial_bytes_per_sec = (downstream_kbps.max(4_000) * 125).clamp(500_000, 10_000_000);
         Self {
             link_key,
             net_handle: AtomicU64::new(handle),
             downstream_kbps: AtomicU64::new(downstream_kbps.max(1000)),
             measured_ewma_bps: AtomicU64::new(initial_bytes_per_sec),
             in_flight_bytes: AtomicU64::new(0),
+            active_workers: AtomicU64::new(0),
             rtt_ms: AtomicU64::new(rtt_ms.max(8)),
             is_cellular,
             local_ip: RwLock::new(local_ip),
@@ -326,15 +330,18 @@ impl TransportContext {
             .retain(|k, _| !k.starts_with(&prefix));
     }
 
-    /// Returns a persistent warm `wreq::Client` pooled per `(link_key, local_ip, proxy, profile)`
-    /// so TLS 1.3 sessions & HTTP/2 streams stay open across every segment (zero Slow Start dip).
+    /// Returns a sharded persistent warm `wreq::Client` pooled per `(link_key, local_ip, proxy, profile, shard_id)`.
+    /// Sharding forces distinct independent TCP sockets (`http1_only` on multi-socket stripes)
+    /// so 16-64 concurrent workers NEVER collapse onto 1 single HTTP/2 TCP congestion window!
     pub fn get_or_build_wreq_client(
         &self,
         link_key: &str,
         local_ip: Option<IpAddr>,
         proxy: Option<&ProxyOverride>,
         profile: &str,
+        shard_id: usize,
     ) -> Result<WreqClient, wreq::Error> {
+        let effective_shard = shard_id % 16;
         let px_tag = proxy
             .map(|p| format!("{}:{}:{}:{}", p.host, p.port, p.is_socks5h, p.is_http))
             .unwrap_or_else(|| "direct".to_string());
@@ -342,7 +349,7 @@ impl TransportContext {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "any".to_string());
         let cache_key = format!(
-            "{link_key}|{ip_tag}|{px_tag}|{profile}|{}",
+            "{link_key}|{ip_tag}|{px_tag}|{profile}|{}|s{effective_shard}",
             is_flag_enabled(FLAG_WREQ_EMULATION)
         );
 
@@ -356,7 +363,7 @@ impl TransportContext {
             return Ok(cached);
         }
 
-        let built = build_wreq_link_client(local_ip, proxy, profile)?;
+        let built = build_wreq_link_client(local_ip, proxy, profile, effective_shard > 0)?;
         self.wreq_pool
             .write()
             .unwrap_or_else(|p| p.into_inner())
@@ -648,17 +655,17 @@ async fn connect_socket_bound(addr: SocketAddr, net_handle: u64) -> std::io::Res
     Ok(tokio_stream)
 }
 
-/// Build a persistent pooled, link-isolated `wreq::Client` with keep-alive + high idle pool.
+/// Build a persistent sharded, link-isolated `wreq::Client` with keep-alive + independent sockets.
 pub fn build_wreq_link_client(
     local_ip: Option<IpAddr>,
     proxy: Option<&ProxyOverride>,
     profile: &str,
+    _separate_shard: bool,
 ) -> Result<WreqClient, wreq::Error> {
     let mut builder = WreqClient::builder()
         .connect_timeout(Duration::from_secs(12))
         .tcp_nodelay(true)
-        .tcp_keepalive(Duration::from_secs(30))
-        .pool_max_idle_per_host(16)
+        .pool_max_idle_per_host(8)
         .pool_idle_timeout(Duration::from_secs(90));
 
     if is_flag_enabled(FLAG_WREQ_EMULATION) {
@@ -691,6 +698,30 @@ pub fn build_wreq_link_client(
     }
 
     builder.build()
+}
+
+/// Probes a bound Android network handle directly via `connect_bound_tcp` (`android_setsocknetwork` +
+/// pre-drop `android_getnetworkblockedreason(fd)`) so Diagnostics immediately capture whether OEM
+/// Firewall / Data Saver / Doze / LNP is blocking a secondary Cellular or Wi-Fi 2 link!
+pub async fn probe_bound_link_blocked_reason(
+    url_str: &str,
+    net_handle: u64,
+    proxy: Option<&ProxyOverride>,
+) {
+    if net_handle == 0 {
+        return;
+    }
+    if let Ok(parsed) = url::Url::parse(url_str) {
+        if let Some(host) = parsed.host_str() {
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            if let Err(err) = connect_bound_tcp(host, port, net_handle, proxy).await {
+                record_diag(
+                    "BOUND_PROBE",
+                    &format!("net_handle={net_handle} probe to {host}:{port} err={err}"),
+                );
+            }
+        }
+    }
 }
 
 pub async fn send_wreq_range_request(

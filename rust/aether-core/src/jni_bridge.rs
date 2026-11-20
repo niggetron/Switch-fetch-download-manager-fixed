@@ -37,10 +37,10 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
             "fallocate+pwrite+fdatasync"
         };
         format!(
-            "libaether_core.so v9.0 (Quad-Link Superbike · Pooled wreq+H3 · Async Disk Writer 12 MiB · Anti-Dip Bisection · memfd · {uring})"
+            "libaether_core.so v9.1 Hyperion (64-Stream Sharded Multi-Socket · Force-All-Links · Pooled wreq+H3 · Async Disk Writer 12 MiB · Anti-Dip Bisection · memfd · {uring})"
         )
     }))
-    .unwrap_or_else(|_| "libaether_core.so v9.0 (recovered panic)".to_string());
+    .unwrap_or_else(|_| "libaether_core.so v9.1 (recovered panic)".to_string());
 
     env.new_string(label)
         .expect("Failed to allocate JNI version string")
@@ -162,7 +162,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSetTherm
     let _ = catch_unwind(AssertUnwindSafe(|| {
         engine()
             .thermal_worker_cap
-            .store((max_workers as i64).clamp(1, 16), std::sync::atomic::Ordering::Release);
+            .store((max_workers as i64).clamp(1, 64), std::sync::atomic::Ordering::Release);
     }));
 }
 
@@ -221,7 +221,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeStartDow
             output_path: out_path,
             ledger_path: ldg_path,
             direct_fd: direct_fd as i32,
-            max_workers: (max_workers as usize).clamp(1, 16),
+            max_workers: (max_workers as usize).clamp(1, 64),
             max_cellular_bytes: cell_cap,
             browser_profile: profile,
             protocol_mode: proto,

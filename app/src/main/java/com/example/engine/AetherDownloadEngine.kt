@@ -108,7 +108,9 @@ class AetherDownloadEngine(
     suspend fun enqueue(request: NewDownloadRequest): String {
         val settings = settingsRepository.current()
         val id = UUID.randomUUID().toString()
+        val zipEntry = request.selectedZipEntry
         val guessedName = request.customFileName?.takeIf { it.isNotBlank() }
+            ?: zipEntry?.fileName?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
             ?: guessFileNameFromUrl(request.url)
         val isSaf = !request.safUriString.isNullOrBlank()
         val destUri = if (isSaf) {
@@ -138,30 +140,83 @@ class AetherDownloadEngine(
             is BackendSelectionResult.Unavailable -> request.backendOverride?.name ?: ""
         }
 
+        val now = System.currentTimeMillis()
         val entity = DownloadEntity(
             id = id,
             url = request.url.trim(),
             mirrorUrls = request.mirrorUrls.map { it.trim() }.filter { it.isNotBlank() }.joinToString("\n"),
             fileName = guessedName,
             mimeType = mime,
-            totalBytes = -1L,
+            totalBytes = zipEntry?.uncompressedSize ?: -1L,
             downloadedBytes = 0L,
             status = DownloadStatus.QUEUED.name,
             routeMode = request.routeMode.name,
-            workerCount = request.workers.coerceIn(1, 16),
+            workerCount = request.workers.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
             destinationUri = destUri,
             isSafDestination = isSaf,
-            supportsRange = false,
+            supportsRange = zipEntry != null,
             segmentSizeBytes = bdpSegment,
             expectedSha256 = request.expectedSha256?.trim()?.takeIf { it.isNotBlank() },
             engineBackendUsed = backendLabel,
             maxCellularBytes = request.maxCellularBytes,
             browserProfile = request.browserProfile.wireId,
             protocolMode = request.protocolMode.wireId,
+            startedAt = now,
+            streamType = if (zipEntry != null) "ZIP_ENTRY" else "DIRECT",
         )
         repository.upsert(entity)
-        launchDownload(id)
+        if (zipEntry != null) {
+            launchZipEntryExtraction(entity, zipEntry)
+        } else {
+            launchDownload(id)
+        }
         return id
+    }
+
+    private fun launchZipEntryExtraction(entity: DownloadEntity, entry: com.example.data.model.RemoteZipEntry) {
+        ensureForegroundServiceRunning()
+        val job = engineScope.launch {
+            val startMs = System.currentTimeMillis()
+            try {
+                repository.update(entity.copy(status = DownloadStatus.STREAMING.name, updatedAt = startMs))
+                val targetFile = File(entity.destinationUri)
+                val written = RemoteZipInspector.extractRemoteZipEntry(
+                    url = entity.url,
+                    entry = entry,
+                    targetFile = targetFile,
+                ) { done, total ->
+                    telemetryLedger.recordBytesWritten(done)
+                }
+                val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                val avg = (written * 1000L) / elapsed
+                repository.update(
+                    entity.copy(
+                        totalBytes = written,
+                        downloadedBytes = written,
+                        status = DownloadStatus.COMPLETED.name,
+                        avgSpeedBps = avg,
+                        peakSpeedBps = avg,
+                        activeDownloadMs = elapsed,
+                        maxConnectionsUsed = 1,
+                        segmentBitfield = SegmentState.VERIFIED.code.toString(),
+                        completedAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                )
+            } catch (ex: Exception) {
+                repository.update(
+                    entity.copy(
+                        status = DownloadStatus.FAILED.name,
+                        errorMessage = "Remote ZIP extraction failed: ${ex.message}",
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                )
+            } finally {
+                activeJobs.remove(entity.id)
+                if (activeJobs.isEmpty()) telemetryLedger.markFgsSessionStopped()
+            }
+        }
+        activeJobs[entity.id] = job
     }
 
     fun launchDownload(id: String) {
@@ -382,7 +437,7 @@ class AetherDownloadEngine(
             outputPath = entity.destinationUri,
             ledgerPath = ledgerFile(id).absolutePath,
             directFd = directFd,
-            maxWorkers = entity.workerCount.coerceIn(1, 16),
+            maxWorkers = entity.workerCount.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
             maxCellularBytes = cellCap,
             browserProfile = entity.browserProfile,
             protocolMode = entity.protocolMode,
@@ -462,6 +517,8 @@ class AetherDownloadEngine(
                                 ttfbMs = outcome.ttfbMs.takeIf { it > 0L } ?: current.ttfbMs,
                                 avgSpeedBps = avgBps,
                                 peakSpeedBps = maxOf(current.peakSpeedBps, avgBps),
+                                activeDownloadMs = current.activeDownloadMs + elapsed,
+                                maxConnectionsUsed = maxOf(current.maxConnectionsUsed, current.workerCount),
                                 status = if (hashOk) DownloadStatus.COMPLETED.name else DownloadStatus.FAILED.name,
                                 errorMessage = if (hashOk) null else "SHA-256 mismatch from Rust verifier",
                                 updatedAt = System.currentTimeMillis(),
@@ -535,6 +592,9 @@ class AetherDownloadEngine(
                         break
                     }
                     else -> {
+                        val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                        val liveAvg = (outcome.downloadedBytes * 1000L) / elapsed
+                        val snap = telemetryLedger.latestSnapshot()
                         repository.update(
                             current.copy(
                                 fileName = outcome.fileName.ifBlank { current.fileName },
@@ -543,6 +603,10 @@ class AetherDownloadEngine(
                                 wifiBytes = outcome.wifiBytes,
                                 cellBytes = outcome.cellBytes,
                                 ttfbMs = outcome.ttfbMs.takeIf { it > 0L } ?: current.ttfbMs,
+                                avgSpeedBps = liveAvg,
+                                peakSpeedBps = maxOf(current.peakSpeedBps, snap.instantBps),
+                                activeDownloadMs = elapsed,
+                                maxConnectionsUsed = maxOf(current.maxConnectionsUsed, snap.activeWorkers),
                                 status = DownloadStatus.STREAMING.name,
                                 updatedAt = System.currentTimeMillis(),
                             )

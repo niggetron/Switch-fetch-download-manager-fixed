@@ -3,9 +3,9 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -73,15 +73,19 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.SegmentState
 import com.example.data.model.SpeedometerStyle
 import com.example.ui.components.RadialSpeedometerGauge
-import com.example.ui.components.SegmentBitfieldMatrix
+import com.example.ui.components.Rayburst64LaneBar
+import com.example.ui.components.RayburstLiveSegmentPills
+import com.example.ui.components.RayburstPieceMatrix
 import com.example.ui.components.StatusPill
 import com.example.ui.motion.AetherSharedKey
 import com.example.ui.motion.SharedPart
 import com.example.ui.motion.aetherSharedBounds
-import com.example.ui.motion.aetherSpatialBoundsTransform
 import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
 import com.example.ui.theme.MonoMetricStyle
+import com.example.ui.theme.aetherNeonBorder
+import com.example.ui.theme.contrastOnColor
 import com.example.util.Formatters
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -115,13 +119,14 @@ data class AnimationSimulationState(
     val customWifi2Mbps: Float = 240f,
     val customUsbMbps: Float = 180f,
     val focusedBurstLinkId: String? = null,
+    val simulatedTransferHlsMode: Boolean = false,
 )
 
 /**
- * Interactive Speed & Motion Simulation Lab:
+ * Interactive Speed & Motion Simulation Lab (v9.1):
  * - Morphs directly out of the TopAppBar "Sim Lab" pill via Compose Shared Element Transition.
- * - Lets users simulate live quad-link speeds, test Anti-Dip rescues, scrub motion speed (0.25x-1.5x),
- *   auto-cycle all 3 motorsport speedometer layouts, and preview every shared-element morph in the app!
+ * - Simulates live quad-link speeds AND the real-style Rayburst 64-lane / HLS transfer card on Transfers tab.
+ * - Lets users scrub motion speed (0.25x-1.5x), auto-cycle all 6 speedometer styles, and test Rayburst animations.
  */
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -140,9 +145,11 @@ fun AnimationSimulatorSheet(
     onTriggerNewDownloadMorph: () -> Unit,
     onTriggerWifi2Morph: () -> Unit,
     onTriggerFocusedGaugeMorph: () -> Unit,
+    onToggleSimTransferHlsMode: (Boolean) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     BackHandler(onBack = onDismiss)
 
     var showcaseStage by remember { mutableIntStateOf(0) } // 0 = Compact Card, 1 = Expanded Pipeline, 2 = Integrity Audit
@@ -209,7 +216,13 @@ fun AnimationSimulatorSheet(
                 )
                 .clip(RoundedCornerShape(22.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .border(1.5.dp, ext.cyan.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
+                .aetherNeonBorder(
+                    neon = neon,
+                    accent = ext.cyan,
+                    cornerRadius = 22.dp,
+                    borderWidth = 1.5.dp,
+                    fallbackBorderColor = ext.cyan.copy(alpha = 0.55f),
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -287,7 +300,10 @@ fun AnimationSimulatorSheet(
                     if (simState.isRunning) {
                         Button(
                             onClick = onStopSimulation,
-                            colors = ButtonDefaults.buttonColors(containerColor = ext.rose),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = ext.rose,
+                                contentColor = contrastOnColor(ext.rose),
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .testTag("sim_stop_button"),
@@ -391,7 +407,7 @@ fun AnimationSimulatorSheet(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Auto-Morph Speedometer Layouts", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        text = "Currently: ${currentStyle.label} (cycles all 3 styles live)",
+                        text = "Currently: ${currentStyle.label} (cycles all 6 styles live)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -400,6 +416,35 @@ fun AnimationSimulatorSheet(
                     checked = simState.autoCycleSpeedometerLayouts,
                     onCheckedChange = onToggleAutoCycleLayouts,
                     modifier = Modifier.testTag("sim_auto_morph_layouts_switch"),
+                )
+            }
+
+            // Simulated Transfer Card Mode Toggle (Direct 64-Lane vs HLS Live Pills)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Simulated Card: HLS Live Pills Mode", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = if (simState.simulatedTransferHlsMode) {
+                            "Transfers tab simulates live .m4s/.ts segment pills + 64 lanes"
+                        } else {
+                            "Transfers tab simulates 64-lane direct file download + piece matrix"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = simState.simulatedTransferHlsMode,
+                    onCheckedChange = onToggleSimTransferHlsMode,
+                    modifier = Modifier.testTag("sim_transfer_hls_mode_switch"),
                 )
             }
 
@@ -431,201 +476,145 @@ fun AnimationSimulatorSheet(
                     )
                 }
 
-                // Local SharedTransitionLayout demonstrating official sharedBounds + sharedElement + skipToLookaheadSize
-                SharedTransitionLayout(
+                // Smooth non-nested AnimatedContent showcase (avoids conflicting nested SharedTransitionLayout)
+                val liveSimPills = remember(waveTick) {
+                    listOf(
+                        "seg_%04d.m4s".format(101 + waveTick),
+                        "seg_%04d.m4s".format(102 + waveTick),
+                        "seg_%04d.m4s".format(103 + waveTick),
+                        "seg_%04d.m4s".format(104 + waveTick),
+                    )
+                }
+                AnimatedContent(
+                    targetState = showcaseStage,
+                    transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(160)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { showcaseStage = (showcaseStage + 1) % 3 }
                         .testTag("sim_morph_sandbox_card"),
-                ) {
-                    val bTransform = aetherSpatialBoundsTransform(simState.motionSpeedMultiplier)
-                    AnimatedContent(
-                        targetState = showcaseStage,
-                        transitionSpec = { fadeIn() togetherWith fadeOut() },
-                        label = "sim_shared_morph_demo",
-                    ) { stage ->
-                        when (stage) {
-                            0 -> {
-                                Row(
+                    label = "sim_rayburst_morph_demo",
+                ) { stage ->
+                    when (stage) {
+                        0 -> {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .border(1.dp, ext.cyan.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .sharedBounds(
-                                            sharedContentState = rememberSharedContentState("demo_card"),
-                                            animatedVisibilityScope = this@AnimatedContent,
-                                            boundsTransform = bTransform,
-                                        )
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surface)
-                                        .border(1.dp, ext.cyan.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
-                                        .padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(ext.cyan.copy(alpha = 0.16f)),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .sharedElement(
-                                                state = rememberSharedContentState("demo_icon"),
-                                                animatedVisibilityScope = this@AnimatedContent,
-                                                boundsTransform = bTransform,
-                                            )
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(ext.cyan.copy(alpha = 0.16f)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(Icons.Outlined.FolderZip, contentDescription = null, tint = ext.cyan)
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "linux-6.12-arm64.tar.zst",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            modifier = Modifier
-                                                .sharedElement(
-                                                    state = rememberSharedContentState("demo_title"),
-                                                    animatedVisibilityScope = this@AnimatedContent,
-                                                    boundsTransform = bTransform,
-                                                )
-                                                .skipToLookaheadSize(),
-                                        )
-                                        Text("Tap card to morph → Expanded Pipeline", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                    StatusPill(
-                                        label = "COMPACT",
-                                        color = ext.cyan,
-                                        modifier = Modifier.sharedElement(
-                                            state = rememberSharedContentState("demo_badge"),
-                                            animatedVisibilityScope = this@AnimatedContent,
-                                            boundsTransform = bTransform,
-                                        ),
-                                    )
+                                    Icon(Icons.Outlined.FolderZip, contentDescription = null, tint = ext.cyan)
                                 }
-                            }
-                            1 -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .sharedBounds(
-                                            sharedContentState = rememberSharedContentState("demo_card"),
-                                            animatedVisibilityScope = this@AnimatedContent,
-                                            boundsTransform = bTransform,
-                                        )
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .background(MaterialTheme.colorScheme.surface)
-                                        .border(1.5.dp, ext.violet.copy(alpha = 0.60f), RoundedCornerShape(16.dp))
-                                        .padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .sharedElement(
-                                                        state = rememberSharedContentState("demo_icon"),
-                                                        animatedVisibilityScope = this@AnimatedContent,
-                                                        boundsTransform = bTransform,
-                                                    )
-                                                    .size(46.dp)
-                                                    .clip(RoundedCornerShape(12.dp))
-                                                    .background(ext.violet.copy(alpha = 0.18f)),
-                                                contentAlignment = Alignment.Center,
-                                            ) {
-                                                Icon(Icons.Outlined.FolderZip, contentDescription = null, tint = ext.violet)
-                                            }
-                                            Text(
-                                                text = "linux-6.12-arm64.tar.zst",
-                                                style = MaterialTheme.typography.titleMedium,
-                                                modifier = Modifier
-                                                    .sharedElement(
-                                                        state = rememberSharedContentState("demo_title"),
-                                                        animatedVisibilityScope = this@AnimatedContent,
-                                                        boundsTransform = bTransform,
-                                                    )
-                                                    .skipToLookaheadSize(),
-                                            )
-                                        }
-                                        StatusPill(
-                                            label = "16W QUAD",
-                                            color = ext.violet,
-                                            modifier = Modifier.sharedElement(
-                                                state = rememberSharedContentState("demo_badge"),
-                                                animatedVisibilityScope = this@AnimatedContent,
-                                                boundsTransform = bTransform,
-                                            ),
-                                        )
-                                    }
-                                    LinearProgressIndicator(
-                                        progress = { animatedProgress },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(7.dp),
-                                        color = ext.cyan,
-                                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        strokeCap = StrokeCap.Round,
-                                    )
-                                    SegmentBitfieldMatrix(
-                                        segments = simulatedSegments,
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                    Text("Tap again to morph → SHA-256 Integrity Audit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            else -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .sharedBounds(
-                                            sharedContentState = rememberSharedContentState("demo_card"),
-                                            animatedVisibilityScope = this@AnimatedContent,
-                                            boundsTransform = bTransform,
-                                        )
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
-                                        .border(1.5.dp, ext.emerald.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
-                                        .padding(14.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .sharedElement(
-                                                state = rememberSharedContentState("demo_icon"),
-                                                animatedVisibilityScope = this@AnimatedContent,
-                                                boundsTransform = bTransform,
-                                            )
-                                            .size(54.dp)
-                                            .clip(RoundedCornerShape(16.dp))
-                                            .background(ext.emerald.copy(alpha = 0.20f)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = ext.emerald, modifier = Modifier.size(28.dp))
-                                    }
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = "linux-6.12-arm64.tar.zst",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier
-                                            .sharedElement(
-                                                state = rememberSharedContentState("demo_title"),
-                                                animatedVisibilityScope = this@AnimatedContent,
-                                                boundsTransform = bTransform,
-                                            )
-                                            .skipToLookaheadSize(),
+                                        style = MaterialTheme.typography.titleSmall,
                                     )
-                                    StatusPill(
-                                        label = "SHA-256 VERIFIED",
-                                        color = ext.emerald,
-                                        modifier = Modifier.sharedElement(
-                                            state = rememberSharedContentState("demo_badge"),
-                                            animatedVisibilityScope = this@AnimatedContent,
-                                            boundsTransform = bTransform,
-                                        ),
+                                    Text(
+                                        text = "Tap card to preview → Rayburst 64-Lane & Piece Matrix",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
-                                    Text("Zero-merge F2FS commit · 1.12 Gbps peak · Tap to loop", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                                StatusPill(label = "COMPACT", color = ext.cyan)
+                            }
+                        }
+                        1 -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .border(1.5.dp, ext.violet.copy(alpha = 0.60f), RoundedCornerShape(16.dp))
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(44.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(ext.violet.copy(alpha = 0.18f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Icon(Icons.Outlined.FolderZip, contentDescription = null, tint = ext.violet)
+                                        }
+                                        Text(
+                                            text = "linux-6.12-arm64.tar.zst",
+                                            style = MaterialTheme.typography.titleMedium,
+                                        )
+                                    }
+                                    StatusPill(label = "64W QUAD", color = ext.violet)
+                                }
+                                Rayburst64LaneBar(
+                                    progress = animatedProgress,
+                                    activeConnections = 64,
+                                    maxConnections = 64,
+                                    isCompleted = false,
+                                    isRunning = true,
+                                    isFailed = false,
+                                    segments = simulatedSegments,
+                                )
+                                RayburstPieceMatrix(
+                                    segments = simulatedSegments,
+                                    isRunning = true,
+                                )
+                                if (simState.simulatedTransferHlsMode) {
+                                    RayburstLiveSegmentPills(segmentLabels = liveSimPills)
+                                }
+                                Text(
+                                    text = "Tap again to preview → Verified 1DM+ Integrity Card",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        else -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
+                                    .border(1.5.dp, ext.emerald.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+                                    .padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(ext.emerald.copy(alpha = 0.20f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(Icons.Filled.VerifiedUser, contentDescription = null, tint = ext.emerald, modifier = Modifier.size(28.dp))
+                                }
+                                Text(
+                                    text = "linux-6.12-arm64.tar.zst",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                StatusPill(label = "MD5 & SHA-256 VERIFIED", color = ext.emerald)
+                                Text(
+                                    text = "Zero-merge F2FS commit · 1.12 Gbps peak · Tap to loop",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
                         }
                     }

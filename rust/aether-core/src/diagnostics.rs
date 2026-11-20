@@ -1,4 +1,4 @@
-//! Rotating redacted local diagnostics log + runtime feature-flag kill switches (v9.0).
+//! Rotating redacted local diagnostics log + runtime feature-flag kill switches (v9.1).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -14,6 +14,7 @@ pub const FLAG_TAIL_HEDGE: u32 = 1 << 5;
 pub const FLAG_AUTO_SPEED_UP: u32 = 1 << 6;
 pub const FLAG_TURBO_MULTI_SOCKET: u32 = 1 << 7;
 pub const FLAG_ANTI_DIP_WATCHDOG: u32 = 1 << 8;
+pub const FLAG_FORCE_ALL_LINKS: u32 = 1 << 9;
 
 const DEFAULT_FLAGS: u32 = FLAG_MULTI_LINK
     | FLAG_HTTP3_QUIC
@@ -21,7 +22,8 @@ const DEFAULT_FLAGS: u32 = FLAG_MULTI_LINK
     | FLAG_TAIL_HEDGE
     | FLAG_AUTO_SPEED_UP
     | FLAG_TURBO_MULTI_SOCKET
-    | FLAG_ANTI_DIP_WATCHDOG;
+    | FLAG_ANTI_DIP_WATCHDOG
+    | FLAG_FORCE_ALL_LINKS;
 
 const MAX_LOG_ENTRIES: usize = 256;
 
@@ -98,7 +100,7 @@ pub fn export_diagnostics_text() -> String {
     let guard = log_ring().lock().unwrap_or_else(|p| p.into_inner());
     if guard.is_empty() {
         return format!(
-            "AetherIO Rust v9.0 · feature_mask=0x{:03X} · ring empty",
+            "AetherIO Rust v9.1 · feature_mask=0x{:03X} · ring empty",
             feature_flags()
         );
     }

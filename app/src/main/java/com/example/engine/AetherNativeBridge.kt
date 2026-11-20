@@ -24,11 +24,19 @@ data class NativeTaskOutcome(
  * Tier-2 JNI Control Bridge to `libaether_core.so` (Rust `aether-core` v9.0).
  */
 object AetherNativeBridge {
+    @Volatile
+    var loadError: String? = null
+        private set
+
     val isNativeLoaded: Boolean by lazy {
-        runCatching {
+        try {
             System.loadLibrary("aether_core")
+            loadError = null
             true
-        }.getOrDefault(false)
+        } catch (t: Throwable) {
+            loadError = t.message ?: t.javaClass.simpleName
+            false
+        }
     }
 
     val engineBackendLabel: String
@@ -76,7 +84,7 @@ object AetherNativeBridge {
 
     fun setThermalWorkerCapSafe(maxWorkers: Int) {
         if (!isNativeLoaded) return
-        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 16)) }
+        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 64)) }
     }
 
     fun startDownloadSafe(
@@ -98,7 +106,7 @@ object AetherNativeBridge {
                 outputPath = outputPath,
                 ledgerPath = ledgerPath,
                 directFd = directFd,
-                maxWorkers = maxWorkers.coerceIn(1, 16),
+                maxWorkers = maxWorkers.coerceIn(1, 64),
                 maxCellularBytes = maxCellularBytes,
                 browserProfile = browserProfile,
                 protocolMode = protocolMode,

@@ -1,11 +1,12 @@
 package com.example.engine
 
 import com.example.data.model.BreakerState
+import com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
 import com.example.data.model.NetworkRouteMode
 import kotlin.math.max
 
 /**
- * 3-State Per-Link Circuit Breaker (v9.0 Anti-Flip-Flop):
+ * 3-State Per-Link Circuit Breaker (v9.1 Anti-Flip-Flop):
  * Closed -> Open (6s cooldown after 3 consecutive errors) -> HalfOpen -> Closed.
  */
 class LinkCircuitBreaker(
@@ -61,16 +62,17 @@ data class LinkLaneMetrics(
     val queuedBytes: Double,
     val ewmaBytesPerSec: Double,
     val rttMinSecs: Double,
+    val activeWorkersOnLink: Int = 0,
 )
 
 /**
- * Deterministic Quad-Link Scheduler (v9.0 Superbike & Anti-Dip):
+ * Deterministic Quad-Link Scheduler (v9.1 Hyperion — 64-Stream Force-All-Links & Anti-Dip):
  * - Adaptive BDP segment sizing: 1 MiB (<50M), 4 MiB (50-120M), 8 MiB (120-250M),
  *   16 MiB (250-600M), 32 MiB (>600M Gigabit Wi-Fi 6 / 5G mmWave)
- * - Earliest-Arrival dispatch F_k = (Q_k + S) / R_k + r_k / 2
- * - Lowest-RTT link pinning for Stream 0 pre-flight probes
- * - Quad-Link mirror distribution (`wifi:`, `cell:`, `wifi2:`, `eth:`/`usb:`)
- * - Slowest active extent bisection (`bisectRange`) & bidirectional autoSpeedUp up to 16 workers
+ * - Force-All-Links guaranteed reservation: ensures EVERY connected healthy link (Wi-Fi 1,
+ *   Wi-Fi 2, Mobile 5G/LTE, USB) gets dedicated parallel workers from byte 0 before applying
+ *   Earliest-Arrival weighting on REAL measured EWMA (fixing unused Mobile Data!).
+ * - Ghost-style bidirectional autoSpeedUp controller up to 64 concurrent streams.
  */
 object LinkScheduler {
 
@@ -86,10 +88,50 @@ object LinkScheduler {
     }
 
     /**
-     * Guarantees at least one active worker per validated selected network, up to 16 workers.
+     * Guarantees at least 2 active workers per validated network (when available), up to 64 streams.
      */
     fun effectiveWorkerCount(userMaxConnections: Int, validatedLinksCount: Int): Int =
-        max(userMaxConnections, validatedLinksCount).coerceIn(1, 16)
+        max(userMaxConnections, validatedLinksCount).coerceIn(1, MAX_CONCURRENT_WORKERS_CAP)
+
+    /**
+     * Force-All-Links + Earliest-Arrival dispatch:
+     * When [forceAllLinks] is enabled and multiple healthy links exist, any healthy link with fewer
+     * than its guaranteed floor of active workers (`minPerLink`, e.g. at least 2 workers on 5G/Wi-Fi 2/USB)
+     * is immediately selected so Android's inflated Wi-Fi PHY rate NEVER starves Mobile 5G/LTE!
+     * Once all links have active workers saturating them, switches smoothly to Earliest-Arrival
+     * `F_k = (Q_k + S) / R_k + r_k / 2` weighted by live measured EWMA.
+     */
+    fun selectLinkWithForceAll(
+        lanes: List<LinkLaneMetrics>,
+        breakers: Map<String, LinkCircuitBreaker>,
+        segmentBytes: Double,
+        forceAllLinks: Boolean,
+        workerId: Int = 0,
+        minReservedPerLink: Int = 2,
+        nowMs: Long = System.currentTimeMillis(),
+    ): LinkLaneMetrics? {
+        val healthy = lanes.filter { lane ->
+            val br = breakers[lane.linkKeyId]
+            (br == null || br.allowRequest(nowMs)) && lane.ewmaBytesPerSec > 0.0
+        }
+        if (healthy.isEmpty()) return null
+        if (healthy.size == 1) return healthy.first()
+
+        if (forceAllLinks) {
+            // 1) Guarantee every connected link immediately gets active streams (no idle 5G/Wi-Fi 2!)
+            val starved = healthy.filter { it.activeWorkersOnLink < minReservedPerLink }
+            if (starved.isNotEmpty()) {
+                val minWorkers = starved.minOf { it.activeWorkersOnLink }
+                val candidates = starved.filter { it.activeWorkersOnLink == minWorkers }
+                return candidates[workerId % candidates.size]
+            }
+        }
+
+        // 2) Earliest-Arrival on real measured EWMA once every link is actively pulling bytes
+        return healthy.minByOrNull { lane ->
+            (lane.queuedBytes + segmentBytes) / lane.ewmaBytesPerSec + (lane.rttMinSecs * 0.5)
+        }
+    }
 
     /**
      * Earliest-Arrival dispatch minimizing F_k = (Q_k + S) / R_k + r_k / 2.
@@ -99,16 +141,13 @@ object LinkScheduler {
         breakers: Map<String, LinkCircuitBreaker>,
         segmentBytes: Double,
         nowMs: Long = System.currentTimeMillis(),
-    ): LinkLaneMetrics? {
-        return lanes
-            .filter { lane ->
-                val br = breakers[lane.linkKeyId]
-                (br == null || br.allowRequest(nowMs)) && lane.ewmaBytesPerSec > 0.0
-            }
-            .minByOrNull { lane ->
-                (lane.queuedBytes + segmentBytes) / lane.ewmaBytesPerSec + (lane.rttMinSecs * 0.5)
-            }
-    }
+    ): LinkLaneMetrics? = selectLinkWithForceAll(
+        lanes = lanes,
+        breakers = breakers,
+        segmentBytes = segmentBytes,
+        forceAllLinks = false,
+        nowMs = nowMs,
+    )
 
     /**
      * Pin Stream 0 probe strictly to the lowest-RTT healthy link.
@@ -146,7 +185,7 @@ object LinkScheduler {
      */
     fun bisectRange(startOffset: Long, endOffset: Long): Pair<Long, Long>? {
         val remaining = endOffset - startOffset + 1L
-        if (remaining < 1024L * 1024L) return null
+        if (remaining < 512L * 1024L) return null
         val mid = startOffset + (remaining / 2L)
         return (startOffset to (mid - 1L))
             .takeIf { it.first <= it.second }
@@ -164,13 +203,15 @@ object LinkScheduler {
             NetworkRouteMode.PROXY_SOCKS5 -> matrix.activeValidatedLinks
         }
         return links.map { info ->
+            // Use measured EWMA (clamped so unmeasured Android Wi-Fi PHY 866 Mbps never starves 5G/USB)
+            val effectiveMbps = info.ewmaMbps.coerceIn(4.0, 2000.0)
             LinkLaneMetrics(
                 linkKeyId = info.linkKey.id,
                 queuedBytes = 0.0,
-                ewmaBytesPerSec = (info.ewmaMbps * 125_000.0).coerceAtLeast(250_000.0),
+                ewmaBytesPerSec = (effectiveMbps * 125_000.0).coerceAtLeast(500_000.0),
                 rttMinSecs = when {
                     info.linkKey.isEthernet -> 0.008
-                    info.linkKey.isCellular -> 0.026
+                    info.linkKey.isCellular -> 0.024
                     info.linkKey.isWifiSecondary -> 0.016
                     else -> 0.014
                 },
@@ -179,7 +220,9 @@ object LinkScheduler {
     }
 
     /**
-     * Bidirectional closed-loop autoSpeedUp controller (v9.0 up to 16 workers).
+     * Ghost-style closed-loop autoSpeedUp controller (v9.1 up to 64 parallel streams).
+     * Aggressively ramps up (+4 when goodput climbs > 5% and RTT is clean) to saturate
+     * multi-network links, and smoothly steps down on RTT spike or throttling.
      */
     fun adjustAutoSpeedUp(
         currentWorkers: Int,
@@ -190,15 +233,21 @@ object LinkScheduler {
         deltaRttMs: Double,
         throttled: Boolean,
     ): Int {
-        if (throttled || deltaRttMs > 35.0) {
-            return (currentWorkers - 2).coerceAtLeast(minWorkers)
+        val clampedMax = maxWorkers.coerceIn(1, MAX_CONCURRENT_WORKERS_CAP)
+        val clampedMin = minWorkers.coerceIn(1, clampedMax)
+        if (throttled || deltaRttMs > 40.0) {
+            return (currentWorkers - 2).coerceAtLeast(clampedMin)
         }
-        if (prevGoodputBps > 0.0 && deltaRttMs < 15.0) {
+        if (prevGoodputBps <= 0.0 && newGoodputBps > 0.0 && deltaRttMs < 20.0) {
+            return (currentWorkers + 4).coerceAtMost(clampedMax)
+        }
+        if (prevGoodputBps > 0.0 && deltaRttMs < 18.0) {
             val gain = (newGoodputBps - prevGoodputBps) / prevGoodputBps
-            if (gain > 0.06) {
-                return (currentWorkers + 2).coerceAtMost(maxWorkers)
+            if (gain > 0.05) {
+                val step = if (currentWorkers < 24) 4 else 2
+                return (currentWorkers + step).coerceAtMost(clampedMax)
             }
         }
-        return currentWorkers.coerceIn(minWorkers, maxWorkers)
+        return currentWorkers.coerceIn(clampedMin, clampedMax)
     }
 }

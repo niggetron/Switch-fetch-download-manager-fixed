@@ -63,19 +63,14 @@ import androidx.compose.ui.unit.dp
 import com.example.data.local.DownloadEntity
 import com.example.data.model.FileCategory
 import com.example.data.repository.StorageStats
-import com.example.ui.components.SegmentBitfieldMatrix
+import com.example.ui.components.DownloadPropertiesSheet
 import com.example.ui.components.StatusPill
-import com.example.ui.motion.AetherSharedKey
-import com.example.ui.motion.LocalAnimatedVisibilityScope
-import com.example.ui.motion.SharedPart
-import com.example.ui.motion.aetherSharedBounds
-import com.example.ui.motion.aetherSharedElement
-import com.example.ui.motion.aetherSkipToLookaheadSize
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
 import com.example.ui.theme.MonoMetricStyle
+import com.example.ui.theme.aetherNeonBorder
 import com.example.util.Formatters
 
-@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun FilesScreen(
     files: List<DownloadEntity>,
@@ -84,15 +79,20 @@ fun FilesScreen(
     casTotalBytes: Long,
     selectedCategory: FileCategory,
     searchQuery: String,
+    useMBpsSpeedUnit: Boolean = false,
     onSelectCategory: (FileCategory) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onOpenFile: (DownloadEntity) -> Unit,
     onShareFile: (DownloadEntity) -> Unit,
     onDeleteFile: (DownloadEntity) -> Unit,
     onPruneCas: () -> Unit,
+    onRefreshUrl: (String, String) -> Unit = { _, _ -> },
+    onSaveMd5: (String, String) -> Unit = { _, _ -> },
+    onSaveSha256: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     var inspectTarget by remember { mutableStateOf<DownloadEntity?>(null) }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -107,7 +107,12 @@ fun FilesScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(18.dp))
                         .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, ext.cardBorder, RoundedCornerShape(18.dp))
+                        .aetherNeonBorder(
+                            neon = neon,
+                            accent = ext.cyan,
+                            cornerRadius = 18.dp,
+                            fallbackBorderColor = ext.cardBorder,
+                        )
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
@@ -239,21 +244,23 @@ fun FilesScreen(
             item { Spacer(modifier = Modifier.height(76.dp)) }
         }
 
-        // In-tree Container Transform Overlay for Zero-Merge Integrity Audit
+        // 1DM+-Style Super-Properties Sheet with MediaMetadataRetriever & On-Demand MD5/SHA-256
         AnimatedVisibility(
             visible = inspectTarget != null,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
-            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
-                inspectTarget?.let { item ->
-                    FileIntegrityAuditOverlay(
-                        entity = item,
-                        onOpen = { onOpenFile(item) },
-                        onShare = { onShareFile(item) },
-                        onDismiss = { inspectTarget = null },
-                    )
-                }
+            inspectTarget?.let { item ->
+                DownloadPropertiesSheet(
+                    entity = item,
+                    useMBpsUnit = useMBpsSpeedUnit,
+                    onDismiss = { inspectTarget = null },
+                    onOpenFile = onOpenFile,
+                    onShareFile = onShareFile,
+                    onRefreshUrl = onRefreshUrl,
+                    onSaveMd5 = onSaveMd5,
+                    onSaveSha256 = onSaveSha256,
+                )
             }
         }
     }
@@ -287,7 +294,6 @@ private fun VaultStatBox(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun DownloadedFileCard(
     entity: DownloadEntity,
@@ -298,14 +304,16 @@ private fun DownloadedFileCard(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .aetherSharedBounds(
-                key = AetherSharedKey(entity.id, SharedPart.FILE_CARD),
-                clipShape = RoundedCornerShape(18.dp),
+            .aetherNeonBorder(
+                neon = neon,
+                accent = ext.emerald,
+                cornerRadius = 18.dp,
+                fallbackBorderColor = ext.cardBorder,
             )
-            .border(1.dp, ext.cardBorder, MaterialTheme.shapes.large)
             .clickable(onClick = onInspect)
             .testTag("file_card_${entity.id}"),
         shape = MaterialTheme.shapes.large,
@@ -318,10 +326,6 @@ private fun DownloadedFileCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .aetherSharedElement(
-                            key = AetherSharedKey(entity.id, SharedPart.FILE_ICON),
-                            clipShape = RoundedCornerShape(10.dp),
-                        )
                         .size(42.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(ext.emerald.copy(alpha = 0.14f)),
@@ -340,9 +344,6 @@ private fun DownloadedFileCard(
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.FILE_TITLE))
-                            .aetherSkipToLookaheadSize(),
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     Row(
@@ -406,161 +407,6 @@ private fun DownloadedFileCard(
                         contentDescription = "Delete file",
                         tint = ext.rose,
                     )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalSharedTransitionApi::class)
-@Composable
-private fun FileIntegrityAuditOverlay(
-    entity: DownloadEntity,
-    onOpen: () -> Unit,
-    onShare: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val ext = LocalAetherColors.current
-    BackHandler(onBack = onDismiss)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.64f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
-            )
-            .padding(16.dp)
-            .testTag("file_integrity_overlay"),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 560.dp)
-                .aetherSharedBounds(
-                    key = AetherSharedKey(entity.id, SharedPart.FILE_CARD),
-                    clipShape = RoundedCornerShape(22.dp),
-                    zIndexInOverlay = 3f,
-                )
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(1.5.dp, ext.emerald.copy(alpha = 0.60f), RoundedCornerShape(22.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                )
-                .verticalScroll(rememberScrollState())
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .aetherSharedElement(
-                                key = AetherSharedKey(entity.id, SharedPart.FILE_ICON),
-                                clipShape = RoundedCornerShape(14.dp),
-                            )
-                            .size(50.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(ext.emerald.copy(alpha = 0.16f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = fileIconForName(entity.fileName, entity.mimeType),
-                            contentDescription = null,
-                            tint = ext.emerald,
-                            modifier = Modifier.size(26.dp),
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "ZERO-MERGE INTEGRITY AUDIT",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ext.emerald,
-                        )
-                        Text(
-                            text = entity.fileName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.FILE_TITLE))
-                                .aetherSkipToLookaheadSize(),
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("close_file_integrity_button"),
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close integrity audit")
-                }
-            }
-
-            Text(
-                text = "Size: ${Formatters.formatBytes(entity.totalBytes)} (${entity.totalBytes} B)",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "Mean Throughput: ${Formatters.formatSpeedMbps(entity.avgSpeedBps)} · Peak: ${Formatters.formatSpeedMbps(entity.peakSpeedBps)}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                text = "TTFB: ${entity.ttfbMs} ms · Write Batches: ${entity.syscallWriteBatches}",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            if (!entity.actualSha256.isNullOrBlank()) {
-                Text(
-                    text = "SHA-256 Digest:\n${entity.actualSha256}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ext.emerald,
-                )
-            }
-            Text(
-                text = "2 MB Extent Ledger:",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SegmentBitfieldMatrix(
-                segments = entity.parsedSegments(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aetherSharedBounds(
-                        key = AetherSharedKey(entity.id, SharedPart.FILE_LEDGER),
-                        clipShape = RoundedCornerShape(8.dp),
-                    ),
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(onClick = onOpen, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Open")
-                }
-                OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share")
-                }
-                OutlinedButton(onClick = onDismiss) {
-                    Text("Close")
                 }
             }
         }

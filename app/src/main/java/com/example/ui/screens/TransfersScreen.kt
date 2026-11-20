@@ -57,11 +57,11 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -69,8 +69,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -79,37 +81,44 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.local.DownloadEntity
 import com.example.data.model.BreakerState
 import com.example.data.model.DownloadStatus
+import com.example.data.model.NetworkRouteMode
+import com.example.data.model.SegmentState
 import com.example.data.model.SpeedometerStyle
 import com.example.data.model.TransferFilter
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NetworkMatrixState
 import com.example.engine.ResolvedEngineBackend
 import com.example.engine.TelemetrySnapshot
+import com.example.ui.components.DownloadPropertiesSheet
 import com.example.ui.components.KetchConnectionsInspectorCard
 import com.example.ui.components.PerNetworkSpeedometerCluster
-import com.example.ui.components.SegmentBitfieldMatrix
+import com.example.ui.components.Rayburst64LaneBar
+import com.example.ui.components.RayburstLiveSegmentPills
+import com.example.ui.components.RayburstPieceMatrix
+import com.example.ui.components.SkeletonBox
 import com.example.ui.components.StatusPill
 import com.example.ui.components.ThroughputSparkline
 import com.example.ui.motion.AetherSharedKey
-import com.example.ui.motion.LocalAnimatedVisibilityScope
 import com.example.ui.motion.LocalMotionSpeedMultiplier
 import com.example.ui.motion.SharedPart
 import com.example.ui.motion.aetherSharedBounds
-import com.example.ui.motion.aetherSharedElement
-import com.example.ui.motion.aetherSkipToLookaheadSize
 import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
 import com.example.ui.theme.MonoHeroMetricStyle
 import com.example.ui.theme.MonoMetricStyle
+import com.example.ui.theme.aetherNeonBorder
+import com.example.ui.theme.contrastOnColor
 import com.example.util.Formatters
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -138,9 +147,13 @@ fun TransfersScreen(
     onOpenDualWifi: () -> Unit = {},
     onSwitchToKotlinAndResume: (String) -> Unit = onResume,
     isSimulating: Boolean = false,
+    isSimulatingHlsMode: Boolean = false,
+    onToggleSimHlsMode: (Boolean) -> Unit = {},
     onOpenSimulator: () -> Unit = {},
     onStopSimulation: () -> Unit = {},
     onSelectGauge: (String) -> Unit = {},
+    onSaveMd5: (String, String) -> Unit = { _, _ -> },
+    onSaveSha256: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
@@ -148,8 +161,77 @@ fun TransfersScreen(
     var refreshUrlTarget by remember { mutableStateOf<DownloadEntity?>(null) }
     var safRegrantTargetId by remember { mutableStateOf<String?>(null) }
     var inspectedTransferId by remember { mutableStateOf<String?>(null) }
+    var inspectSimulatedCard by remember { mutableStateOf(false) }
     val inspectedTransfer = remember(downloads, inspectedTransferId) {
         downloads.firstOrNull { it.id == inspectedTransferId }
+    }
+
+    // Live animated progress & elapsed timer for Simulated Transfer Card
+    var simTick by remember { mutableIntStateOf(0) }
+    var simStartedMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(isSimulating) {
+        if (!isSimulating) {
+            inspectSimulatedCard = false
+            return@LaunchedEffect
+        }
+        simStartedMs = System.currentTimeMillis()
+        while (true) {
+            delay(200L)
+            simTick = (simTick + 1) % 64
+        }
+    }
+    val simulatedEntity = remember(isSimulating, isSimulatingHlsMode, simTick, telemetry.instantBps, telemetry.peakBps, telemetry.avgBps) {
+        val total = 4_294_967_296L // 4.0 GiB simulated preview asset
+        val frac = ((simTick + 8) % 64) / 64f
+        val done = (total * frac).toLong().coerceIn(0L, total)
+        val segs = List(32) { idx ->
+            val p = (frac * 32).toInt()
+            when {
+                idx < p - 2 -> SegmentState.VERIFIED
+                idx < p -> SegmentState.COMMITTED
+                idx == p -> SegmentState.ACTIVE_WIFI
+                idx == (p + 1) % 32 -> SegmentState.ACTIVE_5G
+                idx == (p + 2) % 32 -> SegmentState.STOLEN_HEDGE
+                else -> SegmentState.PENDING
+            }
+        }
+        DownloadEntity(
+            id = "sim_transfer_preview",
+            url = if (isSimulatingHlsMode) {
+                "https://cdn-edge.aether.sim/live/master_4k_hdr.m3u8"
+            } else {
+                "https://cdn-edge.aether.sim/releases/AetherOS_v9.1_4K_HDR_Demo.mkv"
+            },
+            fileName = if (isSimulatingHlsMode) {
+                "Live_4K_HDR_Broadcast_Stream.ts"
+            } else {
+                "AetherOS_v9.1_4K_HDR_Demo.mkv"
+            },
+            mimeType = "video/x-matroska",
+            totalBytes = total,
+            downloadedBytes = done,
+            status = DownloadStatus.STREAMING.name,
+            routeMode = NetworkRouteMode.AUTO_MULTIPATH.name,
+            workerCount = telemetry.activeWorkers.coerceAtLeast(32),
+            destinationUri = "/storage/emulated/0/Download/AetherIO/AetherOS_v9.1_4K_HDR_Demo.mkv",
+            isSafDestination = false,
+            supportsRange = true,
+            segmentBitfield = segs.joinToString("") { it.code.toString() },
+            ttfbMs = telemetry.lastTtfbMs.coerceAtLeast(14L),
+            avgSpeedBps = telemetry.avgBps,
+            peakSpeedBps = telemetry.peakBps,
+            engineBackendUsed = "RUST_SIM_64W",
+            wifiBytes = telemetry.wifiBytesTotal.coerceAtLeast(done / 3),
+            wifi2Bytes = telemetry.wifi2BytesTotal.coerceAtLeast(done / 5),
+            cellBytes = telemetry.cellBytesTotal.coerceAtLeast(done / 3),
+            usbBytes = telemetry.ethBytesTotal.coerceAtLeast(done / 7),
+            createdAt = simStartedMs,
+            startedAt = simStartedMs,
+            updatedAt = System.currentTimeMillis(),
+            activeDownloadMs = (System.currentTimeMillis() - simStartedMs).coerceAtLeast(1000L),
+            maxConnectionsUsed = 64,
+            streamType = if (isSimulatingHlsMode) "HLS_DASH" else "DIRECT",
+        )
     }
 
     val safRegrantLauncher = rememberLauncherForActivityResult(
@@ -246,14 +328,29 @@ fun TransfersScreen(
                 }
             }
 
-            if (downloads.isEmpty()) {
+            // Live Simulated Transfer Card (matches real Rayburst card animation 1:1!)
+            if (isSimulating) {
+                item(key = "simulated_transfer_card") {
+                    SimulatedRayburstTransferCard(
+                        entity = simulatedEntity,
+                        liveSpeedBps = telemetry.instantBps,
+                        useMBpsSpeedUnit = useMBpsSpeedUnit,
+                        isHlsMode = isSimulatingHlsMode,
+                        liveSegments = telemetry.recentLiveSegments,
+                        onToggleHlsMode = { onToggleSimHlsMode(!isSimulatingHlsMode) },
+                        onInspectProperties = { inspectSimulatedCard = true },
+                    )
+                }
+            }
+
+            if (downloads.isEmpty() && !isSimulating) {
                 item(key = "empty_state") {
                     EmptyTransfersCard(
                         onOpenNewDownload = onOpenNewDownload,
                         onOpenSimulator = onOpenSimulator,
                     )
                 }
-            } else {
+            } else if (downloads.isNotEmpty()) {
                 val activeTotalCount = downloads.count { it.statusEnum.isActive }
                 items(downloads, key = { it.id }) { item ->
                     val liveTaskBps = if (item.statusEnum.isActive) {
@@ -268,9 +365,12 @@ fun TransfersScreen(
                     } else {
                         0L
                     }
+                    val activeTaskConnections = telemetry.activeConnections.count { it.taskId == item.id }
                     TransferItemCard(
                         entity = item,
                         liveSpeedBps = liveTaskBps,
+                        activeConnectionsCount = if (activeTaskConnections > 0) activeTaskConnections else if (item.statusEnum.isActive) item.workerCount else 0,
+                        liveSegments = if (item.statusEnum.isActive && item.streamType == "HLS_DASH") telemetry.recentLiveSegments else emptyList(),
                         useMBpsSpeedUnit = useMBpsSpeedUnit,
                         onInspect = { inspectedTransferId = item.id },
                         onPause = { onPause(item.id) },
@@ -293,28 +393,36 @@ fun TransfersScreen(
             item { Spacer(modifier = Modifier.height(76.dp)) }
         }
 
-        // In-tree Container Transform Overlay for Transfer Pipeline Inspector
+        // 1DM+-Style Super-Properties Sheet (Real or Simulated Transfer)
         AnimatedVisibility(
-            visible = inspectedTransfer != null,
+            visible = inspectedTransfer != null || inspectSimulatedCard,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
-            CompositionLocalProvider(LocalAnimatedVisibilityScope provides this) {
-                inspectedTransfer?.let { target ->
-                    val liveBps = telemetry.activeConnections
-                        .filter { it.taskId == target.id }
-                        .sumOf { it.speedBps }
-                    TransferInspectorOverlay(
-                        entity = target,
-                        liveSpeedBps = liveBps,
-                        useMBpsSpeedUnit = useMBpsSpeedUnit,
-                        onPause = { onPause(target.id) },
-                        onResume = { onResume(target.id) },
-                        onOpen = { onOpenFile(target) },
-                        onShare = { onShareFile(target) },
-                        onDismiss = { inspectedTransferId = null },
-                    )
+            val activeTarget = inspectedTransfer ?: if (inspectSimulatedCard) simulatedEntity else null
+            activeTarget?.let { target ->
+                val isSim = inspectSimulatedCard && inspectedTransfer == null
+                val liveBps = if (isSim) {
+                    telemetry.instantBps
+                } else {
+                    val cSum = telemetry.activeConnections.filter { it.taskId == target.id }.sumOf { it.speedBps }
+                    if (cSum > 0L) cSum else if (target.statusEnum.isActive) telemetry.instantBps else 0L
                 }
+                DownloadPropertiesSheet(
+                    entity = target,
+                    useMBpsUnit = useMBpsSpeedUnit,
+                    liveSpeedBps = liveBps,
+                    isSimulatedPreview = isSim,
+                    onDismiss = {
+                        inspectedTransferId = null
+                        inspectSimulatedCard = false
+                    },
+                    onOpenFile = onOpenFile,
+                    onShareFile = onShareFile,
+                    onRefreshUrl = onRefreshUrl,
+                    onSaveMd5 = onSaveMd5,
+                    onSaveSha256 = onSaveSha256,
+                )
             }
         }
     }
@@ -364,21 +472,19 @@ private fun HeroTelemetryBanner(
     onResumeAll: () -> Unit,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     val motionSpeed = LocalMotionSpeedMultiplier.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .aetherSharedBounds(
-                key = AetherSharedKey("hero", SharedPart.HERO_CONTAINER),
-                clipShape = RoundedCornerShape(18.dp),
-                useCockpitSpring = true,
-            )
             .clip(RoundedCornerShape(18.dp))
             .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
-            .border(
-                width = if (isSimulating) 1.4.dp else 1.dp,
-                color = if (isSimulating) ext.amber.copy(alpha = 0.65f) else ext.cardBorder,
-                shape = RoundedCornerShape(18.dp),
+            .aetherNeonBorder(
+                neon = neon,
+                accent = if (isSimulating) ext.amber else ext.cyan,
+                cornerRadius = 18.dp,
+                borderWidth = if (isSimulating) 1.4.dp else 1.dp,
+                fallbackBorderColor = if (isSimulating) ext.amber.copy(alpha = 0.65f) else ext.cardBorder,
             )
             .animateContentSize(aetherSpringSpec(motionSpeed))
             .padding(16.dp),
@@ -450,9 +556,6 @@ private fun HeroTelemetryBanner(
                     StatusPill(
                         label = telemetry.activeEngineBadge,
                         color = ext.emerald,
-                        modifier = Modifier.aetherSharedElement(
-                            key = AetherSharedKey("hero", SharedPart.HERO_ENGINE_BADGE),
-                        ),
                     )
                 }
                 FlowRow(
@@ -635,6 +738,8 @@ private fun TelemetryMiniCell(
 private fun TransferItemCard(
     entity: DownloadEntity,
     liveSpeedBps: Long,
+    activeConnectionsCount: Int = 0,
+    liveSegments: List<String> = emptyList(),
     useMBpsSpeedUnit: Boolean,
     onInspect: () -> Unit,
     onPause: () -> Unit,
@@ -692,16 +797,25 @@ private fun TransferItemCard(
         ResolvedEngineBackend.KOTLIN_OKHTTP.id -> "OKHTTP"
         else -> null
     }
+    val neon = LocalAetherNeonConfig.current
+    val isProbing = entity.statusEnum == DownloadStatus.PROBING_0RTT
+    val isCompleted = entity.statusEnum == DownloadStatus.COMPLETED
+    val isRunning = entity.statusEnum.isActive
+    val maxConn = entity.maxConnectionsUsed.coerceAtLeast(entity.workerCount).coerceAtLeast(1)
+    val effectiveSpeed = if (liveSpeedBps > 0L) liveSpeedBps else entity.avgSpeedBps
+    val etaText = if (isCompleted) "Done" else Formatters.formatEta(entity.remainingBytes, effectiveSpeed)
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .aetherSharedBounds(
-                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_CARD),
-                clipShape = RoundedCornerShape(18.dp),
+            .aetherNeonBorder(
+                neon = neon,
+                accent = statusColor,
+                cornerRadius = 18.dp,
+                fallbackBorderColor = ext.cardBorder,
             )
-            .border(1.dp, ext.cardBorder, MaterialTheme.shapes.large)
             .animateContentSize(aetherSpringSpec(motionSpeed))
+            .clickable(onClick = onInspect)
             .testTag("transfer_card_${entity.id}"),
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surface,
@@ -714,17 +828,11 @@ private fun TransferItemCard(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded },
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     modifier = Modifier
-                        .aetherSharedElement(
-                            key = AetherSharedKey(entity.id, SharedPart.TRANSFER_ICON),
-                            clipShape = RoundedCornerShape(10.dp),
-                        )
                         .size(40.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(statusColor.copy(alpha = 0.14f)),
@@ -743,51 +851,25 @@ private fun TransferItemCard(
                     Text(
                         text = entity.fileName,
                         style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.TRANSFER_TITLE))
-                            .aetherSkipToLookaheadSize(),
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        StatusPill(
-                            label = statusLabel,
-                            color = statusColor,
-                            modifier = Modifier.aetherSharedElement(
-                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_STATUS),
-                            ),
-                        )
+                        StatusPill(label = statusLabel, color = statusColor)
                         if (engineTag != null) {
                             StatusPill(label = engineTag, color = ext.violet)
                         }
-                        if (entity.statusEnum.isActive && liveSpeedBps > 0L) {
-                            val remaining = (entity.totalBytes - entity.downloadedBytes).coerceAtLeast(0L)
-                            val etaLabel = if (entity.totalBytes > 0L) {
-                                " · ETA ${Formatters.formatEta(remaining, liveSpeedBps)}"
-                            } else {
-                                ""
-                            }
-                            StatusPill(
-                                label = "${Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit)}$etaLabel",
-                                color = ext.emerald,
-                            )
+                        if (entity.streamType == "HLS_DASH") {
+                            StatusPill(label = "HLS/DASH", color = ext.amber)
                         }
                         if (entity.allUrls.size > 1) {
                             StatusPill(label = "${entity.allUrls.size} Mirrors", color = ext.amber)
                         }
-                        Text(
-                            text = if (entity.totalBytes > 0L) {
-                                "${Formatters.formatBytes(entity.downloadedBytes)} / ${Formatters.formatBytes(entity.totalBytes)}"
-                            } else {
-                                Formatters.formatBytes(entity.downloadedBytes)
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
 
@@ -799,7 +881,7 @@ private fun TransferItemCard(
                 ) {
                     Icon(
                         imageVector = Icons.Filled.OpenInFull,
-                        contentDescription = "Inspect transfer pipeline",
+                        contentDescription = "Open 1DM+ file properties",
                         tint = ext.cyan,
                         modifier = Modifier.size(18.dp),
                     )
@@ -812,30 +894,63 @@ private fun TransferItemCard(
                     Icon(
                         imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                         contentDescription = if (expanded) "Collapse details" else "Expand details",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
 
-            if (entity.statusEnum != DownloadStatus.COMPLETED) {
-                if (entity.totalBytes > 0L) {
-                    LinearProgressIndicator(
-                        progress = { entity.progressFraction },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp),
-                        color = statusColor,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                        strokeCap = StrokeCap.Round,
+            // Skeleton shimmer bar while Stream 0 is probing headers, else Rayburst 64-Lane striped bar
+            if (isProbing) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SkeletonBox(
+                        modifier = Modifier.fillMaxWidth(),
+                        height = 14.dp,
+                        shape = RoundedCornerShape(7.dp),
+                        accentTint = ext.cyan,
                     )
-                } else if (entity.statusEnum.isActive) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(6.dp),
-                        color = statusColor,
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    Text(
+                        text = "Probing server headers, 0-RTT & Range capabilities…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ext.cyan,
                     )
                 }
+            } else {
+                Rayburst64LaneBar(
+                    progress = entity.progressFraction,
+                    activeConnections = activeConnectionsCount,
+                    maxConnections = maxConn,
+                    isCompleted = isCompleted,
+                    isRunning = isRunning,
+                    isFailed = entity.statusEnum.isIssue,
+                    segments = entity.parsedSegments(),
+                )
+            }
+
+            // Rich Per-File Stats Strip (Live, MAX, AVG, Connections, Remaining, Active Time, ETA)
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TransferMiniStat("LIVE", Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit), ext.emerald)
+                TransferMiniStat("MAX", Formatters.formatSpeed(entity.peakSpeedBps, useMBpsSpeedUnit), ext.amber)
+                TransferMiniStat("AVG", Formatters.formatSpeed(entity.avgSpeedBps, useMBpsSpeedUnit), ext.violet)
+                TransferMiniStat("CONN", "$activeConnectionsCount/$maxConn", ext.cyan)
+                TransferMiniStat(
+                    "REM",
+                    if (entity.totalBytes > 0L) Formatters.formatBytes(entity.remainingBytes) else "—",
+                    MaterialTheme.colorScheme.onSurface,
+                )
+                TransferMiniStat("ACTIVE", Formatters.formatActiveDuration(entity.activeDownloadMs), ext.teal)
+                TransferMiniStat("ETA", etaText, ext.cyan)
+            }
+
+            if (liveSegments.isNotEmpty()) {
+                RayburstLiveSegmentPills(segmentLabels = liveSegments)
             }
 
             entity.errorMessage?.let { msg ->
@@ -854,49 +969,52 @@ private fun TransferItemCard(
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                text = "${extentMb} MB AETHLDG2 LEDGER",
+                                text = "${extentMb} MB RAYBURST PIECE MATRIX",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
-                                text = "${entity.parsedSegments().size} extents · ${Formatters.formatPercent(entity.progressFraction)}",
+                                text = "${Formatters.formatBytes(entity.downloadedBytes)} / ${if (entity.totalBytes > 0L) Formatters.formatBytes(entity.totalBytes) else "?"} · ${Formatters.formatPercent(entity.progressFraction)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = ext.cyan,
                             )
                         }
-                        SegmentBitfieldMatrix(
+                        RayburstPieceMatrix(
                             segments = entity.parsedSegments(),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aetherSharedBounds(
-                                    key = AetherSharedKey(entity.id, SharedPart.TRANSFER_LEDGER),
-                                    clipShape = RoundedCornerShape(6.dp),
-                                ),
+                            isRunning = isRunning,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
 
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            text = "TTFB: ${entity.ttfbMs} ms",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "Started: ${Formatters.formatTimestamp(if (entity.startedAt > 0L) entity.startedAt else entity.createdAt)}",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        if (entity.wifiBytes > 0L || entity.cellBytes > 0L) {
+                        if ((entity.completedAt ?: 0L) > 0L) {
                             Text(
-                                text = "Wi-Fi ${Formatters.formatBytes(entity.wifiBytes)} · 5G ${Formatters.formatBytes(entity.cellBytes)}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = ext.cyan,
+                                text = "Ended: ${Formatters.formatTimestamp(entity.completedAt ?: 0L)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ext.emerald,
                             )
                         }
                         Text(
-                            text = entity.routeModeEnum.label,
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "TTFB: ${entity.ttfbMs} ms · ${entity.routeModeEnum.label}",
+                            style = MaterialTheme.typography.labelSmall,
                             color = ext.violet,
                         )
+                        if (entity.wifiBytes + entity.wifi2Bytes + entity.cellBytes + entity.usbBytes > 0L) {
+                            Text(
+                                text = "W1 ${Formatters.formatBytes(entity.wifiBytes)} · W2 ${Formatters.formatBytes(entity.wifi2Bytes)} · 5G ${Formatters.formatBytes(entity.cellBytes)} · USB ${Formatters.formatBytes(entity.usbBytes)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ext.cyan,
+                            )
+                        }
                     }
 
                     Row(
@@ -1020,61 +1138,60 @@ private fun TransferItemCard(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun TransferInspectorOverlay(
+private fun TransferMiniStat(
+    label: String,
+    value: String,
+    accent: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MonoMetricStyle.copy(fontSize = 11.sp),
+            color = accent,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SimulatedRayburstTransferCard(
     entity: DownloadEntity,
     liveSpeedBps: Long,
     useMBpsSpeedUnit: Boolean,
-    onPause: () -> Unit,
-    onResume: () -> Unit,
-    onOpen: () -> Unit,
-    onShare: () -> Unit,
-    onDismiss: () -> Unit,
+    isHlsMode: Boolean,
+    liveSegments: List<String>,
+    onToggleHlsMode: () -> Unit,
+    onInspectProperties: () -> Unit,
 ) {
     val ext = LocalAetherColors.current
-    BackHandler(onBack = onDismiss)
-    val extentMb = (entity.segmentSizeBytes / (1024L * 1024L)).coerceAtLeast(1L)
-    val statusColor = when {
-        entity.statusEnum == DownloadStatus.COMPLETED -> ext.emerald
-        entity.statusEnum.isActive -> ext.cyan
-        entity.statusEnum.isIssue -> ext.rose
-        else -> ext.amber
-    }
-
-    Box(
+    val neon = LocalAetherNeonConfig.current
+    Surface(
         modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.64f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onDismiss,
+            .fillMaxWidth()
+            .aetherNeonBorder(
+                neon = neon,
+                accent = ext.amber,
+                cornerRadius = 18.dp,
+                borderWidth = 1.4.dp,
+                fallbackBorderColor = ext.amber.copy(alpha = 0.65f),
             )
-            .padding(16.dp)
-            .testTag("transfer_inspector_overlay"),
-        contentAlignment = Alignment.Center,
+            .clickable(onClick = onInspectProperties)
+            .testTag("simulated_transfer_card"),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 580.dp)
-                .aetherSharedBounds(
-                    key = AetherSharedKey(entity.id, SharedPart.TRANSFER_CARD),
-                    clipShape = RoundedCornerShape(22.dp),
-                    zIndexInOverlay = 3f,
-                )
-                .clip(RoundedCornerShape(22.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(1.5.dp, statusColor.copy(alpha = 0.65f), RoundedCornerShape(22.dp))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                )
-                .verticalScroll(rememberScrollState())
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1083,146 +1200,103 @@ private fun TransferInspectorOverlay(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f),
                 ) {
                     Box(
                         modifier = Modifier
-                            .aetherSharedElement(
-                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_ICON),
-                                clipShape = RoundedCornerShape(14.dp),
-                            )
-                            .size(50.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(statusColor.copy(alpha = 0.16f)),
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ext.amber.copy(alpha = 0.16f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = fileIconForName(entity.fileName, entity.mimeType),
+                            imageVector = Icons.Filled.AutoAwesome,
                             contentDescription = null,
-                            tint = statusColor,
-                            modifier = Modifier.size(26.dp),
+                            tint = ext.amber,
                         )
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = entity.fileName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .aetherSharedElement(key = AetherSharedKey(entity.id, SharedPart.TRANSFER_TITLE))
-                                .aetherSkipToLookaheadSize(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        StatusPill(
-                            label = entity.statusEnum.name,
-                            color = statusColor,
-                            modifier = Modifier.aetherSharedElement(
-                                key = AetherSharedKey(entity.id, SharedPart.TRANSFER_STATUS),
-                            ),
-                        )
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            StatusPill(label = "SIMULATED CARD", color = ext.amber)
+                            StatusPill(label = if (isHlsMode) "HLS LIVE" else "64-LANE DIRECT", color = ext.violet)
+                        }
                     }
                 }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("close_transfer_inspector_button"),
+                OutlinedButton(
+                    onClick = onToggleHlsMode,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("sim_card_toggle_hls_button"),
                 ) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close pipeline inspector")
+                    Text(if (isHlsMode) "Direct" else "HLS Pills", style = MaterialTheme.typography.labelSmall)
                 }
             }
 
-            if (entity.totalBytes > 0L) {
-                LinearProgressIndicator(
-                    progress = { entity.progressFraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp),
-                    color = statusColor,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                    strokeCap = StrokeCap.Round,
-                )
+            Rayburst64LaneBar(
+                progress = entity.progressFraction,
+                activeConnections = entity.workerCount,
+                maxConnections = 64,
+                isCompleted = false,
+                isRunning = true,
+                isFailed = false,
+                segments = entity.parsedSegments(),
+            )
+
+            RayburstPieceMatrix(
+                segments = entity.parsedSegments(),
+                isRunning = true,
+            )
+
+            if (isHlsMode && liveSegments.isNotEmpty()) {
+                RayburstLiveSegmentPills(segmentLabels = liveSegments)
             }
 
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                StatusPill(label = "Live ${Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit)}", color = ext.cyan)
-                StatusPill(label = "Peak ${Formatters.formatSpeed(entity.peakSpeedBps, useMBpsSpeedUnit)}", color = ext.amber)
-                StatusPill(label = "Avg ${Formatters.formatSpeed(entity.avgSpeedBps, useMBpsSpeedUnit)}", color = ext.violet)
-                StatusPill(label = "TTFB ${entity.ttfbMs} ms", color = ext.emerald)
-            }
-
-            Text(
-                text = "Endpoint: ${entity.url}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = "Route: ${entity.routeModeEnum.label} · Workers: ${entity.workerCount} · Syscall Batches: ${entity.syscallWriteBatches}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = "Link Split: Wi-Fi ${Formatters.formatBytes(entity.wifiBytes)} · Cellular ${Formatters.formatBytes(entity.cellBytes)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = ext.cyan,
-            )
-
-            Text(
-                text = "${extentMb} MB AETHLDG2 ZERO-MERGE EXTENT BITFIELD (${entity.parsedSegments().size} extents)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SegmentBitfieldMatrix(
-                segments = entity.parsedSegments(),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aetherSharedBounds(
-                        key = AetherSharedKey(entity.id, SharedPart.TRANSFER_LEDGER),
-                        clipShape = RoundedCornerShape(8.dp),
-                    ),
-            )
-
-            if (!entity.actualSha256.isNullOrBlank()) {
-                Text(
-                    text = "SHA-256: ${entity.actualSha256}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ext.emerald,
-                )
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f))
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                TransferMiniStat("LIVE", Formatters.formatSpeed(liveSpeedBps, useMBpsSpeedUnit), ext.emerald)
+                TransferMiniStat("MAX", Formatters.formatSpeed(entity.peakSpeedBps, useMBpsSpeedUnit), ext.amber)
+                TransferMiniStat("AVG", Formatters.formatSpeed(entity.avgSpeedBps, useMBpsSpeedUnit), ext.violet)
+                TransferMiniStat("CONN", "${entity.workerCount}/64", ext.cyan)
+                TransferMiniStat("REM", Formatters.formatBytes(entity.remainingBytes), MaterialTheme.colorScheme.onSurface)
+                TransferMiniStat("ACTIVE", Formatters.formatActiveDuration(entity.activeDownloadMs), ext.teal)
+                TransferMiniStat("ETA", Formatters.formatEta(entity.remainingBytes, liveSpeedBps), ext.cyan)
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (entity.statusEnum == DownloadStatus.COMPLETED) {
-                    Button(onClick = onOpen, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Open")
-                    }
-                    OutlinedButton(onClick = onShare, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Share")
-                    }
-                } else if (entity.statusEnum.isActive) {
-                    OutlinedButton(onClick = onPause, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Pause")
-                    }
-                } else {
-                    Button(onClick = onResume, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Resume")
-                    }
-                }
-                OutlinedButton(onClick = onDismiss) {
-                    Text("Close")
+                Text(
+                    text = "Tap card to preview 1DM+ Super-Properties & Checksum Shimmer",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = onInspectProperties,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ext.cyan,
+                        contentColor = contrastOnColor(ext.cyan),
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.testTag("sim_card_properties_button"),
+                ) {
+                    Text("Properties", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

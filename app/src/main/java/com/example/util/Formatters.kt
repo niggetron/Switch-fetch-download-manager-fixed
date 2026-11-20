@@ -52,6 +52,24 @@ object Formatters {
         return String.format(Locale.US, "%dh %02dm %02ds", h, m, s)
     }
 
+    fun formatActiveDuration(ms: Long): String {
+        val totalSecs = (ms / 1000L).coerceAtLeast(0L)
+        val h = totalSecs / 3600L
+        val m = (totalSecs % 3600L) / 60L
+        val s = totalSecs % 60L
+        return when {
+            h > 0L -> "${h}h ${m}m ${s}s"
+            m > 0L -> "${m}m ${s}s"
+            else -> "${s}s"
+        }
+    }
+
+    fun formatTimestamp(epochMs: Long): String {
+        if (epochMs <= 0L) return "—"
+        val fmt = java.text.SimpleDateFormat("MMM dd, yyyy hh:mm:ss a", Locale.US)
+        return fmt.format(java.util.Date(epochMs))
+    }
+
     fun formatPercent(fraction: Float): String =
         "${(fraction.coerceIn(0f, 1f) * 100f).roundToInt()}%"
 }

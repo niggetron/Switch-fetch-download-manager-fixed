@@ -43,6 +43,14 @@ data class DownloadEntity(
     val maxCellularBytes: Long = 0L,
     val browserProfile: String = "chrome134",
     val protocolMode: String = "auto",
+    // v9.1 deep telemetry, quad-link attribution & 1DM+ checksum columns
+    val startedAt: Long = 0L,
+    val activeDownloadMs: Long = 0L,
+    val maxConnectionsUsed: Int = 0,
+    val wifi2Bytes: Long = 0L,
+    val usbBytes: Long = 0L,
+    val actualMd5: String? = null,
+    val streamType: String = "DIRECT",
 ) {
     val statusEnum: DownloadStatus
         get() = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.QUEUED)
@@ -59,6 +67,9 @@ data class DownloadEntity(
                 .filter { it.isNotBlank() && it != url.trim() }
                 .forEach { add(it) }
         }
+
+    val remainingBytes: Long
+        get() = if (totalBytes > 0L) (totalBytes - downloadedBytes).coerceAtLeast(0L) else 0L
 
     val progressFraction: Float
         get() = when {

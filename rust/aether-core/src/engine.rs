@@ -21,15 +21,16 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::cas::{ContiguousSha256Verifier, blake3_digest_bytes};
 use crate::diagnostics::{
-    FLAG_ANTI_DIP_WATCHDOG, FLAG_AUTO_SPEED_UP, FLAG_HTTP3_QUIC, FLAG_MULTI_LINK, FLAG_TAIL_HEDGE,
-    FLAG_TURBO_MULTI_SOCKET, is_flag_enabled, record_diag,
+    FLAG_ANTI_DIP_WATCHDOG, FLAG_AUTO_SPEED_UP, FLAG_FORCE_ALL_LINKS, FLAG_HTTP3_QUIC,
+    FLAG_MULTI_LINK, FLAG_TAIL_HEDGE, FLAG_TURBO_MULTI_SOCKET, is_flag_enabled, record_diag,
 };
 use crate::hls_dash::{is_adaptive_manifest_url, parse_dash_mpd, parse_hls_m3u8};
 use crate::ledger::{AetherLedger, SegmentStatus};
 use crate::scheduler::{
-    ActiveConnectionSnapshot, LinkCircuitBreaker, LinkDispatchStats, absorb_empty_right_of,
-    adaptive_bdp_segment_bytes, adjust_auto_speed_up, effective_worker_count,
-    select_earliest_arrival_link, select_lowest_rtt_link, select_mirror_for_link,
+    ActiveConnectionSnapshot, LinkCircuitBreaker, LinkDispatchStats, MAX_WORKERS_CAP,
+    absorb_empty_right_of, adaptive_bdp_segment_bytes, adjust_auto_speed_up,
+    effective_worker_count, select_link_with_force_all, select_lowest_rtt_link,
+    select_mirror_for_link,
 };
 use crate::storage_and_telemetry::{
     BoundedSlabPool, SLAB_BYTES, SlabLeaseGuard, flush_fdatasync, live_telemetry_page,
@@ -37,7 +38,7 @@ use crate::storage_and_telemetry::{
 };
 use crate::transport::{
     BoundLinkState, TransportContext, fetch_h3_range_bytes, parse_content_disposition_filename,
-    send_wreq_range_request, sniff_mime_from_magic,
+    probe_bound_link_blocked_reason, send_wreq_range_request, sniff_mime_from_magic,
 };
 
 const DISK_BATCH_FLUSH_BYTES: u64 = 16 * 1024 * 1024; // Batch fdatasync every 16 MiB
@@ -122,6 +123,7 @@ impl InFlightGuard {
     fn new(link: Option<Arc<BoundLinkState>>, bytes: u64) -> Self {
         if let Some(ref l) = link {
             l.in_flight_bytes.fetch_add(bytes, Ordering::Relaxed);
+            l.active_workers.fetch_add(1, Ordering::Relaxed);
         }
         Self {
             link,
@@ -142,12 +144,13 @@ impl InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if self.remaining > 0 {
-            if let Some(ref l) = self.link {
+        if let Some(ref l) = self.link {
+            sub_saturating_atomic(&l.active_workers, 1);
+            if self.remaining > 0 {
                 sub_saturating_atomic(&l.in_flight_bytes, self.remaining);
             }
-            self.remaining = 0;
         }
+        self.remaining = 0;
     }
 }
 
@@ -187,7 +190,7 @@ impl NativeEngine {
             tasks: Mutex::new(HashMap::new()),
             connections: RwLock::new(HashMap::new()),
             outcomes: RwLock::new(HashMap::new()),
-            thermal_worker_cap: AtomicI64::new(16),
+            thermal_worker_cap: AtomicI64::new(MAX_WORKERS_CAP as i64),
         }
     }
 
@@ -396,9 +399,9 @@ impl NativeEngine {
                 link_id: l.link_key.clone(),
                 queued_bytes: 0.0,
                 ewma_bytes_per_sec: (l.measured_ewma_bps.load(Ordering::Relaxed) as f64)
-                    .max(l.downstream_kbps.load(Ordering::Relaxed) as f64 * 125.0)
                     .max(250_000.0),
                 rtt_min_secs: (l.rtt_ms.load(Ordering::Relaxed) as f64 / 1000.0).max(0.005),
+                active_workers_on_link: 0,
             })
             .collect();
         let mut breakers = HashMap::new();
@@ -660,34 +663,90 @@ impl NativeEngine {
             let _ = lg.persist(&writer_ldg_path, Some(&writer_file));
         });
 
-        let thermal_cap = self.thermal_worker_cap.load(Ordering::Acquire).clamp(1, 16) as usize;
+        let thermal_cap = self
+            .thermal_worker_cap
+            .load(Ordering::Acquire)
+            .clamp(1, MAX_WORKERS_CAP as i64) as usize;
         let links_now = self.transport.snapshot_links();
         let multi_link_on = is_flag_enabled(FLAG_MULTI_LINK);
         let turbo_on = is_flag_enabled(FLAG_TURBO_MULTI_SOCKET);
-        let base_workers = if supports_range && total_bytes > SLAB_BYTES as u64 {
+        let auto_speed_on = is_flag_enabled(FLAG_AUTO_SPEED_UP);
+        let max_pool_workers = if supports_range && total_bytes > SLAB_BYTES as u64 {
             let link_count = if multi_link_on {
                 links_now.len().max(1)
             } else {
                 1
             };
             let desired = effective_worker_count(cfg.max_workers, link_count);
-            let boosted = if turbo_on {
-                desired.max((link_count * 2).min(cfg.max_workers.max(2)))
+            let boosted = if turbo_on || auto_speed_on {
+                desired.max((link_count * 6).min(MAX_WORKERS_CAP))
             } else {
                 desired
             };
-            boosted.min(thermal_cap).min(seg_count.max(link_count)).max(1)
+            let upper = if auto_speed_on {
+                boosted.max(thermal_cap.min(MAX_WORKERS_CAP))
+            } else {
+                boosted
+            };
+            upper.min(thermal_cap).max(1)
         } else {
             1
         };
+        let initial_target = cfg
+            .max_workers
+            .max(links_now.len().saturating_mul(4))
+            .clamp(1, max_pool_workers);
+        let target_workers = Arc::new(std::sync::atomic::AtomicUsize::new(initial_target));
+        let scaling_done = Arc::new(AtomicBool::new(false));
 
-        let mut worker_handles = Vec::with_capacity(base_workers);
-        for worker_idx in 0..base_workers {
+        // Ghost-style closed-loop autoSpeedUp controller ramping live up to 64 parallel sockets!
+        let scaler_handle = if auto_speed_on && max_pool_workers > 1 {
+            let tw = target_workers.clone();
+            let done_flag = scaling_done.clone();
+            let w_tot_s = written_total.clone();
+            let h_s = handle.clone();
+            let min_w = (links_now.len().max(1) * 3).clamp(2, max_pool_workers);
+            Some(tokio::spawn(async move {
+                let mut prev_bytes = w_tot_s.load(Ordering::Relaxed);
+                let mut prev_bps = 0.0f64;
+                let mut prev_rtt = live_telemetry_page().ttfb_ms.load(Ordering::Relaxed) as f64;
+                while !done_flag.load(Ordering::Acquire)
+                    && !h_s.cancelled.load(Ordering::Acquire)
+                    && !h_s.paused.load(Ordering::Acquire)
+                {
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    let cur_bytes = w_tot_s.load(Ordering::Relaxed);
+                    let cur_bps = (cur_bytes.saturating_sub(prev_bytes) as f64) / 0.6;
+                    let cur_rtt = live_telemetry_page().ttfb_ms.load(Ordering::Relaxed) as f64;
+                    let delta_rtt = (cur_rtt - prev_rtt).max(0.0);
+                    let cur_w = tw.load(Ordering::Acquire);
+                    let next_w = adjust_auto_speed_up(
+                        cur_w,
+                        min_w,
+                        max_pool_workers,
+                        prev_bps,
+                        cur_bps,
+                        delta_rtt,
+                        false,
+                    );
+                    tw.store(next_w, Ordering::Release);
+                    prev_bytes = cur_bytes;
+                    prev_bps = cur_bps;
+                    prev_rtt = cur_rtt;
+                }
+            }))
+        } else {
+            None
+        };
+
+        let mut worker_handles = Vec::with_capacity(max_pool_workers);
+        for worker_idx in 0..max_pool_workers {
             let eng = self.clone();
             let h = handle.clone();
             let ledger_ref = ledger_arc.clone();
             let brk_ref = breakers_arc.clone();
             let rng_ref = active_ranges.clone();
+            let tw_ref = target_workers.clone();
             let w_tot = written_total.clone();
             let wifi_tot = wifi_bytes_total.clone();
             let wifi2_tot = wifi2_bytes_total.clone();
@@ -716,6 +775,18 @@ impl NativeEngine {
                             .is_some()
                     {
                         break;
+                    }
+
+                    if worker_idx >= tw_ref.load(Ordering::Acquire) {
+                        let any_work_left = {
+                            let lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
+                            lg.states.iter().any(|&s| s == SegmentStatus::Pending as u8)
+                        } || !rng_ref.lock().unwrap_or_else(|p| p.into_inner()).is_empty();
+                        if !any_work_left {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(120)).await;
+                        continue;
                     }
 
                     // 1. Claim next Pending segment from ledger, OR absorb right neighbor,
@@ -823,24 +894,34 @@ impl NativeEngine {
                         .iter()
                         .map(|l| {
                             let real_ewma = l.measured_ewma_bps.load(Ordering::Relaxed) as f64;
-                            let cap_bps = l.downstream_kbps.load(Ordering::Relaxed) as f64 * 125.0;
                             let in_flight = l.in_flight_bytes.load(Ordering::Relaxed) as f64;
+                            let active_w = l.active_workers.load(Ordering::Relaxed) as usize;
                             LinkDispatchStats {
                                 link_id: l.link_key.clone(),
                                 queued_bytes: in_flight,
-                                ewma_bytes_per_sec: real_ewma.max(cap_bps * 0.5).max(250_000.0),
+                                ewma_bytes_per_sec: real_ewma.max(250_000.0),
                                 rtt_min_secs: (l.rtt_ms.load(Ordering::Relaxed) as f64 / 1000.0)
                                     .max(0.005),
+                                active_workers_on_link: active_w,
                             }
                         })
                         .collect();
 
+                    let force_all = is_flag_enabled(FLAG_FORCE_ALL_LINKS);
+                    let min_per_link = if force_all && stats.len() > 1 {
+                        (tw_ref.load(Ordering::Relaxed) / (stats.len() * 2)).clamp(2, 8)
+                    } else {
+                        1
+                    };
                     let picked_key = {
                         let mut brk = brk_ref.lock().unwrap_or_else(|p| p.into_inner());
-                        select_earliest_arrival_link(
+                        select_link_with_force_all(
                             &stats,
                             &mut brk,
                             range_len as f64,
+                            force_all,
+                            worker_idx,
+                            min_per_link,
                             Instant::now(),
                         )
                         .map(str::to_string)
@@ -863,7 +944,9 @@ impl NativeEngine {
                         task_id: tid.clone(),
                         mirror_url: mirror_url.clone(),
                         link_key: picked_key.clone(),
-                        protocol: if is_flag_enabled(FLAG_HTTP3_QUIC) {
+                        protocol: if worker_idx % 16 > 0 {
+                            "H2 Shard".into()
+                        } else if is_flag_enabled(FLAG_HTTP3_QUIC) {
                             "H2/H3".into()
                         } else {
                             "H2 wreq".into()
@@ -896,13 +979,18 @@ impl NativeEngine {
                     let local_ip = picked_link
                         .as_ref()
                         .and_then(|l| *l.local_ip.read().unwrap_or_else(|p| p.into_inner()));
+                    let picked_handle = picked_link
+                        .as_ref()
+                        .map(|l| l.net_handle.load(Ordering::Relaxed))
+                        .unwrap_or(0);
 
-                    // 3. Use persistent pooled warm wreq::Client (NO Slow Start per segment!)
+                    // 3. Use sharded persistent warm wreq::Client (independent TCP sockets!)
                     let res = match eng.transport.get_or_build_wreq_client(
                         &picked_key,
                         local_ip,
                         proxy_ov.as_ref(),
                         &profile,
+                        worker_idx,
                     ) {
                         Ok(client) => {
                             let seg_t0 = Instant::now();
@@ -1178,17 +1266,6 @@ impl NativeEngine {
                                 }
                                 break;
                             }
-                            if is_flag_enabled(FLAG_AUTO_SPEED_UP) {
-                                let _ = adjust_auto_speed_up(
-                                    base_workers,
-                                    1,
-                                    16,
-                                    1.0,
-                                    1.1,
-                                    4.0,
-                                    false,
-                                );
-                            }
                             brk_ref
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -1197,6 +1274,14 @@ impl NativeEngine {
                                 .record_success();
                         }
                         Err(err) => {
+                            if picked_handle > 0 && !err.starts_with("TOKEN_EXPIRED") {
+                                probe_bound_link_blocked_reason(
+                                    &mirror_url,
+                                    picked_handle,
+                                    proxy_ov.as_ref(),
+                                )
+                                .await;
+                            }
                             record_diag(
                                 "SEG_ERR",
                                 &format!("Segment {} on {picked_key}: {err}", unit.seg_idx),
@@ -1207,8 +1292,6 @@ impl NativeEngine {
                                     lg.states[unit.seg_idx] = SegmentStatus::Pending as u8;
                                 }
                             }
-                            // Non-immediate trip (3 consecutive errors to open, 6s cooldown)
-                            // eliminates Wi-Fi <-> Mobile flip-flopping on a single transient blip!
                             brk_ref
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -1244,6 +1327,10 @@ impl NativeEngine {
 
         for j in worker_handles {
             let _ = j.await;
+        }
+        scaling_done.store(true, Ordering::Release);
+        if let Some(sh) = scaler_handle {
+            sh.abort();
         }
         let _ = writer_handle.await;
 
@@ -1362,7 +1449,7 @@ impl NativeEngine {
         let local_ip = link.and_then(|l| *l.local_ip.read().unwrap_or_else(|p| p.into_inner()));
         let client = self
             .transport
-            .get_or_build_wreq_client(lkey, local_ip, proxy_ov.as_ref(), profile)
+            .get_or_build_wreq_client(lkey, local_ip, proxy_ov.as_ref(), profile, 0)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         let resp = send_wreq_range_request(&client, url, Some("bytes=0-16383"))

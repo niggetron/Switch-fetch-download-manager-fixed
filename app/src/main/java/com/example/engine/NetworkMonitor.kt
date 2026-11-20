@@ -345,7 +345,7 @@ class NetworkMonitor(context: Context) {
         latestSettings = settings
         AetherNativeBridge.setFeatureFlagsSafe(settings.toNativeFeatureMask())
 
-        val wantsCellular = settings.retainCellularOnWifi &&
+        val wantsCellular = (settings.retainCellularOnWifi || settings.forceAllLinks) &&
             settings.defaultRouteMode != NetworkRouteMode.WIFI_ONLY
         if (wantsCellular && !cellularLeaseActive) {
             runCatching {
@@ -355,6 +355,7 @@ class NetworkMonitor(context: Context) {
                     .build()
                 cm.requestNetwork(cellReq, cellularRequestCallback)
                 cellularLeaseActive = true
+                DiagnosticsCenter.log("CELL_LEASE", "Requested persistent Cellular lease (forceAllLinks=${settings.forceAllLinks})")
             }
         } else if (!wantsCellular && cellularLeaseActive) {
             runCatching { cm.unregisterNetworkCallback(cellularRequestCallback) }
@@ -469,18 +470,26 @@ class NetworkMonitor(context: Context) {
             ?.takeIf { it != Uri.EMPTY && it.toString().isNotBlank() }
             ?.toString()
 
-        val down = resolvedCaps.linkDownstreamBandwidthKbps.coerceAtLeast(5_000)
-        val up = resolvedCaps.linkUpstreamBandwidthKbps.coerceAtLeast(1_000)
+        val down = resolvedCaps.linkDownstreamBandwidthKbps.coerceAtLeast(10_000)
+        val up = resolvedCaps.linkUpstreamBandwidthKbps.coerceAtLeast(2_000)
         val metered = !resolvedCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
 
         val breaker = breakerRegistry.computeIfAbsent(linkKey.id) { LinkCircuitBreaker() }
-        val existingEwma = discoveredByKey[linkKey.id]?.ewmaMbps ?: (down / 1000.0)
+        // Cap initial unmeasured bootstrap EWMA to 80 Mbps so Android's fake 866 Mbps Wi-Fi PHY
+        // never starves Mobile 5G/LTE or Wi-Fi 2 before real bytes flow!
+        val bootstrapEwma = (down / 1000.0).coerceIn(15.0, 80.0)
+        val existingEwma = discoveredByKey[linkKey.id]?.ewmaMbps ?: bootstrapEwma
         val band = if (isWifi) extractWifiBand(resolvedCaps) else if (isEthOrUsb) "USB/Eth" else "5G/LTE"
         val rssi = if (isWifi) extractWifiRssi(resolvedCaps) else null
+        val wifiSsid = if (isWifi) extractWifiSsid(resolvedCaps) else ""
 
         val label = when (linkKey) {
             is LinkKey.Ethernet -> "${linkKey.iface} (USB/Eth)"
-            is LinkKey.Wifi -> if (band.isNotBlank()) "${linkKey.iface} ($band)" else "${linkKey.iface} (Wi-Fi 1)"
+            is LinkKey.Wifi -> when {
+                wifiSsid.isNotBlank() && band.isNotBlank() -> "$wifiSsid ($band)"
+                band.isNotBlank() -> "${linkKey.iface} ($band)"
+                else -> "${linkKey.iface} (Wi-Fi 1)"
+            }
             is LinkKey.WifiSecondary -> if (band.isNotBlank()) "${linkKey.iface} ($band W2)" else "${linkKey.iface} (Wi-Fi 2)"
             is LinkKey.Cellular -> "${linkKey.iface} (5G/LTE)"
         }
@@ -504,6 +513,7 @@ class NetworkMonitor(context: Context) {
             breakerState = breaker.currentState(),
             ewmaMbps = existingEwma,
             bandLabel = band,
+            ssid = wifiSsid,
             rssiDbm = rssi,
             isRelay = false,
         )
@@ -511,7 +521,7 @@ class NetworkMonitor(context: Context) {
         keyByNetworkHandle[handle] = linkKey.id
         val isNew = discoveredByKey.put(linkKey.id, info) == null
         if (isNew) {
-            DiagnosticsCenter.log("HOTPLUG", "Interface validated: ${linkKey.id} ip=$localIp down=${down}kbps band=$band")
+            DiagnosticsCenter.log("HOTPLUG", "Interface validated: ${linkKey.id} ip=$localIp down=${down}kbps band=$band ssid=$wifiSsid")
         }
 
         val (pxHost, pxPort) = if (isCell) {
@@ -548,6 +558,18 @@ class NetworkMonitor(context: Context) {
                 freq >= 4900 -> "5 GHz"
                 freq in 2400..2500 -> "2.4 GHz"
                 else -> ""
+            }
+        }
+        return ""
+    }
+
+    private fun extractWifiSsid(caps: NetworkCapabilities?): String {
+        if (caps == null) return ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val info = caps.transportInfo as? WifiInfo ?: return ""
+            val raw = runCatching { info.ssid }.getOrNull().orEmpty().trim().removeSurrounding("\"")
+            if (raw.isNotBlank() && !raw.equals("<unknown ssid>", ignoreCase = true)) {
+                return raw
             }
         }
         return ""

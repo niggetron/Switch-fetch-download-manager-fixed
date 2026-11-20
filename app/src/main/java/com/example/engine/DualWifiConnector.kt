@@ -14,9 +14,11 @@ import android.os.Build
 import android.os.PatternMatcher
 import androidx.core.content.ContextCompat
 import com.example.data.model.WifiBandPreference
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 data class NearbyWifiNetwork(
     val ssid: String,
@@ -25,6 +27,8 @@ data class NearbyWifiNetwork(
     val rssiDbm: Int,
     val bandLabel: String,
     val isSecured: Boolean,
+    val isCurrentlyConnected: Boolean = false,
+    val sourceTag: String = "Android",
 )
 
 data class DualWifiCapabilityReport(
@@ -36,17 +40,20 @@ data class DualWifiCapabilityReport(
 )
 
 /**
- * In-App Dual-Band Wi-Fi 2 Connector (No-Root):
- * 1. Probes real chipset capabilities (`isStaConcurrencyForMultiInternetSupported` API 33+,
+ * In-App Dual-Band Wi-Fi 2 Connector & Auto Wi-Fi Picker (v9.1):
+ * 1. Auto-fetches active connected Wi-Fi 1 SSID + nearby Wi-Fi networks via Android `WifiManager`
+ *    AND unthrottled Shizuku `cmd wifi list-scan-results` (when authorized) — zero manual SSID typing!
+ * 2. Probes real chipset capabilities (`isStaConcurrencyForMultiInternetSupported` API 33+,
  *    `isStaConcurrencyForLocalOnlyConnectionsSupported` API 31+, 5 GHz / 6 GHz support).
- * 2. Connects directly to a 2nd Wi-Fi SSID/Band from inside the app via `WifiNetworkSpecifier`
- *    + `ConnectivityManager.requestNetwork`, with Single-STA displacement detection & 1-tap rollback.
- * 3. Provides zero-root Companion Wi-Fi 2 Relay (SOCKS5h / HTTP proxy over a 2nd phone or dual-WAN router)
+ * 3. Connects directly to a selected 2nd Wi-Fi SSID/Band from inside the app via `WifiNetworkSpecifier`
+ *    with Single-STA displacement detection & 1-tap rollback.
+ * 4. Provides zero-root Companion Wi-Fi 2 Relay (SOCKS5h / HTTP proxy over a 2nd phone or dual-WAN router)
  *    for devices whose radio chip only supports Single-STA concurrency.
  */
 class DualWifiConnector(
     private val context: Context,
     private val networkMonitor: NetworkMonitor,
+    val shizukuHelper: ShizukuWifiHelper = ShizukuWifiHelper(context),
 ) {
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -57,12 +64,20 @@ class DualWifiConnector(
     private val _nearbyNetworks = MutableStateFlow<List<NearbyWifiNetwork>>(emptyList())
     val nearbyNetworks: StateFlow<List<NearbyWifiNetwork>> = _nearbyNetworks.asStateFlow()
 
+    private val _connectedWifi1Ssid = MutableStateFlow("")
+    val connectedWifi1Ssid: StateFlow<String> = _connectedWifi1Ssid.asStateFlow()
+
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
     private val _isConnecting = MutableStateFlow(false)
     val isConnecting: StateFlow<Boolean> = _isConnecting.asStateFlow()
 
     private var activeWifi2Callback: ConnectivityManager.NetworkCallback? = null
 
     fun probeCapabilities(): DualWifiCapabilityReport {
+        shizukuHelper.refreshStatus()
+        refreshConnectedWifi1Ssid()
         val wm = wifiManager
         val supports5 = runCatching { wm?.is5GHzBandSupported == true }.getOrDefault(false)
         val supports6 = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -77,7 +92,6 @@ class DualWifiConnector(
         }
         val dualMulti = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching {
-                // Reflection-safe check for Android 13+ multi-internet STA concurrency
                 val m = WifiManager::class.java.getMethod("isStaConcurrencyForMultiInternetSupported")
                 (m.invoke(wm) as? Boolean) == true
             }.getOrDefault(false)
@@ -86,9 +100,9 @@ class DualWifiConnector(
         }
 
         val recommendation = when {
-            dualMulti -> "Hardware Dual-STA Multi-Internet supported! Connect Wi-Fi 2 directly for native 2× Wi-Fi + 5G + USB bonding."
-            dualLocal -> "Chipset supports Local-Only Dual-STA. Try Direct Wi-Fi 2 or use Companion Wi-Fi 2 Relay for guaranteed simultaneous internet."
-            else -> "Single-STA Wi-Fi radio detected. Use Companion Wi-Fi 2 Relay (2nd phone/router) or USB Tethering for full Quad-Link speed!"
+            dualMulti -> "Hardware Dual-STA Multi-Internet supported! Tap any Wi-Fi below to bond Wi-Fi 1 + Wi-Fi 2 + 5G + USB simultaneously."
+            dualLocal -> "Chipset supports Local-Only Dual-STA. Select a Wi-Fi below to test Direct Wi-Fi 2, or use Companion Relay / Shizuku boost."
+            else -> "Single-STA Wi-Fi radio detected. You can still test Direct Wi-Fi 2 below (with 1-tap rollback) or use Companion Wi-Fi 2 Relay / USB Tether!"
         }
 
         val report = DualWifiCapabilityReport(
@@ -108,6 +122,21 @@ class DualWifiConnector(
         return report
     }
 
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    fun refreshConnectedWifi1Ssid(): String {
+        val fromMonitor = networkMonitor.state.value.wifiLink?.ssid.orEmpty()
+        if (fromMonitor.isNotBlank() && fromMonitor != "<unknown ssid>") {
+            _connectedWifi1Ssid.value = fromMonitor
+            return fromMonitor
+        }
+        val raw = runCatching { wifiManager?.connectionInfo?.ssid }.getOrNull().orEmpty()
+        val cleaned = raw.trim().removeSurrounding("\"")
+        val resolved = if (cleaned.equals("<unknown ssid>", ignoreCase = true)) "" else cleaned
+        _connectedWifi1Ssid.value = resolved
+        return resolved
+    }
+
     fun hasWifiScanPermission(): Boolean {
         val wifiState = ContextCompat.checkSelfPermission(
             context,
@@ -118,7 +147,11 @@ class DualWifiConnector(
             ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.NEARBY_WIFI_DEVICES,
-            ) == PackageManager.PERMISSION_GRANTED
+            ) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                ) == PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(
                 context,
@@ -130,6 +163,7 @@ class DualWifiConnector(
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     fun scanNearbyNetworks(): List<NearbyWifiNetwork> {
+        val connectedSsid = refreshConnectedWifi1Ssid()
         val wm = wifiManager ?: return emptyList()
         if (!hasWifiScanPermission()) return emptyList()
         runCatching { wm.startScan() }
@@ -154,11 +188,47 @@ class DualWifiConnector(
                     rssiDbm = strongest.level,
                     bandLabel = band,
                     isSecured = caps.contains("WPA") || caps.contains("WEP") || caps.contains("SAE"),
+                    isCurrentlyConnected = connectedSsid.isNotBlank() && ssid.equals(connectedSsid, ignoreCase = true),
+                    sourceTag = "Android",
                 )
             }
-            .sortedByDescending { it.rssiDbm }
+            .sortedWith(
+                compareByDescending<NearbyWifiNetwork> { it.isCurrentlyConnected }
+                    .thenByDescending { it.rssiDbm },
+            )
         _nearbyNetworks.value = parsed
         return parsed
+    }
+
+    /**
+     * Async auto-scan merging standard Android `WifiManager.scanResults` + Shizuku unthrottled scan
+     * (if authorized) while driving [isScanning] so the UI displays smooth skeleton shimmer rows.
+     */
+    suspend fun scanNearbyNetworksAsync(): List<NearbyWifiNetwork> = withContext(Dispatchers.IO) {
+        _isScanning.value = true
+        try {
+            val connectedSsid = refreshConnectedWifi1Ssid()
+            val androidList = if (hasWifiScanPermission()) scanNearbyNetworks() else emptyList()
+            val shizukuList = shizukuHelper.scanWifiViaShizuku(connectedSsid)
+
+            val merged = (shizukuList + androidList)
+                .groupBy { it.ssid }
+                .map { (_, items) ->
+                    val best = items.maxByOrNull { it.rssiDbm } ?: items.first()
+                    best.copy(
+                        isCurrentlyConnected = items.any { it.isCurrentlyConnected } ||
+                            (connectedSsid.isNotBlank() && best.ssid.equals(connectedSsid, ignoreCase = true)),
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<NearbyWifiNetwork> { it.isCurrentlyConnected }
+                        .thenByDescending { it.rssiDbm },
+                )
+            _nearbyNetworks.value = merged
+            merged
+        } finally {
+            _isScanning.value = false
+        }
     }
 
     /**
@@ -172,7 +242,7 @@ class DualWifiConnector(
     ) {
         val cleanSsid = ssid.trim()
         if (cleanSsid.isBlank()) {
-            networkMonitor.updateWifi2Status("Enter a Wi-Fi 2 SSID to connect")
+            networkMonitor.updateWifi2Status("Select a Wi-Fi network from the list to connect")
             return
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -211,8 +281,8 @@ class DualWifiConnector(
                 _isConnecting.value = false
                 val currentPrimary = networkMonitor.state.value.wifiLink
                 val displaced = hadPrimaryWifiBefore &&
-                    (currentPrimary == null || currentPrimary.netHandle == network.networkHandle &&
-                        previousPrimaryHandle != null && previousPrimaryHandle != network.networkHandle)
+                    (currentPrimary == null || (currentPrimary.netHandle == network.networkHandle &&
+                        previousPrimaryHandle != null && previousPrimaryHandle != network.networkHandle))
 
                 networkMonitor.registerDirectWifi2Network(network, cleanSsid)
                 if (displaced) {
@@ -238,7 +308,7 @@ class DualWifiConnector(
         }
 
         activeWifi2Callback = callback
-        networkMonitor.updateWifi2Status("Requesting Wi-Fi 2 ($cleanSsid)… approve system prompt")
+        networkMonitor.updateWifi2Status("Connecting to $cleanSsid… approve system Wi-Fi prompt")
         runCatching {
             cm.requestNetwork(request, callback, 25_000)
         }.onFailure { err ->

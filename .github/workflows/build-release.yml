@@ -102,14 +102,20 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Build libaether_core.so (arm64-v8a) via Gradle cargo-ndk integration
+      - name: Build libaether_core.so (arm64-v8a, 16 KB ELF aligned) via Gradle cargo-ndk integration
         env:
           ANDROID_ABI: arm64-v8a
           CARGO_NDK_ANDROID_ABI: arm64-v8a
           CARGO_NDK_CMAKE_TOOLCHAIN_FILE: ${{ env.ANDROID_NDK_HOME }}/build/cmake/android.toolchain.cmake
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
         run: |
           gradle :app:buildRustCore -PrequireRustBuild=true --stacktrace
           ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so
+          readelf -l app/src/main/jniLibs/arm64-v8a/libaether_core.so | grep LOAD
+          readelf -l app/src/main/jniLibs/arm64-v8a/libaether_core.so | grep LOAD | grep -q "0x4000" || {
+            echo "::error::libaether_core.so is NOT 16 KB (0x4000) ELF aligned!";
+            exit 1;
+          }
 
       - name: Compute version & unique package name per build
         id: ver

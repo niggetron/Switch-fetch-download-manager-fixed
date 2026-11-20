@@ -28,9 +28,11 @@ import com.example.engine.DualWifiCapabilityReport
 import com.example.engine.LinkEndpointInfo
 import com.example.engine.NearbyWifiNetwork
 import com.example.engine.NetworkMatrixState
+import com.example.engine.ShizukuWifiState
 import com.example.engine.TelemetrySnapshot
 import com.example.ui.screens.AnimationSimulationState
 import com.example.ui.screens.SpeedSimulationPreset
+import com.example.ui.theme.UiThemeConfig
 import com.example.util.FileOpener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -92,7 +94,13 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
 
     val dualWifiCapabilities: StateFlow<DualWifiCapabilityReport> = dualWifiConnector.capabilities
     val nearbyWifiNetworks: StateFlow<List<NearbyWifiNetwork>> = dualWifiConnector.nearbyNetworks
+    val connectedWifi1Ssid: StateFlow<String> = dualWifiConnector.connectedWifi1Ssid
+    val isScanningWifi: StateFlow<Boolean> = dualWifiConnector.isScanning
     val isConnectingWifi2: StateFlow<Boolean> = dualWifiConnector.isConnecting
+    val shizukuState: StateFlow<ShizukuWifiState> = dualWifiConnector.shizukuHelper.state
+
+    private val _flightSampleCount = MutableStateFlow(DiagnosticsCenter.flightSampleCount())
+    val flightSampleCount: StateFlow<Int> = _flightSampleCount.asStateFlow()
 
     val fontLicenseAudit: String by lazy {
         DiagnosticsCenter.verifyBundledFontLicenses(app)
@@ -191,11 +199,15 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                     val hasActive = downloads.value.any { it.statusEnum.isActive }
                     val snap = telemetryLedger.sampleSnapshot(hasActive)
                     _realTelemetry.value = snap
+                    DiagnosticsCenter.recordFlightSample(snap)
+                    _flightSampleCount.value = DiagnosticsCenter.flightSampleCount()
                     if (ticks % 4 == 0) {
                         _diagnosticsPreview.value = DiagnosticsCenter.exportReport(
                             context = app,
                             backendLabel = AetherNativeBridge.engineBackendLabel,
                             telemetry = snap,
+                            networkState = networkMonitor.state.value,
+                            shizukuState = dualWifiConnector.shizukuHelper.state.value,
                         )
                     }
                     ticks++
@@ -398,6 +410,22 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                     98
                 }
 
+                val simLiveSegments = if (st.simulatedTransferHlsMode) {
+                    val base = (samples / 2L).toInt() + 100
+                    listOf(
+                        "seg_%04d.m4s".format(base),
+                        "seg_%04d.m4s".format(base + 1),
+                        "seg_%04d.m4s".format(base + 2),
+                        "seg_%04d.m4s".format(base + 3),
+                    )
+                } else {
+                    emptyList()
+                }
+                val simW1Workers = if (w1Bps > 0L) 16 else 0
+                val simW2Workers = if (w2Bps > 0L) 16 else 0
+                val simCellWorkers = if (cellBps > 0L) 16 else 0
+                val simUsbWorkers = if (usbBps > 0L) 16 else 0
+
                 _simulatedTelemetry.value = TelemetrySnapshot(
                     instantBps = totalBps,
                     peakBps = peakTotal,
@@ -425,11 +453,11 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                     wifi2HistoryBps = wifi2Hist.toList(),
                     cellHistoryBps = cellHist.toList(),
                     ethHistoryBps = ethHist.toList(),
-                    activeWorkers = 16,
-                    wifiWorkers = if (w1Bps > 0L) 4 else 0,
-                    wifi2Workers = if (w2Bps > 0L) 4 else 0,
-                    cellularWorkers = if (cellBps > 0L) 4 else 0,
-                    ethWorkers = if (usbBps > 0L) 4 else 0,
+                    activeWorkers = simW1Workers + simW2Workers + simCellWorkers + simUsbWorkers,
+                    wifiWorkers = simW1Workers,
+                    wifi2Workers = simW2Workers,
+                    cellularWorkers = simCellWorkers,
+                    ethWorkers = simUsbWorkers,
                     antiDipRescues = rescues,
                     stabilityPercent = stability,
                     activeConnections = simConnections,
@@ -445,6 +473,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                     isNativeRustActive = _realTelemetry.value.isNativeRustActive,
                     isMemfdMapped = false,
                     activeEngineBadge = "SIMULATOR",
+                    recentLiveSegments = simLiveSegments,
                 )
 
                 val realMatrix = networkMonitor.state.value
@@ -585,6 +614,10 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setSimulatedTransferHlsMode(enabled: Boolean) {
+        _simulationState.value = _simulationState.value.copy(simulatedTransferHlsMode = enabled)
+    }
+
     private fun pushRing(q: ArrayDeque<Long>, v: Long) {
         if (q.size >= 48) q.removeFirst()
         q.addLast(v)
@@ -598,7 +631,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Real Engine, Downloads, Network & Settings Controls
+    // Real Engine, Downloads, Network, Diagnostics & Settings Controls
     // ──────────────────────────────────────────────────────────────────────────
 
     fun copyDiagnosticsToClipboard() {
@@ -606,11 +639,84 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
             context = app,
             backendLabel = AetherNativeBridge.engineBackendLabel,
             telemetry = _realTelemetry.value,
+            networkState = networkMonitor.state.value,
+            shizukuState = dualWifiConnector.shizukuHelper.state.value,
         )
         _diagnosticsPreview.value = report
         val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("AetherIO Diagnostics", report))
         _snackbarEvents.tryEmit("Redacted diagnostics report copied to clipboard")
+    }
+
+    fun saveDiagnosticsTxtToUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = DiagnosticsCenter.exportReport(
+                context = app,
+                backendLabel = AetherNativeBridge.engineBackendLabel,
+                telemetry = _realTelemetry.value,
+                networkState = networkMonitor.state.value,
+                shizukuState = dualWifiConnector.shizukuHelper.state.value,
+            )
+            val ok = runCatching {
+                app.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(report.toByteArray(Charsets.UTF_8))
+                }
+                true
+            }.getOrDefault(false)
+            _snackbarEvents.tryEmit(
+                if (ok) "Saved human-readable TXT diagnostic report" else "Failed to write TXT report",
+            )
+        }
+    }
+
+    fun saveDiagnosticsJsonToUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val json = DiagnosticsCenter.exportStructuredJsonTrace(
+                backendLabel = AetherNativeBridge.engineBackendLabel,
+                telemetry = _realTelemetry.value,
+                networkState = networkMonitor.state.value,
+                shizukuState = dualWifiConnector.shizukuHelper.state.value,
+            )
+            val ok = runCatching {
+                app.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(json.toByteArray(Charsets.UTF_8))
+                }
+                true
+            }.getOrDefault(false)
+            _snackbarEvents.tryEmit(
+                if (ok) "Saved structured JSON flight trace" else "Failed to write JSON trace",
+            )
+        }
+    }
+
+    fun shareDiagnosticsBundle() {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val bundle = DiagnosticsCenter.writeShareableBundle(
+                    context = app,
+                    backendLabel = AetherNativeBridge.engineBackendLabel,
+                    telemetry = _realTelemetry.value,
+                    networkState = networkMonitor.state.value,
+                    shizukuState = dualWifiConnector.shizukuHelper.state.value,
+                )
+                val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "*/*"
+                    putParcelableArrayListExtra(
+                        Intent.EXTRA_STREAM,
+                        arrayListOf(bundle.txtUri, bundle.jsonUri),
+                    )
+                    putExtra(Intent.EXTRA_SUBJECT, "AetherIO Omega v9.1 Diagnostic Trace (TXT + JSON)")
+                    putExtra(Intent.EXTRA_TEXT, "Attached: AetherIO Omega flight recorder TXT report + structured JSON trace.")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val chooser = Intent.createChooser(shareIntent, "Share AetherIO Diagnostics").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                app.startActivity(chooser)
+            }.onFailure {
+                _snackbarEvents.tryEmit("Unable to launch share sheet: ${it.message}")
+            }
+        }
     }
 
     fun copyAria2SecretToClipboard() {
@@ -763,12 +869,54 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun scanNearbyWifi() {
-        val list = dualWifiConnector.scanNearbyNetworks()
-        if (list.isEmpty()) {
-            _snackbarEvents.tryEmit("No nearby Wi-Fi results yet (check permission or retry)")
-        } else {
-            _snackbarEvents.tryEmit("Found ${list.size} nearby Wi-Fi networks")
+        viewModelScope.launch {
+            val list = dualWifiConnector.scanNearbyNetworksAsync()
+            if (list.isEmpty()) {
+                _snackbarEvents.tryEmit("No nearby Wi-Fi results yet (grant permission or enable Shizuku)")
+            } else {
+                _snackbarEvents.tryEmit("Found ${list.size} nearby Wi-Fi networks")
+            }
         }
+    }
+
+    fun requestShizukuPermission() {
+        val grantedOrRequested = dualWifiConnector.shizukuHelper.requestPermission()
+        dualWifiConnector.shizukuHelper.refreshStatus()
+        if (grantedOrRequested) {
+            _snackbarEvents.tryEmit("Shizuku permission active / requested")
+        } else {
+            _snackbarEvents.tryEmit("Opening Shizuku app to enable Wireless Debugging service")
+        }
+    }
+
+    fun toggleShizukuLowLatency(enable: Boolean) {
+        viewModelScope.launch {
+            val ok = dualWifiConnector.shizukuHelper.toggleWifiLowLatencyBoost(enable)
+            updateSettings { it.copy(enableShizukuWifiBoost = enable) }
+            _snackbarEvents.tryEmit(
+                if (ok) {
+                    if (enable) "Shizuku Wi-Fi low-latency mode ENABLED" else "Shizuku Wi-Fi low-latency mode disabled"
+                } else {
+                    "Shizuku authorization required for low-latency Wi-Fi lock"
+                },
+            )
+        }
+    }
+
+    fun saveDownloadMd5(id: String, md5: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateMd5(id, md5)
+        }
+    }
+
+    fun saveDownloadSha256(id: String, sha256: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateSha256(id, sha256)
+        }
+    }
+
+    fun updateUiThemeConfig(config: UiThemeConfig) {
+        updateSettings { it.copy(uiThemeConfig = config) }
     }
 
     fun connectDirectWifi2(ssid: String, passphrase: String, band: WifiBandPreference) {

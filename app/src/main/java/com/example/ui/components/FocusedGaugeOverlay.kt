@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Router
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,16 +52,17 @@ import com.example.engine.TelemetrySnapshot
 import com.example.ui.motion.AetherSharedKey
 import com.example.ui.motion.SharedPart
 import com.example.ui.motion.aetherSharedBounds
-import com.example.ui.motion.aetherSharedElement
-import com.example.ui.motion.aetherSkipToLookaheadSize
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
 import com.example.ui.theme.MonoMetricStyle
+import com.example.ui.theme.aetherNeonBorder
+import com.example.ui.theme.contrastOnColor
 import com.example.util.Formatters
 import java.util.Locale
 
 /**
  * Full-screen Motorsport Focused Gauge Cockpit that morphs directly out of any tapped
- * network speedometer (Wi-Fi 1, Mobile 5G, Wi-Fi 2, USB/Eth) using Shared Element Transitions.
+ * network speedometer (Wi-Fi 1, Mobile 5G, Wi-Fi 2, USB/Eth) using root Shared Element Transitions.
  */
 @OptIn(ExperimentalSharedTransitionApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -75,6 +77,7 @@ fun FocusedGaugeOverlay(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     BackHandler(onBack = onDismiss)
 
     val (title, iface, icon, accent, liveBps, peakBps, avgBps, bytesTotal, workers, history, endpoint) = when (gaugeId) {
@@ -138,7 +141,7 @@ fun FocusedGaugeOverlay(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.66f))
+            .background(Color.Black.copy(alpha = 0.72f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -160,7 +163,13 @@ fun FocusedGaugeOverlay(
                 )
                 .clip(RoundedCornerShape(22.dp))
                 .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
-                .border(1.5.dp, accent.copy(alpha = 0.72f), RoundedCornerShape(22.dp))
+                .aetherNeonBorder(
+                    neon = neon,
+                    accent = accent,
+                    cornerRadius = 22.dp,
+                    borderWidth = 1.5.dp,
+                    fallbackBorderColor = accent.copy(alpha = 0.75f),
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -179,21 +188,18 @@ fun FocusedGaugeOverlay(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.aetherSharedElement(
-                        key = AetherSharedKey(gaugeId, SharedPart.GAUGE_TITLE),
-                        useCockpitSpring = true,
-                    ),
+                    modifier = Modifier.weight(1f),
                 ) {
                     Icon(imageVector = icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
                     Column {
                         Text(
                             text = title,
                             style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.aetherSkipToLookaheadSize(),
                         )
                         Text(
-                            text = "Interface $iface · ${if (isOnline) "${workers} Active Workers" else "Standby"}",
+                            text = "Interface $iface · ${if (isOnline) "$workers Active Workers" else "Standby"}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -205,7 +211,11 @@ fun FocusedGaugeOverlay(
                         .size(48.dp)
                         .testTag("close_focused_gauge_button"),
                 ) {
-                    Icon(imageVector = Icons.Filled.Close, contentDescription = "Close focused gauge")
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close focused gauge",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
 
@@ -226,10 +236,6 @@ fun FocusedGaugeOverlay(
                 dialSize = 232.dp,
                 isOnline = isOnline,
                 centerSubtitle = "MAX ${Formatters.formatSpeed(peakBps, useMBpsUnit)}",
-                modifier = Modifier.aetherSharedElement(
-                    key = AetherSharedKey(gaugeId, SharedPart.GAUGE_DIAL),
-                    useCockpitSpring = true,
-                ),
             )
 
             Row(
@@ -260,7 +266,7 @@ fun FocusedGaugeOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.80f))
                     .border(1.dp, ext.cardBorder, RoundedCornerShape(12.dp))
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -301,6 +307,10 @@ fun FocusedGaugeOverlay(
             ) {
                 Button(
                     onClick = { onPulseLinkBurst(gaugeId) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = accent,
+                        contentColor = contrastOnColor(accent),
+                    ),
                     modifier = Modifier
                         .weight(1f)
                         .testTag("pulse_gauge_burst_button"),
@@ -310,7 +320,7 @@ fun FocusedGaugeOverlay(
                     Text("Simulate Redline Burst")
                 }
                 OutlinedButton(onClick = onDismiss) {
-                    Text("Done")
+                    Text("Done", color = MaterialTheme.colorScheme.onSurface)
                 }
             }
         }

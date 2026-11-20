@@ -1,14 +1,14 @@
 package com.example.ui.components
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -76,16 +76,16 @@ import com.example.engine.TelemetrySnapshot
 import com.example.ui.motion.AetherSharedKey
 import com.example.ui.motion.LocalMotionSpeedMultiplier
 import com.example.ui.motion.SharedPart
-import com.example.ui.motion.aetherCockpitBoundsTransform
 import com.example.ui.motion.aetherSharedBounds
-import com.example.ui.motion.aetherSharedElement
-import com.example.ui.motion.aetherSkipToLookaheadSize
 import com.example.ui.motion.aetherSpringSpec
 import com.example.ui.theme.LocalAetherColors
+import com.example.ui.theme.LocalAetherNeonConfig
 import com.example.ui.theme.MonoMetricStyle
+import com.example.ui.theme.aetherNeonBorder
 import com.example.util.Formatters
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -185,11 +185,12 @@ private fun buildQuadGaugeSpecs(
 }
 
 /**
- * Quad-Link Bike/Vehicle Speedometer Cockpit under the Aggregate Throughput card.
- * Uses Jetpack Compose `SharedTransitionLayout` + `AnimatedContent` so switching among all 3
- * motorsport layouts (`SUPERBIKE_GRID` <-> `AUTO_SPORT_DASH` <-> `COMPACT_TACH_STRIP`) physically
- * morphs every gauge card, dial, title, and MAX/AVG readout, while tapping any gauge zooms it into
- * `FocusedGaugeOverlay` via root `aetherSharedBounds`.
+ * Quad-Link Speedometer Cockpit supporting all 6 visual styles:
+ * - SUPERBIKE_GRID, AUTO_SPORT_DASH, COMPACT_TACH_STRIP
+ * - F1_TELEMETRY_HUD, NEON_PLASMA_ARC, RAYBURST_MATRIX_BAR
+ *
+ * Uses a single root SharedTransitionLayout (no nested SharedTransitionLayout) so tapping
+ * any gauge smoothly zooms into `FocusedGaugeOverlay` without blank frames or text overlap.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
@@ -326,49 +327,14 @@ fun PerNetworkSpeedometerCluster(
             }
         }
 
-        // Morphing Speedometer Layout Container:
-        // Local SharedTransitionLayout physically morphs every gauge across the 3 layout styles!
-        SharedTransitionLayout(modifier = Modifier.fillMaxWidth()) {
-            AnimatedContent(
-                targetState = speedometerStyle,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "speedometer_style_shared_morph",
-            ) { style ->
-                when (style) {
-                    SpeedometerStyle.SUPERBIKE_GRID -> {
-                        SuperbikeQuadGrid(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            compact = true,
-                            useEngineTags = false,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                    SpeedometerStyle.AUTO_SPORT_DASH -> {
-                        AutoSportDashStack(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            useEngineTags = false,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                    SpeedometerStyle.COMPACT_TACH_STRIP -> {
-                        CompactTachStripStack(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            useEngineTags = false,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                }
-            }
-        }
+        SpeedometerStyleSwitchContainer(
+            style = speedometerStyle,
+            specs = specs,
+            useMBpsUnit = useMBpsUnit,
+            compact = true,
+            useEngineTags = false,
+            onSelectGauge = onSelectGauge,
+        )
 
         val totalBytes = telemetry.wifiBytesTotal + telemetry.wifi2BytesTotal +
             telemetry.cellBytesTotal + telemetry.ethBytesTotal
@@ -384,12 +350,6 @@ fun PerNetworkSpeedometerCluster(
     }
 }
 
-/**
- * Full Engine-tab Quad-Link Speedometer Dashboard featuring:
- * - Hero Aggregate Multi-Link Superbike Speedometer with cross-tab `HERO_CONTAINER` sharedBounds
- * - Dedicated Morphing Speedometers for Wi-Fi 1, Mobile 5G, Wi-Fi 2, and USB/Eth
- * - Dual-Engine A/B Peak Throughput Comparison (Rust Native vs Kotlin OkHttp)
- */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalSharedTransitionApi::class)
 @Composable
 fun FullSpeedometerDashboardCard(
@@ -405,6 +365,7 @@ fun FullSpeedometerDashboardCard(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     val totalCapacityMbps = networkMatrix.aggregateEstimatedMbps.toFloat().coerceAtLeast(150f)
     val specs = buildQuadGaugeSpecs(telemetry, networkMatrix)
 
@@ -420,9 +381,6 @@ fun FullSpeedometerDashboardCard(
             StatusPill(
                 label = "${telemetry.activeEngineBadge} · ${telemetry.activeWorkers}W",
                 color = ext.emerald,
-                modifier = Modifier.aetherSharedElement(
-                    key = AetherSharedKey("hero", SharedPart.HERO_ENGINE_BADGE),
-                ),
             )
             FilterChip(
                 selected = isSimulating,
@@ -454,7 +412,6 @@ fun FullSpeedometerDashboardCard(
             }
         }
 
-        // Hero Aggregate Quad-Link Speedometer (morphs across Transfers <-> Engine tabs!)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -465,7 +422,7 @@ fun FullSpeedometerDashboardCard(
                 )
                 .clip(RoundedCornerShape(14.dp))
                 .background(Brush.verticalGradient(listOf(ext.heroTop, ext.heroBottom)))
-                .border(1.dp, ext.cardBorder, RoundedCornerShape(14.dp))
+                .aetherNeonBorder(neon = neon, accent = ext.cyan, cornerRadius = 14.dp, fallbackBorderColor = ext.cardBorder)
                 .padding(14.dp)
                 .testTag("speedometer_aggregate"),
             contentAlignment = Alignment.Center,
@@ -524,50 +481,15 @@ fun FullSpeedometerDashboardCard(
             }
         }
 
-        // Render all 4 networks with shared-element morphing across all 3 layouts
-        SharedTransitionLayout(modifier = Modifier.fillMaxWidth()) {
-            AnimatedContent(
-                targetState = speedometerStyle,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "engine_speedometer_style_morph",
-            ) { style ->
-                when (style) {
-                    SpeedometerStyle.SUPERBIKE_GRID -> {
-                        SuperbikeQuadGrid(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            compact = false,
-                            useEngineTags = true,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                    SpeedometerStyle.AUTO_SPORT_DASH -> {
-                        AutoSportDashStack(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            useEngineTags = true,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                    SpeedometerStyle.COMPACT_TACH_STRIP -> {
-                        CompactTachStripStack(
-                            specs = specs,
-                            useMBpsUnit = useMBpsUnit,
-                            useEngineTags = true,
-                            onSelectGauge = onSelectGauge,
-                            layoutSharedScope = this@SharedTransitionLayout,
-                            layoutAnimScope = this@AnimatedContent,
-                        )
-                    }
-                }
-            }
-        }
+        SpeedometerStyleSwitchContainer(
+            style = speedometerStyle,
+            specs = specs,
+            useMBpsUnit = useMBpsUnit,
+            compact = false,
+            useEngineTags = true,
+            onSelectGauge = onSelectGauge,
+        )
 
-        // Dual-Engine A/B Benchmark Comparison Strip
         EngineAbBenchmarkStrip(
             rustPeakBps = telemetry.rustPeakBps,
             kotlinPeakBps = telemetry.kotlinPeakBps,
@@ -576,7 +498,67 @@ fun FullSpeedometerDashboardCard(
     }
 }
 
-@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun SpeedometerStyleSwitchContainer(
+    style: SpeedometerStyle,
+    specs: List<NetworkGaugeSpec>,
+    useMBpsUnit: Boolean,
+    compact: Boolean,
+    useEngineTags: Boolean,
+    onSelectGauge: (String) -> Unit,
+) {
+    val motionSpeed = LocalMotionSpeedMultiplier.current
+    val durMs = (240f / motionSpeed.coerceIn(0.25f, 2f)).toInt().coerceIn(120, 900)
+    AnimatedContent(
+        targetState = style,
+        transitionSpec = {
+            (fadeIn(tween(durMs)) + scaleIn(tween(durMs), initialScale = 0.96f)) togetherWith
+                (fadeOut(tween(durMs / 2)) + scaleOut(tween(durMs / 2), targetScale = 0.97f))
+        },
+        label = "speedometer_style_animated_content",
+    ) { activeStyle ->
+        when (activeStyle) {
+            SpeedometerStyle.SUPERBIKE_GRID -> SuperbikeQuadGrid(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                compact = compact,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+            SpeedometerStyle.AUTO_SPORT_DASH -> AutoSportDashStack(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+            SpeedometerStyle.COMPACT_TACH_STRIP -> CompactTachStripStack(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+            SpeedometerStyle.F1_TELEMETRY_HUD -> F1TelemetryHudStack(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+            SpeedometerStyle.NEON_PLASMA_ARC -> NeonPlasmaArcGrid(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+            SpeedometerStyle.RAYBURST_MATRIX_BAR -> RayburstMatrixBarStack(
+                specs = specs,
+                useMBpsUnit = useMBpsUnit,
+                useEngineTags = useEngineTags,
+                onSelectGauge = onSelectGauge,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SuperbikeQuadGrid(
     specs: List<NetworkGaugeSpec>,
@@ -584,8 +566,6 @@ private fun SuperbikeQuadGrid(
     compact: Boolean,
     useEngineTags: Boolean,
     onSelectGauge: (String) -> Unit,
-    layoutSharedScope: SharedTransitionScope,
-    layoutAnimScope: AnimatedVisibilityScope,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         specs.chunked(2).forEach { pair ->
@@ -599,8 +579,6 @@ private fun SuperbikeQuadGrid(
                         useMBpsUnit = useMBpsUnit,
                         compact = compact,
                         onSelect = { onSelectGauge(spec.id) },
-                        layoutSharedScope = layoutSharedScope,
-                        layoutAnimScope = layoutAnimScope,
                         modifier = Modifier
                             .weight(1f)
                             .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
@@ -618,13 +596,10 @@ private fun SuperbikeDialCard(
     useMBpsUnit: Boolean,
     compact: Boolean,
     onSelect: () -> Unit,
-    layoutSharedScope: SharedTransitionScope,
-    layoutAnimScope: AnimatedVisibilityScope,
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
-    val motionSpeed = LocalMotionSpeedMultiplier.current
-    val styleTransform = aetherCockpitBoundsTransform(motionSpeed)
+    val neon = LocalAetherNeonConfig.current
     val isOnline = spec.endpoint != null || spec.liveBps > 0L
     val breakerDotColor = when (spec.endpoint?.breakerState) {
         BreakerState.CLOSED -> ext.emerald
@@ -637,171 +612,122 @@ private fun SuperbikeDialCard(
     val peakDesc = Formatters.formatSpeed(spec.peakBps, useMBpsUnit)
     val avgDesc = Formatters.formatSpeed(spec.avgBps, useMBpsUnit)
 
-    Box(
-        modifier = modifier.aetherSharedBounds(
-            key = AetherSharedKey(spec.id, SharedPart.GAUGE_CARD),
-            clipShape = RoundedCornerShape(14.dp),
-            useCockpitSpring = true,
-        ),
+    Column(
+        modifier = modifier
+            .aetherSharedBounds(
+                key = AetherSharedKey(spec.id, SharedPart.GAUGE_CARD),
+                clipShape = RoundedCornerShape(14.dp),
+                useCockpitSpring = true,
+            )
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.94f else 0.62f))
+            .aetherNeonBorder(
+                neon = neon,
+                accent = if (spec.liveBps > 0L) spec.accent else ext.cardBorder,
+                cornerRadius = 14.dp,
+                fallbackBorderColor = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.65f) else ext.cardBorder,
+            )
+            .clickable(onClick = onSelect)
+            .padding(if (compact) 9.dp else 11.dp)
+            .semantics {
+                contentDescription = "${spec.title} ${spec.iface} superbike speedometer: live $speedDesc, max $peakDesc, avg $avgDesc, ${spec.workers} active workers. Tap to zoom."
+            },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        with(layoutSharedScope) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .sharedBounds(
-                        sharedContentState = rememberSharedContentState("style_card_${spec.id}"),
-                        animatedVisibilityScope = layoutAnimScope,
-                        boundsTransform = styleTransform,
-                        clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(14.dp)),
-                    )
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.90f else 0.52f))
-                    .border(
-                        width = 1.dp,
-                        color = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.60f) else ext.cardBorder,
-                        shape = RoundedCornerShape(14.dp),
-                    )
-                    .clickable(onClick = onSelect)
-                    .padding(if (compact) 9.dp else 11.dp)
-                    .semantics {
-                        contentDescription = "${spec.title} ${spec.iface} superbike speedometer: live $speedDesc, max $peakDesc, avg $avgDesc, ${spec.workers} active workers, ${Formatters.formatBytes(spec.bytesTotal)} transferred. Tap to focus."
-                    },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.weight(1f),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .sharedElement(
-                                state = rememberSharedContentState("style_title_${spec.id}"),
-                                animatedVisibilityScope = layoutAnimScope,
-                                boundsTransform = styleTransform,
-                            ),
-                    ) {
-                        Icon(
-                            imageVector = spec.icon,
-                            contentDescription = null,
-                            tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(13.dp),
-                        )
-                        Text(
-                            text = spec.shortTitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .aetherSharedElement(
-                                    key = AetherSharedKey(spec.id, SharedPart.GAUGE_TITLE),
-                                    useCockpitSpring = true,
-                                )
-                                .skipToLookaheadSize()
-                                .aetherSkipToLookaheadSize(),
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .clip(CircleShape)
-                                .background(breakerDotColor),
-                        )
-                        Text(
-                            text = if (isOnline) "${spec.workers}W" else "OFF",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-
-                Box(
-                    modifier = Modifier.aetherSharedElement(
-                        key = AetherSharedKey(spec.id, SharedPart.GAUGE_DIAL),
-                        useCockpitSpring = true,
-                    ),
-                ) {
-                    RadialSpeedometerGauge(
-                        speedBps = spec.liveBps,
-                        peakBps = spec.peakBps,
-                        avgBps = spec.avgBps,
-                        capacityHintMbps = capacityMbps,
-                        accentStart = spec.accent,
-                        accentEnd = spec.accent.copy(alpha = 0.72f),
-                        peakMarkerColor = ext.amber,
-                        avgMarkerColor = ext.cyan,
-                        useMBpsUnit = useMBpsUnit,
-                        dialSize = if (compact) 114.dp else 132.dp,
-                        isOnline = isOnline,
-                        centerSubtitle = if (spec.endpoint != null) spec.iface else "STANDBY",
-                        modifier = Modifier.sharedElement(
-                            state = rememberSharedContentState("style_dial_${spec.id}"),
-                            animatedVisibilityScope = layoutAnimScope,
-                            boundsTransform = styleTransform,
-                        ),
-                    )
-                }
-
-                // MAX & AVG Motorsport Telemetry Readout Chips
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    GaugeStatChip(
-                        label = "MAX",
-                        value = compactMetric(spec.peakBps, useMBpsUnit),
-                        color = ext.amber,
-                        modifier = Modifier
-                            .weight(1f)
-                            .sharedBounds(
-                                sharedContentState = rememberSharedContentState("style_max_${spec.id}"),
-                                animatedVisibilityScope = layoutAnimScope,
-                                boundsTransform = styleTransform,
-                            ),
-                    )
-                    GaugeStatChip(
-                        label = "AVG",
-                        value = compactMetric(spec.avgBps, useMBpsUnit),
-                        color = spec.accent,
-                        modifier = Modifier
-                            .weight(1f)
-                            .sharedBounds(
-                                sharedContentState = rememberSharedContentState("style_avg_${spec.id}"),
-                                animatedVisibilityScope = layoutAnimScope,
-                                boundsTransform = styleTransform,
-                            ),
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = Formatters.formatBytes(spec.bytesTotal),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                    Text(
-                        text = spec.endpoint?.let { String.format(Locale.US, "%.0fM", it.downstreamKbps / 1000.0) } ?: "Offline",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = if (isOnline) spec.accent.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
+                Icon(
+                    imageVector = spec.icon,
+                    contentDescription = null,
+                    tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(13.dp),
+                )
+                Text(
+                    text = spec.shortTitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(breakerDotColor),
+                )
+                Text(
+                    text = if (isOnline) "${spec.workers}W" else "OFF",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        RadialSpeedometerGauge(
+            speedBps = spec.liveBps,
+            peakBps = spec.peakBps,
+            avgBps = spec.avgBps,
+            capacityHintMbps = capacityMbps,
+            accentStart = spec.accent,
+            accentEnd = spec.accent.copy(alpha = 0.72f),
+            peakMarkerColor = ext.amber,
+            avgMarkerColor = ext.cyan,
+            useMBpsUnit = useMBpsUnit,
+            dialSize = if (compact) 114.dp else 132.dp,
+            isOnline = isOnline,
+            centerSubtitle = if (spec.endpoint != null) spec.iface else "STANDBY",
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            GaugeStatChip(
+                label = "MAX",
+                value = compactMetric(spec.peakBps, useMBpsUnit),
+                color = ext.amber,
+                modifier = Modifier.weight(1f),
+            )
+            GaugeStatChip(
+                label = "AVG",
+                value = compactMetric(spec.avgBps, useMBpsUnit),
+                color = spec.accent,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = Formatters.formatBytes(spec.bytesTotal),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Text(
+                text = spec.endpoint?.let { String.format(Locale.US, "%.0fM", it.downstreamKbps / 1000.0) } ?: "Offline",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
         }
     }
 }
@@ -813,18 +739,15 @@ private fun AutoSportDashStack(
     useMBpsUnit: Boolean,
     useEngineTags: Boolean,
     onSelectGauge: (String) -> Unit,
-    layoutSharedScope: SharedTransitionScope,
-    layoutAnimScope: AnimatedVisibilityScope,
 ) {
     val ext = LocalAetherColors.current
-    val motionSpeed = LocalMotionSpeedMultiplier.current
-    val styleTransform = aetherCockpitBoundsTransform(motionSpeed)
+    val neon = LocalAetherNeonConfig.current
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         specs.forEach { spec ->
             val isOnline = spec.endpoint != null || spec.liveBps > 0L
             val capacityMbps = (spec.endpoint?.downstreamKbps?.div(1000f) ?: 100f).coerceAtLeast(25f)
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aetherSharedBounds(
@@ -832,156 +755,92 @@ private fun AutoSportDashStack(
                         clipShape = RoundedCornerShape(14.dp),
                         useCockpitSpring = true,
                     )
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.94f else 0.62f))
+                    .aetherNeonBorder(
+                        neon = neon,
+                        accent = if (spec.liveBps > 0L) spec.accent else ext.cardBorder,
+                        cornerRadius = 14.dp,
+                        fallbackBorderColor = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.6f) else ext.cardBorder,
+                    )
+                    .clickable { onSelectGauge(spec.id) }
+                    .padding(10.dp)
                     .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                with(layoutSharedScope) {
+                RadialSpeedometerGauge(
+                    speedBps = spec.liveBps,
+                    peakBps = spec.peakBps,
+                    avgBps = spec.avgBps,
+                    capacityHintMbps = capacityMbps,
+                    accentStart = spec.accent,
+                    accentEnd = ext.emerald,
+                    peakMarkerColor = ext.amber,
+                    avgMarkerColor = ext.cyan,
+                    useMBpsUnit = useMBpsUnit,
+                    dialSize = 94.dp,
+                    isOnline = isOnline,
+                    centerSubtitle = if (isOnline) "${spec.workers}W" else "OFF",
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sharedBounds(
-                                sharedContentState = rememberSharedContentState("style_card_${spec.id}"),
-                                animatedVisibilityScope = layoutAnimScope,
-                                boundsTransform = styleTransform,
-                                clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(14.dp)),
-                            )
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.90f else 0.52f))
-                            .border(
-                                width = 1.dp,
-                                color = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.60f) else ext.cardBorder,
-                                shape = RoundedCornerShape(14.dp),
-                            )
-                            .clickable { onSelectGauge(spec.id) }
-                            .padding(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Box(
-                            modifier = Modifier.aetherSharedElement(
-                                key = AetherSharedKey(spec.id, SharedPart.GAUGE_DIAL),
-                                useCockpitSpring = true,
-                            ),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            modifier = Modifier.weight(1f),
                         ) {
-                            RadialSpeedometerGauge(
-                                speedBps = spec.liveBps,
-                                peakBps = spec.peakBps,
-                                avgBps = spec.avgBps,
-                                capacityHintMbps = capacityMbps,
-                                accentStart = spec.accent,
-                                accentEnd = ext.emerald,
-                                peakMarkerColor = ext.amber,
-                                avgMarkerColor = ext.cyan,
-                                useMBpsUnit = useMBpsUnit,
-                                dialSize = 94.dp,
-                                isOnline = isOnline,
-                                centerSubtitle = if (isOnline) "${spec.workers}W" else "OFF",
-                                modifier = Modifier.sharedElement(
-                                    state = rememberSharedContentState("style_dial_${spec.id}"),
-                                    animatedVisibilityScope = layoutAnimScope,
-                                    boundsTransform = styleTransform,
-                                ),
+                            Icon(
+                                imageVector = spec.icon,
+                                contentDescription = null,
+                                tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp),
+                            )
+                            Text(
+                                text = "${spec.title} · ${spec.iface}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .sharedElement(
-                                            state = rememberSharedContentState("style_title_${spec.id}"),
-                                            animatedVisibilityScope = layoutAnimScope,
-                                            boundsTransform = styleTransform,
-                                        ),
-                                ) {
-                                    Icon(
-                                        imageVector = spec.icon,
-                                        contentDescription = null,
-                                        tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(15.dp),
-                                    )
-                                    Text(
-                                        text = "${spec.title} · ${spec.iface}",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier
-                                            .aetherSharedElement(
-                                                key = AetherSharedKey(spec.id, SharedPart.GAUGE_TITLE),
-                                                useCockpitSpring = true,
-                                            )
-                                            .skipToLookaheadSize()
-                                            .aetherSkipToLookaheadSize(),
-                                    )
-                                }
-                                Text(
-                                    text = if (isOnline) "${spec.workers}W" else "OFF",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                GaugeStatChip(
-                                    label = "LIVE",
-                                    value = compactMetric(spec.liveBps, useMBpsUnit),
-                                    color = spec.accent,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                GaugeStatChip(
-                                    label = "MAX",
-                                    value = compactMetric(spec.peakBps, useMBpsUnit),
-                                    color = ext.amber,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .sharedBounds(
-                                            sharedContentState = rememberSharedContentState("style_max_${spec.id}"),
-                                            animatedVisibilityScope = layoutAnimScope,
-                                            boundsTransform = styleTransform,
-                                        ),
-                                )
-                                GaugeStatChip(
-                                    label = "AVG",
-                                    value = compactMetric(spec.avgBps, useMBpsUnit),
-                                    color = ext.emerald,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .sharedBounds(
-                                            sharedContentState = rememberSharedContentState("style_avg_${spec.id}"),
-                                            animatedVisibilityScope = layoutAnimScope,
-                                            boundsTransform = styleTransform,
-                                        ),
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(
-                                    text = "Pulled ${Formatters.formatBytes(spec.bytesTotal)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    text = spec.endpoint?.let {
-                                        String.format(Locale.US, "Cap %.0f Mbps", it.downstreamKbps / 1000.0)
-                                    } ?: "Standby",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = spec.accent.copy(alpha = 0.85f),
-                                )
-                            }
-                        }
+                        Text(
+                            text = if (isOnline) "${spec.workers}W" else "OFF",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        GaugeStatChip("LIVE", compactMetric(spec.liveBps, useMBpsUnit), spec.accent, Modifier.weight(1f))
+                        GaugeStatChip("MAX", compactMetric(spec.peakBps, useMBpsUnit), ext.amber, Modifier.weight(1f))
+                        GaugeStatChip("AVG", compactMetric(spec.avgBps, useMBpsUnit), ext.emerald, Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "Pulled ${Formatters.formatBytes(spec.bytesTotal)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = spec.endpoint?.let {
+                                String.format(Locale.US, "Cap %.0f Mbps", it.downstreamKbps / 1000.0)
+                            } ?: "Standby",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = spec.accent,
+                        )
                     }
                 }
             }
@@ -996,12 +855,10 @@ private fun CompactTachStripStack(
     useMBpsUnit: Boolean,
     useEngineTags: Boolean,
     onSelectGauge: (String) -> Unit,
-    layoutSharedScope: SharedTransitionScope,
-    layoutAnimScope: AnimatedVisibilityScope,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     val motionSpeed = LocalMotionSpeedMultiplier.current
-    val styleTransform = aetherCockpitBoundsTransform(motionSpeed)
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         specs.forEach { spec ->
@@ -1017,7 +874,7 @@ private fun CompactTachStripStack(
             )
             val peakFrac = (peakMbps / scaleMax).coerceIn(0f, 1f)
 
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aetherSharedBounds(
@@ -1025,141 +882,534 @@ private fun CompactTachStripStack(
                         clipShape = RoundedCornerShape(10.dp),
                         useCockpitSpring = true,
                     )
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.92f else 0.56f))
+                    .aetherNeonBorder(
+                        neon = neon,
+                        accent = if (spec.liveBps > 0L) spec.accent else ext.cardBorder,
+                        cornerRadius = 10.dp,
+                        fallbackBorderColor = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.55f) else ext.cardBorder,
+                    )
+                    .clickable { onSelectGauge(spec.id) }
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
                     .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                with(layoutSharedScope) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = spec.icon,
+                            contentDescription = null,
+                            tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            text = "${spec.shortTitle} (${spec.iface})",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(
+                        text = "${Formatters.formatSpeed(spec.liveBps, useMBpsUnit)} · ${if (isOnline) "${spec.workers}W" else "OFF"}",
+                        style = MonoMetricStyle.copy(fontSize = 12.sp),
+                        color = if (spec.liveBps > 0L) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                val ledInactive = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp),
+                ) {
+                    val segments = 20
+                    val gap = 2.5.dp.toPx()
+                    val segW = ((size.width - gap * (segments - 1)) / segments).coerceAtLeast(2f)
+                    val radius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                    for (i in 0 until segments) {
+                        val frac = (i + 1).toFloat() / segments.toFloat()
+                        val lit = isOnline && frac <= liveFrac + 0.02f && liveFrac > 0.005f
+                        val isPeakCell = peakFrac > 0.02f && abs(frac - peakFrac) <= (1f / segments)
+                        val color = when {
+                            lit && frac >= REDLINE_START_FRACTION -> ext.rose
+                            lit && frac >= 0.65f -> ext.amber
+                            lit -> spec.accent
+                            isPeakCell -> ext.amber.copy(alpha = 0.7f)
+                            else -> ledInactive
+                        }
+                        drawRoundRect(
+                            color = color,
+                            topLeft = Offset(i * (segW + gap), 0f),
+                            size = Size(segW, size.height),
+                            cornerRadius = radius,
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "MAX ${Formatters.formatSpeed(spec.peakBps, useMBpsUnit)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = ext.amber,
+                    )
+                    Text(
+                        text = "AVG ${Formatters.formatSpeed(spec.avgBps, useMBpsUnit)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = ext.cyan,
+                    )
+                    Text(
+                        text = Formatters.formatBytes(spec.bytesTotal),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Style 4: Formula 1 Halo Telemetry HUD with 15 shift-LED rev lights, gear-style worker badge,
+ * and big monospace pit-wall speed readout.
+ */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun F1TelemetryHudStack(
+    specs: List<NetworkGaugeSpec>,
+    useMBpsUnit: Boolean,
+    useEngineTags: Boolean,
+    onSelectGauge: (String) -> Unit,
+) {
+    val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
+    val inactiveLed = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        specs.forEach { spec ->
+            val isOnline = spec.endpoint != null || spec.liveBps > 0L
+            val speedMbps = ((spec.liveBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+            val peakMbps = ((spec.peakBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+            val capMbps = (spec.endpoint?.downstreamKbps?.div(1000f) ?: 120f).coerceAtLeast(25f)
+            val scaleMax = computeAutoScaleCeilingMbps(speedMbps, peakMbps, capMbps)
+            val liveFrac by animateFloatAsState(
+                targetValue = (speedMbps / scaleMax).coerceIn(0f, 1f),
+                animationSpec = aetherSpringSpec(motionSpeed, dampingRatio = 0.72f, stiffness = 280f),
+                label = "f1_hud_${spec.id}",
+            )
+            val (valText, unitText) = formatValueAndUnit(spec.liveBps, useMBpsUnit)
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aetherSharedBounds(
+                        key = AetherSharedKey(spec.id, SharedPart.GAUGE_CARD),
+                        clipShape = RoundedCornerShape(12.dp),
+                        useCockpitSpring = true,
+                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.95f else 0.58f))
+                    .aetherNeonBorder(
+                        neon = neon,
+                        accent = if (spec.liveBps > 0L) spec.accent else ext.cardBorder,
+                        cornerRadius = 12.dp,
+                        fallbackBorderColor = ext.cardBorder,
+                    )
+                    .clickable { onSelectGauge(spec.id) }
+                    .padding(10.dp)
+                    .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // F1 15-LED Halo Shift Lights (5 Emerald -> 5 Amber -> 5 Crimson/Violet)
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp),
+                ) {
+                    val leds = 15
+                    val gap = 4.dp.toPx()
+                    val diameter = minOf(size.height, (size.width - gap * (leds - 1)) / leds)
+                    val radius = diameter / 2f
+                    val totalW = leds * diameter + (leds - 1) * gap
+                    val startX = (size.width - totalW) / 2f
+                    for (i in 0 until leds) {
+                        val frac = (i + 1).toFloat() / leds.toFloat()
+                        val lit = isOnline && frac <= liveFrac + 0.03f && liveFrac > 0.005f
+                        val ledColor = when {
+                            !lit -> inactiveLed
+                            i < 5 -> ext.emerald
+                            i < 10 -> ext.amber
+                            else -> ext.rose
+                        }
+                        val cx = startX + i * (diameter + gap) + radius
+                        if (lit && neon.enabled) {
+                            drawCircle(
+                                color = ledColor.copy(alpha = 0.35f * neon.intensity),
+                                radius = radius * 1.65f,
+                                center = Offset(cx, size.height / 2f),
+                            )
+                        }
+                        drawCircle(color = ledColor, radius = radius, center = Offset(cx, size.height / 2f))
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Gear-style Stream Indicator Box
                     Column(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .sharedBounds(
-                                sharedContentState = rememberSharedContentState("style_card_${spec.id}"),
-                                animatedVisibilityScope = layoutAnimScope,
-                                boundsTransform = styleTransform,
-                                clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(10.dp)),
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(spec.accent.copy(alpha = 0.14f))
+                            .border(1.dp, spec.accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            text = if (isOnline) "W${spec.workers}" else "N",
+                            style = MonoMetricStyle.copy(fontSize = 16.sp, fontWeight = FontWeight.Black),
+                            color = spec.accent,
+                        )
+                        Text(
+                            text = spec.shortTitle,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "$valText $unitText",
+                            style = MonoMetricStyle.copy(fontSize = 20.sp, fontWeight = FontWeight.Black),
+                            color = if (spec.liveBps > 0L) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "${spec.iface} · MAX ${compactMetric(spec.peakBps, useMBpsUnit)} · AVG ${compactMetric(spec.avgBps, useMBpsUnit)}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    StatusPill(
+                        label = "${(liveFrac * 100).toInt()}%",
+                        color = if (liveFrac >= REDLINE_START_FRACTION) ext.rose else spec.accent,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Style 5: Neon Plasma Arc — Dual concentric glowing 300° cyber arcs (outer = live, inner = AVG)
+ * with luminous peak dot in a 2×2 high-contrast grid.
+ */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun NeonPlasmaArcGrid(
+    specs: List<NetworkGaugeSpec>,
+    useMBpsUnit: Boolean,
+    useEngineTags: Boolean,
+    onSelectGauge: (String) -> Unit,
+) {
+    val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
+    val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        specs.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                pair.forEach { spec ->
+                    val isOnline = spec.endpoint != null || spec.liveBps > 0L
+                    val speedMbps = ((spec.liveBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+                    val peakMbps = ((spec.peakBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+                    val avgMbps = ((spec.avgBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+                    val capMbps = (spec.endpoint?.downstreamKbps?.div(1000f) ?: 100f).coerceAtLeast(25f)
+                    val scaleMax = computeAutoScaleCeilingMbps(speedMbps, peakMbps, capMbps)
+                    val animLive by animateFloatAsState(
+                        targetValue = (speedMbps / scaleMax).coerceIn(0f, 1f),
+                        animationSpec = aetherSpringSpec(motionSpeed, dampingRatio = 0.74f, stiffness = 210f),
+                        label = "plasma_arc_${spec.id}",
+                    )
+                    val avgFrac = (avgMbps / scaleMax).coerceIn(0f, 1f)
+                    val (valText, unitText) = formatValueAndUnit(spec.liveBps, useMBpsUnit)
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .aetherSharedBounds(
+                                key = AetherSharedKey(spec.id, SharedPart.GAUGE_CARD),
+                                clipShape = RoundedCornerShape(16.dp),
+                                useCockpitSpring = true,
                             )
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.88f else 0.48f))
-                            .border(
-                                width = 1.dp,
-                                color = if (spec.liveBps > 0L) spec.accent.copy(alpha = 0.55f) else ext.cardBorder,
-                                shape = RoundedCornerShape(10.dp),
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.94f else 0.58f))
+                            .aetherNeonBorder(
+                                neon = neon,
+                                accent = spec.accent,
+                                cornerRadius = 16.dp,
+                                fallbackBorderColor = spec.accent.copy(alpha = 0.45f),
                             )
                             .clickable { onSelectGauge(spec.id) }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                            .padding(10.dp)
+                            .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.sharedElement(
-                                    state = rememberSharedContentState("style_title_${spec.id}"),
-                                    animatedVisibilityScope = layoutAnimScope,
-                                    boundsTransform = styleTransform,
-                                ),
-                            ) {
-                                Icon(
-                                    imageVector = spec.icon,
-                                    contentDescription = null,
-                                    tint = if (isOnline) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                                Text(
-                                    text = "${spec.shortTitle} (${spec.iface})",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isOnline) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .aetherSharedElement(
-                                            key = AetherSharedKey(spec.id, SharedPart.GAUGE_TITLE),
-                                            useCockpitSpring = true,
-                                        )
-                                        .skipToLookaheadSize()
-                                        .aetherSkipToLookaheadSize(),
-                                )
-                            }
                             Text(
-                                text = "${Formatters.formatSpeed(spec.liveBps, useMBpsUnit)} · ${if (isOnline) "${spec.workers}W" else "OFF"}",
-                                style = MonoMetricStyle.copy(fontSize = 12.sp),
-                                color = if (spec.liveBps > 0L) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-
-                        // Segmented Racing RPM Shift-Light Bar (20 LED cells, turning red at redline)
-                        val ledInactive = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        Canvas(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(10.dp)
-                                .sharedElement(
-                                    state = rememberSharedContentState("style_dial_${spec.id}"),
-                                    animatedVisibilityScope = layoutAnimScope,
-                                    boundsTransform = styleTransform,
-                                )
-                                .aetherSharedElement(
-                                    key = AetherSharedKey(spec.id, SharedPart.GAUGE_DIAL),
-                                    useCockpitSpring = true,
-                                ),
-                        ) {
-                            val segments = 20
-                            val gap = 2.5.dp.toPx()
-                            val segW = ((size.width - gap * (segments - 1)) / segments).coerceAtLeast(2f)
-                            val radius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
-                            for (i in 0 until segments) {
-                                val frac = (i + 1).toFloat() / segments.toFloat()
-                                val lit = isOnline && frac <= liveFrac + 0.02f && liveFrac > 0.005f
-                                val isPeakCell = peakFrac > 0.02f && kotlin.math.abs(frac - peakFrac) <= (1f / segments)
-                                val color = when {
-                                    lit && frac >= REDLINE_START_FRACTION -> ext.rose
-                                    lit && frac >= 0.65f -> ext.amber
-                                    lit -> spec.accent
-                                    isPeakCell -> ext.amber.copy(alpha = 0.7f)
-                                    else -> ledInactive
-                                }
-                                drawRoundRect(
-                                    color = color,
-                                    topLeft = Offset(i * (segW + gap), 0f),
-                                    size = Size(segW, size.height),
-                                    cornerRadius = radius,
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = "MAX ${Formatters.formatSpeed(spec.peakBps, useMBpsUnit)}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = ext.amber,
-                                modifier = Modifier.sharedBounds(
-                                    sharedContentState = rememberSharedContentState("style_max_${spec.id}"),
-                                    animatedVisibilityScope = layoutAnimScope,
-                                    boundsTransform = styleTransform,
-                                ),
+                                text = spec.shortTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = spec.accent,
                             )
                             Text(
-                                text = "AVG ${Formatters.formatSpeed(spec.avgBps, useMBpsUnit)}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = ext.cyan,
-                                modifier = Modifier.sharedBounds(
-                                    sharedContentState = rememberSharedContentState("style_avg_${spec.id}"),
-                                    animatedVisibilityScope = layoutAnimScope,
-                                    boundsTransform = styleTransform,
-                                ),
-                            )
-                            Text(
-                                text = Formatters.formatBytes(spec.bytesTotal),
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                text = if (isOnline) "${spec.workers}W" else "OFF",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        Box(
+                            modifier = Modifier.size(108.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val outerStroke = 8.dp.toPx()
+                                val innerStroke = 4.dp.toPx()
+                                val pad = outerStroke
+                                val outerSize = Size(size.width - pad * 2f, size.height - pad * 2f)
+                                val innerPad = pad + outerStroke * 1.15f
+                                val innerSize = Size(size.width - innerPad * 2f, size.height - innerPad * 2f)
+
+                                drawArc(
+                                    color = trackColor,
+                                    startAngle = 120f,
+                                    sweepAngle = 300f,
+                                    useCenter = false,
+                                    topLeft = Offset(pad, pad),
+                                    size = outerSize,
+                                    style = Stroke(outerStroke, cap = StrokeCap.Round),
+                                )
+                                if (animLive > 0.005f) {
+                                    if (neon.enabled) {
+                                        drawArc(
+                                            color = spec.accent.copy(alpha = 0.28f * neon.intensity),
+                                            startAngle = 120f,
+                                            sweepAngle = 300f * animLive,
+                                            useCenter = false,
+                                            topLeft = Offset(pad, pad),
+                                            size = outerSize,
+                                            style = Stroke(outerStroke * 1.9f, cap = StrokeCap.Round),
+                                        )
+                                    }
+                                    drawArc(
+                                        brush = Brush.sweepGradient(listOf(spec.accent, ext.neonGlow, ext.emerald, spec.accent)),
+                                        startAngle = 120f,
+                                        sweepAngle = 300f * animLive,
+                                        useCenter = false,
+                                        topLeft = Offset(pad, pad),
+                                        size = outerSize,
+                                        style = Stroke(outerStroke, cap = StrokeCap.Round),
+                                    )
+                                }
+                                // Inner AVG plasma ring
+                                drawArc(
+                                    color = trackColor.copy(alpha = 0.5f),
+                                    startAngle = 120f,
+                                    sweepAngle = 300f,
+                                    useCenter = false,
+                                    topLeft = Offset(innerPad, innerPad),
+                                    size = innerSize,
+                                    style = Stroke(innerStroke, cap = StrokeCap.Round),
+                                )
+                                if (avgFrac > 0.005f) {
+                                    drawArc(
+                                        color = ext.amber,
+                                        startAngle = 120f,
+                                        sweepAngle = 300f * avgFrac,
+                                        useCenter = false,
+                                        topLeft = Offset(innerPad, innerPad),
+                                        size = innerSize,
+                                        style = Stroke(innerStroke, cap = StrokeCap.Round),
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = valText,
+                                    style = MonoMetricStyle.copy(fontSize = 15.sp, fontWeight = FontWeight.Bold),
+                                    color = if (spec.liveBps > 0L) spec.accent else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = unitText,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Text(
+                            text = "MAX ${compactMetric(spec.peakBps, useMBpsUnit)} · AVG ${compactMetric(spec.avgBps, useMBpsUnit)}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Style 6: Rayburst Matrix Bar — 32-cell glowing micro-bar per link with live worker pulse
+ * inspired by the Rayburst recording.
+ */
+@OptIn(ExperimentalSharedTransitionApi::class)
+@Composable
+private fun RayburstMatrixBarStack(
+    specs: List<NetworkGaugeSpec>,
+    useMBpsUnit: Boolean,
+    useEngineTags: Boolean,
+    onSelectGauge: (String) -> Unit,
+) {
+    val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
+    val motionSpeed = LocalMotionSpeedMultiplier.current
+    val offCell = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        specs.forEach { spec ->
+            val isOnline = spec.endpoint != null || spec.liveBps > 0L
+            val speedMbps = ((spec.liveBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+            val peakMbps = ((spec.peakBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
+            val capMbps = (spec.endpoint?.downstreamKbps?.div(1000f) ?: 100f).coerceAtLeast(25f)
+            val scaleMax = computeAutoScaleCeilingMbps(speedMbps, peakMbps, capMbps)
+            val liveFrac by animateFloatAsState(
+                targetValue = (speedMbps / scaleMax).coerceIn(0f, 1f),
+                animationSpec = aetherSpringSpec(motionSpeed, dampingRatio = 0.80f, stiffness = 260f),
+                label = "rayburst_bar_${spec.id}",
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aetherSharedBounds(
+                        key = AetherSharedKey(spec.id, SharedPart.GAUGE_CARD),
+                        clipShape = RoundedCornerShape(12.dp),
+                        useCockpitSpring = true,
+                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isOnline) 0.94f else 0.56f))
+                    .aetherNeonBorder(
+                        neon = neon,
+                        accent = if (spec.liveBps > 0L) spec.accent else ext.cardBorder,
+                        cornerRadius = 12.dp,
+                        fallbackBorderColor = ext.cardBorder,
+                    )
+                    .clickable { onSelectGauge(spec.id) }
+                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                    .testTag(if (useEngineTags) spec.engineTestTag else spec.testTag),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(spec.icon, contentDescription = null, tint = spec.accent, modifier = Modifier.size(15.dp))
+                        Text(
+                            text = "${spec.shortTitle} · ${spec.iface}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    Text(
+                        text = "${Formatters.formatSpeed(spec.liveBps, useMBpsUnit)} · ${spec.workers}W",
+                        style = MonoMetricStyle.copy(fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                        color = if (spec.liveBps > 0L) spec.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                // Dual-row 32-column Rayburst LED dot matrix
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(16.dp),
+                ) {
+                    val cols = 32
+                    val rows = 2
+                    val gapX = 2.dp.toPx()
+                    val gapY = 2.5.dp.toPx()
+                    val cellW = ((size.width - gapX * (cols - 1)) / cols).coerceAtLeast(2f)
+                    val cellH = ((size.height - gapY * (rows - 1)) / rows).coerceAtLeast(3f)
+                    val corner = CornerRadius(1.5.dp.toPx(), 1.5.dp.toPx())
+                    for (c in 0 until cols) {
+                        val frac = (c + 1).toFloat() / cols.toFloat()
+                        val lit = isOnline && frac <= liveFrac + 0.015f && liveFrac > 0.005f
+                        val baseCol = when {
+                            !lit -> offCell
+                            frac >= REDLINE_START_FRACTION -> ext.rose
+                            frac >= 0.62f -> ext.amber
+                            else -> spec.accent
+                        }
+                        for (r in 0 until rows) {
+                            val topLeft = Offset(c * (cellW + gapX), r * (cellH + gapY))
+                            drawRoundRect(
+                                color = if (lit && r == 1) baseCol.copy(alpha = 0.72f) else baseCol,
+                                topLeft = topLeft,
+                                size = Size(cellW, cellH),
+                                cornerRadius = corner,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "MAX ${Formatters.formatSpeed(spec.peakBps, useMBpsUnit)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = ext.amber,
+                    )
+                    Text(
+                        text = "AVG ${Formatters.formatSpeed(spec.avgBps, useMBpsUnit)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = ext.emerald,
+                    )
+                    Text(
+                        text = Formatters.formatBytes(spec.bytesTotal),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1176,8 +1426,8 @@ private fun GaugeStatChip(
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(7.dp))
-            .background(color.copy(alpha = 0.10f))
-            .border(1.dp, color.copy(alpha = 0.25f), RoundedCornerShape(7.dp))
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.28f), RoundedCornerShape(7.dp))
             .padding(horizontal = 6.dp, vertical = 3.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -1197,13 +1447,6 @@ private fun GaugeStatChip(
     }
 }
 
-/**
- * Hardware-accelerated Compose Canvas 260° superbike precision radial speedometer dial with:
- * - Calibrated perimeter major/minor ticks + Crimson Redline zone (84%-100%)
- * - Motion-speed-aware spring-damped tapered motorsport needle with center pivot hub
- * - Glowing active arc sweep + auto-ranging full-scale ceiling (25 -> 2500 Mbps)
- * - Amber peak-hold marker + Cyan/Violet AVG marker ticks on the dial arc
- */
 @Composable
 fun RadialSpeedometerGauge(
     speedBps: Long,
@@ -1221,6 +1464,7 @@ fun RadialSpeedometerGauge(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
+    val neon = LocalAetherNeonConfig.current
     val motionSpeed = LocalMotionSpeedMultiplier.current
     val speedMbps = ((speedBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
     val peakMbps = ((peakBps.coerceAtLeast(0L) * 8.0) / 1_000_000.0).toFloat()
@@ -1241,7 +1485,7 @@ fun RadialSpeedometerGauge(
     val avgFraction = (avgMbps / scaleMaxMbps).coerceIn(0f, 1f)
 
     val trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
-    val tickDimColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f)
+    val tickDimColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.32f)
     val hubColor = MaterialTheme.colorScheme.onSurface
     val redlineColor = ext.rose
 
@@ -1266,7 +1510,6 @@ fun RadialSpeedometerGauge(
             val center = Offset(size.width / 2f, size.height / 2f)
             val radius = (arcSize.minDimension / 2f)
 
-            // Background 260° track
             drawArc(
                 color = trackColor,
                 startAngle = DIAL_START_DEG,
@@ -1277,7 +1520,6 @@ fun RadialSpeedometerGauge(
                 style = Stroke(width = strokePx, cap = StrokeCap.Round),
             )
 
-            // Superbike Redline zone arc (84% -> 100%)
             val redlineStartDeg = DIAL_START_DEG + DIAL_SWEEP_DEG * REDLINE_START_FRACTION
             val redlineSweepDeg = DIAL_SWEEP_DEG * (1f - REDLINE_START_FRACTION)
             drawArc(
@@ -1290,7 +1532,6 @@ fun RadialSpeedometerGauge(
                 style = Stroke(width = strokePx, cap = StrokeCap.Round),
             )
 
-            // Calibrated perimeter ticks (26 divisions)
             val totalTicks = 26
             for (i in 0..totalTicks) {
                 val frac = i.toFloat() / totalTicks.toFloat()
@@ -1324,18 +1565,18 @@ fun RadialSpeedometerGauge(
                 )
             }
 
-            // Active glowing progress sweep
             if (animatedFraction > 0.003f) {
                 val sweep = DIAL_SWEEP_DEG * animatedFraction
                 val sweepAccent = if (animatedFraction >= REDLINE_START_FRACTION) redlineColor else accentStart
+                val haloAlpha = if (neon.enabled) (0.20f + 0.24f * neon.intensity) else 0.14f
                 drawArc(
-                    color = sweepAccent.copy(alpha = 0.22f),
+                    color = sweepAccent.copy(alpha = haloAlpha),
                     startAngle = DIAL_START_DEG,
                     sweepAngle = sweep,
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = strokePx * 1.65f, cap = StrokeCap.Round),
+                    style = Stroke(width = strokePx * (if (neon.enabled) 1.85f else 1.45f), cap = StrokeCap.Round),
                 )
                 drawArc(
                     brush = Brush.horizontalGradient(listOf(accentStart, if (animatedFraction >= REDLINE_START_FRACTION) redlineColor else accentEnd)),
@@ -1348,7 +1589,6 @@ fun RadialSpeedometerGauge(
                 )
             }
 
-            // AVG marker tick on arc
             if (avgFraction > 0.01f) {
                 val avgRad = (DIAL_START_DEG + avgFraction * DIAL_SWEEP_DEG) * (PI / 180.0)
                 drawLine(
@@ -1366,7 +1606,6 @@ fun RadialSpeedometerGauge(
                 )
             }
 
-            // Peak-hold marker tick on arc
             if (peakFraction > 0.01f) {
                 val pkAngleRad = (DIAL_START_DEG + peakFraction * DIAL_SWEEP_DEG) * (PI / 180.0)
                 drawLine(
@@ -1384,7 +1623,6 @@ fun RadialSpeedometerGauge(
                 )
             }
 
-            // Tapered superbike needle
             val needleAngleRad = (DIAL_START_DEG + animatedFraction * DIAL_SWEEP_DEG) * (PI / 180.0)
             val perpRad = needleAngleRad + PI / 2.0
             val needleOuterR = radius - strokePx * 0.40f
@@ -1425,7 +1663,6 @@ fun RadialSpeedometerGauge(
             )
         }
 
-        // Center digital speed telemetry readout
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(top = 4.dp),
@@ -1459,7 +1696,6 @@ fun RadialSpeedometerGauge(
             )
         }
 
-        // Bottom scale endpoints (0 .. MAX)
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)

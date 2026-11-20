@@ -261,7 +261,7 @@ fun BdpConcurrencyHeatmap(
 ) {
     val ext = LocalAetherColors.current
     val rttBuckets = listOf("<=20ms", "40ms", "80ms", "120ms+")
-    val workerCols = listOf(2, 4, 8, 12, 16)
+    val workerCols = listOf(4, 12, 24, 48, 64)
     val activeRttRow = when {
         lastRttMs <= 25L -> 0
         lastRttMs <= 55L -> 1
@@ -502,15 +502,33 @@ fun EightAxisRadarChart(
 ) {
     val ext = LocalAetherColors.current
     val gridColor = ext.cardBorder
-    val polygonStroke = ext.emerald
-    val polygonFill = ext.emerald.copy(alpha = 0.22f)
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val axisPalette = listOf(
+        ext.cyan,
+        ext.emerald,
+        ext.violet,
+        ext.amber,
+        ext.rose,
+        ext.gold,
+        ext.cobalt,
+        ext.teal,
+    )
+    val polygonStroke = Brush.sweepGradient(axisPalette + axisPalette.first())
+    val polygonFill = Brush.radialGradient(
+        colors = listOf(ext.cyan.copy(alpha = 0.28f), ext.violet.copy(alpha = 0.14f)),
+    )
 
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         Canvas(
             modifier = Modifier
-                .size(210.dp)
+                .size(224.dp)
                 .padding(18.dp)
+                .semantics {
+                    contentDescription = "8-axis color-coded architecture audit radar chart"
+                },
         ) {
             val cx = size.width / 2f
             val cy = size.height / 2f
@@ -518,6 +536,7 @@ fun EightAxisRadarChart(
             val count = axes.size.coerceAtLeast(3)
             val angleStep = (2.0 * PI / count).toFloat()
 
+            // Concentric guide rings
             listOf(0.25f, 0.5f, 0.75f, 1.0f).forEach { ring ->
                 val ringPath = Path()
                 for (i in 0 until count) {
@@ -530,13 +549,26 @@ fun EightAxisRadarChart(
                 drawPath(path = ringPath, color = gridColor, style = Stroke(width = 1.dp.toPx()))
             }
 
+            // Distinct color-coded radial spokes + outer anchor tips
             for (i in 0 until count) {
                 val angle = -PI.toFloat() / 2f + i * angleStep
                 val x = cx + cos(angle) * radius
                 val y = cy + sin(angle) * radius
-                drawLine(color = gridColor, start = Offset(cx, cy), end = Offset(x, y), strokeWidth = 1.dp.toPx())
+                val spokeColor = axisPalette[i % axisPalette.size]
+                drawLine(
+                    color = spokeColor.copy(alpha = 0.55f),
+                    start = Offset(cx, cy),
+                    end = Offset(x, y),
+                    strokeWidth = 1.5.dp.toPx(),
+                )
+                drawCircle(
+                    color = spokeColor.copy(alpha = 0.35f),
+                    radius = 3.dp.toPx(),
+                    center = Offset(x, y),
+                )
             }
 
+            // Score polygon fill + multi-color perimeter
             val dataPath = Path()
             axes.forEachIndexed { i, axis ->
                 val angle = -PI.toFloat() / 2f + i * angleStep
@@ -546,45 +578,70 @@ fun EightAxisRadarChart(
                 if (i == 0) dataPath.moveTo(x, y) else dataPath.lineTo(x, y)
             }
             dataPath.close()
-            drawPath(path = dataPath, color = polygonFill)
-            drawPath(path = dataPath, color = polygonStroke, style = Stroke(width = 2.dp.toPx(), join = StrokeJoin.Round))
+            drawPath(path = dataPath, brush = polygonFill)
+            drawPath(
+                path = dataPath,
+                brush = polygonStroke,
+                style = Stroke(width = 2.4.dp.toPx(), join = StrokeJoin.Round),
+            )
 
+            // Distinct glowing color dot for each of the 8 audit vertices
             axes.forEachIndexed { i, axis ->
                 val angle = -PI.toFloat() / 2f + i * angleStep
                 val mag = (axis.scorePercent / 100f).coerceIn(0.05f, 1f)
                 val x = cx + cos(angle) * radius * mag
                 val y = cy + sin(angle) * radius * mag
-                drawCircle(color = ext.cyan, radius = 3.5.dp.toPx(), center = Offset(x, y))
+                val axisColor = axisPalette[i % axisPalette.size]
+                drawCircle(color = axisColor.copy(alpha = 0.30f), radius = 7.dp.toPx(), center = Offset(x, y))
+                drawCircle(color = axisColor, radius = 4.2.dp.toPx(), center = Offset(x, y))
+                drawCircle(color = Color.White, radius = 1.5.dp.toPx(), center = Offset(x, y))
             }
         }
 
+        // Color-matched 8-axis legend chips (2 columns x 4 rows)
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 216.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            axes.chunked(2).forEach { pair ->
+            axes.withIndex().chunked(2).forEach { pair ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    pair.forEach { axis ->
+                    pair.forEach { indexed ->
+                        val axisColor = axisPalette[indexed.index % axisPalette.size]
                         Row(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(axisColor.copy(alpha = 0.12f))
+                                .border(1.dp, axisColor.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(ext.emerald)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(axisColor),
+                                )
+                                Text(
+                                    text = indexed.value.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
                             Text(
-                                text = "${axis.label} ${axis.scorePercent.toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = labelColor,
+                                text = "${indexed.value.scorePercent.toInt()}%",
+                                style = MonoMetricStyle,
+                                color = axisColor,
+                                fontWeight = FontWeight.Bold,
                             )
                         }
                     }

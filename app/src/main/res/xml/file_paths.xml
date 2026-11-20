@@ -9,4 +9,7 @@
     <cache-path
         name="aether_cache"
         path="." />
+    <cache-path
+        name="diagnostics"
+        path="diagnostics/" />
 </paths>

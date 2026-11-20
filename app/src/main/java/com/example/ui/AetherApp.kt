@@ -85,6 +85,7 @@ import com.example.ui.motion.SharedPart
 import com.example.ui.motion.aetherOverlayZIndex
 import com.example.ui.motion.aetherSharedBounds
 import com.example.ui.screens.AnimationSimulatorSheet
+import com.example.ui.screens.ColorStudioSheet
 import com.example.ui.screens.DualWifiConnectorSheet
 import com.example.ui.screens.FilesScreen
 import com.example.ui.screens.NewDownloadSheet
@@ -132,7 +133,11 @@ fun AetherApp(viewModel: AetherViewModel) {
     val useMBpsSpeedUnit by viewModel.useMBpsSpeedUnit.collectAsStateWithLifecycle()
     val dualWifiCapabilities by viewModel.dualWifiCapabilities.collectAsStateWithLifecycle()
     val nearbyWifiNetworks by viewModel.nearbyWifiNetworks.collectAsStateWithLifecycle()
+    val connectedWifi1Ssid by viewModel.connectedWifi1Ssid.collectAsStateWithLifecycle()
+    val isScanningWifi by viewModel.isScanningWifi.collectAsStateWithLifecycle()
     val isConnectingWifi2 by viewModel.isConnectingWifi2.collectAsStateWithLifecycle()
+    val shizukuState by viewModel.shizukuState.collectAsStateWithLifecycle()
+    val flightSampleCount by viewModel.flightSampleCount.collectAsStateWithLifecycle()
     val simulationState by viewModel.simulationState.collectAsStateWithLifecycle()
 
     // Lifecycle-aware 4 Hz active / 0 Hz ON_STOP telemetry polling
@@ -169,13 +174,17 @@ fun AetherApp(viewModel: AetherViewModel) {
     var showNewDownloadSheet by remember { mutableStateOf(false) }
     var showDualWifiSheet by remember { mutableStateOf(false) }
     var showSimulatorSheet by remember { mutableStateOf(false) }
+    var showColorStudioSheet by remember { mutableStateOf(false) }
     var focusedGaugeId by remember { mutableStateOf<String?>(null) }
 
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: ROUTE_TRANSFERS
 
-    AetherTheme(themeMode = settings.themeMode) {
+    AetherTheme(
+        themeMode = settings.themeMode,
+        uiThemeConfig = settings.uiThemeConfig,
+    ) {
         val ext = LocalAetherColors.current
 
         SharedTransitionLayout(modifier = Modifier.fillMaxSize()) {
@@ -210,7 +219,7 @@ fun AetherApp(viewModel: AetherViewModel) {
                                             fontWeight = FontWeight.Bold,
                                         )
                                         Text(
-                                            text = "v9.0",
+                                            text = "v9.1",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = ext.cyan,
                                             modifier = Modifier
@@ -408,6 +417,8 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 useMBpsSpeedUnit = useMBpsSpeedUnit,
                                                 speedometerStyle = settings.speedometerStyle,
                                                 isSimulating = simulationState.isRunning,
+                                                isSimulatingHlsMode = simulationState.simulatedTransferHlsMode,
+                                                onToggleSimHlsMode = viewModel::setSimulatedTransferHlsMode,
                                                 onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
                                                 onCycleSpeedometerStyle = viewModel::cycleSpeedometerStyle,
                                                 onOpenDualWifi = { showDualWifiSheet = true },
@@ -427,6 +438,8 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 onPruneCas = viewModel::pruneCasCache,
                                                 onOpenFile = viewModel::openFile,
                                                 onShareFile = viewModel::shareFile,
+                                                onSaveMd5 = viewModel::saveDownloadMd5,
+                                                onSaveSha256 = viewModel::saveDownloadSha256,
                                                 onOpenNewDownload = { showNewDownloadSheet = true },
                                             )
                                         }
@@ -440,12 +453,16 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 casTotalBytes = casTotalBytes,
                                                 selectedCategory = fileCategory,
                                                 searchQuery = fileSearchQuery,
+                                                useMBpsSpeedUnit = useMBpsSpeedUnit,
                                                 onSelectCategory = viewModel::setFileCategory,
                                                 onSearchQueryChange = viewModel::setFileSearchQuery,
                                                 onOpenFile = viewModel::openFile,
                                                 onShareFile = viewModel::shareFile,
                                                 onDeleteFile = { entity -> viewModel.deleteDownload(entity.id, true) },
                                                 onPruneCas = viewModel::pruneCasCache,
+                                                onRefreshUrl = viewModel::updateExpiredUrl,
+                                                onSaveMd5 = viewModel::saveDownloadMd5,
+                                                onSaveSha256 = viewModel::saveDownloadSha256,
                                             )
                                         }
                                     }
@@ -462,10 +479,15 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 useMBpsSpeedUnit = useMBpsSpeedUnit,
                                                 isSimulating = simulationState.isRunning,
                                                 motionSpeedMultiplier = simulationState.motionSpeedMultiplier,
+                                                flightSampleCount = flightSampleCount,
                                                 onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
                                                 onResetPeaks = viewModel::resetTelemetryPeaks,
                                                 onOpenDualWifi = { showDualWifiSheet = true },
                                                 onOpenSimulator = { showSimulatorSheet = true },
+                                                onOpenColorStudio = { showColorStudioSheet = true },
+                                                onSaveDiagnosticsTxt = viewModel::saveDiagnosticsTxtToUri,
+                                                onSaveDiagnosticsJson = viewModel::saveDiagnosticsJsonToUri,
+                                                onShareDiagnosticsBundle = viewModel::shareDiagnosticsBundle,
                                                 onSelectGauge = { gaugeId -> focusedGaugeId = gaugeId },
                                                 onUpdateSettings = viewModel::updateSettings,
                                                 onRefreshNetwork = viewModel::refreshNetworkMatrix,
@@ -511,9 +533,14 @@ fun AetherApp(viewModel: AetherViewModel) {
                                 networkMatrix = networkMatrix,
                                 capabilities = dualWifiCapabilities,
                                 nearbyNetworks = nearbyWifiNetworks,
+                                connectedWifi1Ssid = connectedWifi1Ssid,
+                                isScanning = isScanningWifi,
+                                shizukuState = shizukuState,
                                 isConnecting = isConnectingWifi2,
                                 onProbeCapabilities = viewModel::probeDualWifi,
                                 onScanNearbyWifi = viewModel::scanNearbyWifi,
+                                onRequestShizukuPermission = viewModel::requestShizukuPermission,
+                                onToggleShizukuLowLatency = viewModel::toggleShizukuLowLatency,
                                 onConnectDirectWifi2 = viewModel::connectDirectWifi2,
                                 onConnectWifi2Relay = viewModel::connectWifi2Relay,
                                 onDisconnectWifi2 = viewModel::disconnectWifi2,
@@ -544,6 +571,7 @@ fun AetherApp(viewModel: AetherViewModel) {
                                 onTriggerNewDownloadMorph = { showNewDownloadSheet = true },
                                 onTriggerWifi2Morph = { showDualWifiSheet = true },
                                 onTriggerFocusedGaugeMorph = { focusedGaugeId = "wifi1" },
+                                onToggleSimTransferHlsMode = viewModel::setSimulatedTransferHlsMode,
                                 onDismiss = { showSimulatorSheet = false },
                             )
                         }
@@ -568,6 +596,22 @@ fun AetherApp(viewModel: AetherViewModel) {
                                 )
                             }
                         }
+                    }
+
+                    // 5. Telegram-Style Color Studio (18 Themes) & App-Wide Neon Glow Overlay
+                    AnimatedVisibility(
+                        visible = showColorStudioSheet,
+                        enter = fadeIn(tween(220)),
+                        exit = fadeOut(tween(180)),
+                    ) {
+                        ColorStudioSheet(
+                            currentConfig = settings.uiThemeConfig,
+                            onApplyConfig = { cfg ->
+                                viewModel.updateUiThemeConfig(cfg)
+                                showColorStudioSheet = false
+                            },
+                            onDismiss = { showColorStudioSheet = false },
+                        )
                     }
                 }
             }
