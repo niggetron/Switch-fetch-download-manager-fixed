@@ -29,7 +29,7 @@ pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     }
 }
 
-/// Guarantees at least one active worker per validated active link (and up to 64 total).
+/// Guarantees at least one active worker per validated active link (and up to 24 total).
 pub fn effective_worker_count(user_max_connections: usize, validated_active_links: usize) -> usize {
     user_max_connections
         .max(validated_active_links)

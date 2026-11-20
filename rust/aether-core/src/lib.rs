@@ -186,14 +186,16 @@ mod tests {
         assert_eq!(adaptive_bdp_segment_bytes(400_000), 16 * 1024 * 1024);
         assert_eq!(adaptive_bdp_segment_bytes(800_000), 32 * 1024 * 1024);
         assert_eq!(effective_worker_count(1, 2), 2);
-        assert_eq!(effective_worker_count(64, 4), 64);
+        assert_eq!(effective_worker_count(64, 4), 24);
 
         let mut states = vec![2u8, 1u8, 0u8, 0u8];
         assert_eq!(absorb_empty_right_of(&mut states, 1), Some(2));
         assert_eq!(states[2], 1);
 
         assert_eq!(adjust_auto_speed_up(4, 2, 64, 50.0, 60.0, 8.0, false), 8);
-        assert_eq!(adjust_auto_speed_up(28, 2, 64, 50.0, 60.0, 8.0, false), 30);
+        assert_eq!(adjust_auto_speed_up(18, 2, 64, 50.0, 60.0, 8.0, false), 20);
+        // Adding sockets made throughput worse -> scale down instead of pinning 64.
+        assert_eq!(adjust_auto_speed_up(20, 2, 64, 60.0, 50.0, 0.0, false), 15);
         assert_eq!(adjust_auto_speed_up(6, 2, 64, 60.0, 60.0, 42.0, false), 4);
         let lease = SegmentLease {
             index: 2,
