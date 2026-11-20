@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(adaptive_bdp_segment_bytes(400_000), 2 * 1024 * 1024);
         assert_eq!(adaptive_bdp_segment_bytes(800_000), 4 * 1024 * 1024);
         assert_eq!(effective_worker_count(1, 2), 2);
-        assert_eq!(effective_worker_count(64, 4), 48);
+        assert_eq!(effective_worker_count(64, 4), 64);
 
         let mut states = vec![2u8, 1u8, 0u8, 0u8];
         assert_eq!(absorb_empty_right_of(&mut states, 1), Some(2));

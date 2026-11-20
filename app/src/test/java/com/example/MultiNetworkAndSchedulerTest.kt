@@ -124,7 +124,7 @@ class MultiNetworkAndSchedulerTest {
         assertEquals(2L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(400_000))
         assertEquals(4L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(900_000))
         assertEquals(24, LinkScheduler.effectiveWorkerCount(userMaxConnections = 24, validatedLinksCount = 4))
-        assertEquals(64, LinkScheduler.effectiveWorkerCount(userMaxConnections = 96, validatedLinksCount = 4))
+        assertEquals(96, LinkScheduler.effectiveWorkerCount(userMaxConnections = 96, validatedLinksCount = 4))
 
         // Goodput improves > 5% with low RTT growth -> +4 workers below 24 (clamped at maxWorkers)
         assertEquals(

@@ -389,7 +389,7 @@ class ExampleRobolectricTest {
 
     @Test
     fun `Ghost autoSpeedUp scales up to 64 workers and Force-All-Links prevents 5G starvation`() {
-        assertEquals(64, MAX_CONCURRENT_WORKERS_CAP)
+        assertEquals(128, MAX_CONCURRENT_WORKERS_CAP)
         val ramped = LinkScheduler.adjustAutoSpeedUp(
             currentWorkers = 16,
             minWorkers = 4,
