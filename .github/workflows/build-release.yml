@@ -167,10 +167,13 @@ jobs:
 
       - name: Compute version & unique package name per build
         id: ver
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
           BASE="$(grep -oP 'ciVersionName.*?\?:\s*"\K[^"]+' app/build.gradle.kts | head -n1)"
           BASE="${BASE:-9.1}"
-          OVERRIDE="${{ inputs.version_override }}"
+          # Inputs arrive via env: never interpolate them into shell source.
+          OVERRIDE="$VERSION_OVERRIDE"
           if [ -n "$OVERRIDE" ]; then
             VERSION="$OVERRIDE"
           else
@@ -233,6 +236,8 @@ jobs:
           ls -lh dist
 
       - name: Generate Categorized Release Notes (Added / Upgraded / Fixed / Changed / Removed)
+        env:
+          EXTRA_NOTES: ${{ inputs.extra_notes }}
         run: |
           VERSION="${{ steps.ver.outputs.version_name }}"
           PKG_NAME="${{ steps.ver.outputs.package_name }}"
@@ -246,8 +251,8 @@ jobs:
           {
             echo "# AetherIO v${VERSION} (arm64-v8a Triple-Engine Release)"
             echo ""
-            if [ -n "${{ inputs.extra_notes }}" ]; then
-              echo "> ${{ inputs.extra_notes }}"
+            if [ -n "$EXTRA_NOTES" ]; then
+              echo "> $EXTRA_NOTES"
               echo ""
             fi
             echo "## Build & Binary Verification"
