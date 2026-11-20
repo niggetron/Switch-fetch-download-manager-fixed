@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -326,7 +327,7 @@ private fun DashboardCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
 @Composable
 private fun ThroughputCard(
     title: String,
@@ -430,6 +431,7 @@ private fun QualityScore(label: String, stars: Int, color: Color) {
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun ServerLocationCard(
     telemetry: TelemetrySnapshot,
@@ -496,8 +498,12 @@ private fun ServerLocationCard(
             }
             continents.forEach { points ->
                 val path = Path().apply {
-                    moveTo(project(points[0], points[1]))
-                    for (i in 2 until points.size step 2) lineTo(project(points[i], points[i + 1]))
+                    val start = project(points[0], points[1])
+                    moveTo(start.x, start.y)
+                    for (i in 2 until points.size step 2) {
+                        val p = project(points[i], points[i + 1])
+                        lineTo(p.x, p.y)
+                    }
                     close()
                 }
                 drawPath(path, Color(0xFF2A323C))
