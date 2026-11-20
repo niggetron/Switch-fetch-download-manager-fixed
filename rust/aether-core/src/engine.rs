@@ -1037,6 +1037,9 @@ impl NativeEngine {
                                         let mut seg_bytes_written = 0u64;
                                         let mut io_err: Option<String> = None;
                                         let mut last_ui_push = Instant::now();
+                                        // Accumulate locally; publishing atomics per network
+                                        // chunk made 128 workers fight over one cache line.
+                                        let mut pending_bytes: u64 = 0;
                                         let mut current_slab: Option<SlabLeaseGuard> = None;
                                         let mut slab_fill = 0usize;
                                         let mut slab_start_offset = cursor;
@@ -1122,43 +1125,9 @@ impl NativeEngine {
                                                     slab_fill = 0;
                                                 }
 
-                                                let tot = w_tot
-                                                    .fetch_add(take as u64, Ordering::Relaxed)
-                                                    + take as u64;
-                                                page.total_written.store(tot, Ordering::Release);
-                                                page.producer_seq.fetch_add(1, Ordering::Relaxed);
-
-                                                if picked_key.starts_with("cell:") {
-                                                    let cb = cell_tot
-                                                        .fetch_add(take as u64, Ordering::Relaxed)
-                                                        + take as u64;
-                                                    page.cell_bytes_total
-                                                        .store(cb, Ordering::Release);
-                                                    page.cellular_quota_remaining.store(
-                                                        max_cell.saturating_sub(cb),
-                                                        Ordering::Release,
-                                                    );
-                                                } else if picked_key.starts_with("wifi2:") {
-                                                    let w2b = wifi2_tot
-                                                        .fetch_add(take as u64, Ordering::Relaxed)
-                                                        + take as u64;
-                                                    page.wifi2_bytes_total
-                                                        .store(w2b, Ordering::Release);
-                                                } else if picked_key.starts_with("eth:")
-                                                    || picked_key.starts_with("usb:")
-                                                {
-                                                    let eb = usb_tot
-                                                        .fetch_add(take as u64, Ordering::Relaxed)
-                                                        + take as u64;
-                                                    page.eth_bytes_total
-                                                        .store(eb, Ordering::Release);
-                                                } else {
-                                                    let wb = wifi_tot
-                                                        .fetch_add(take as u64, Ordering::Relaxed)
-                                                        + take as u64;
-                                                    page.wifi_bytes_total
-                                                        .store(wb, Ordering::Release);
-                                                }
+                                                // Local accumulation only. Shared atomics are
+                                                // published once per TELEMETRY_PUSH_INTERVAL below.
+                                                pending_bytes += take as u64;
                                             }
                                             if io_err.is_some() {
                                                 break;
@@ -1166,6 +1135,41 @@ impl NativeEngine {
 
                                             // Throttled telemetry & EWMA update (~120 ms)
                                             if last_ui_push.elapsed() >= TELEMETRY_PUSH_INTERVAL {
+                                                if pending_bytes > 0 {
+                                                    let tot = w_tot
+                                                        .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                        + pending_bytes;
+                                                    page.total_written.store(tot, Ordering::Release);
+                                                    page.producer_seq.fetch_add(1, Ordering::Relaxed);
+                                                    if picked_key.starts_with("cell:") {
+                                                        let cb = cell_tot
+                                                            .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                            + pending_bytes;
+                                                        page.cell_bytes_total.store(cb, Ordering::Release);
+                                                        page.cellular_quota_remaining.store(
+                                                            max_cell.saturating_sub(cb),
+                                                            Ordering::Release,
+                                                        );
+                                                    } else if picked_key.starts_with("wifi2:") {
+                                                        let w2b = wifi2_tot
+                                                            .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                            + pending_bytes;
+                                                        page.wifi2_bytes_total.store(w2b, Ordering::Release);
+                                                    } else if picked_key.starts_with("eth:")
+                                                        || picked_key.starts_with("usb:")
+                                                    {
+                                                        let eb = usb_tot
+                                                            .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                            + pending_bytes;
+                                                        page.eth_bytes_total.store(eb, Ordering::Release);
+                                                    } else {
+                                                        let wb = wifi_tot
+                                                            .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                            + pending_bytes;
+                                                        page.wifi_bytes_total.store(wb, Ordering::Release);
+                                                    }
+                                                    pending_bytes = 0;
+                                                }
                                                 let secs = seg_t0.elapsed().as_secs_f64().max(0.05);
                                                 let speed_bps =
                                                     (seg_bytes_written as f64 / secs) as u64;

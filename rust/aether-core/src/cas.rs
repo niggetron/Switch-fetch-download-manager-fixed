@@ -95,7 +95,6 @@ impl ContiguousSha256Verifier {
     }
 
     fn drain_ready_gaps(&mut self, backing_file: Option<&File>) -> io::Result<()> {
-        let mut scratch = vec![0u8; 256 * 1024];
         while let Some(&(start, end)) = self.completed_ranges.iter().next() {
             if start > self.contiguous_offset {
                 break;
@@ -107,6 +106,9 @@ impl ContiguousSha256Verifier {
             let read_from = self.contiguous_offset;
             let to_read = end - read_from;
             if let Some(file) = backing_file {
+                // Allocate the gap scratch buffer ONLY when a gap actually needs
+                // re-reading. The contiguous fast path must not memset 256 KiB per slab.
+                let mut scratch = vec![0u8; 256 * 1024];
                 #[cfg(unix)]
                 {
                     let mut pos = read_from;

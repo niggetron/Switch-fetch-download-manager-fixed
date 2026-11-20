@@ -385,8 +385,15 @@ internal class KotlinOkHttpTransferRunner(
                 // Start at the desired lane count, not the hard cap. The old
                 // `maxOf(boostedDesired, maxCap)` always launched 64 coroutines and
                 // the governor could never recover once congestion set in.
-                val maxPoolCoroutines = boostedDesired.coerceIn(1, effectiveMaxCap)
-                val targetWorkers = AtomicInteger(boostedDesired.coerceIn(1, effectiveMaxCap))
+                // MDM's small-file rule: opening 128 sockets on a 256 KiB file cuts
+                // it into slivers and re-fetches bytes. Start with at most one
+                // 64 KiB piece per connection; the governor can ramp later.
+                val bySize = if (totalBytes > 0L) {
+                    ((totalBytes + 65_535L) / 65_536L).coerceAtLeast(1L)
+                } else Long.MAX_VALUE
+                val rampCap = minOf(effectiveMaxCap.toLong(), bySize).toInt().coerceAtLeast(1)
+                val maxPoolCoroutines = minOf(boostedDesired, rampCap).coerceIn(1, effectiveMaxCap)
+                val targetWorkers = AtomicInteger(maxPoolCoroutines)
 
                 val flusherJob = engineScope.launch(Dispatchers.IO) {
                     var lastSampleTime = System.currentTimeMillis()
@@ -922,6 +929,7 @@ internal class KotlinOkHttpTransferRunner(
         val segStartNs = System.nanoTime()
         var segWritten = 0L
         var lastTelemetryPushMs = 0L
+        var retryAfterMs = 0L
 
         var callRef: Call? = null
         val watchdogJob = engineScope.launch {
@@ -950,6 +958,11 @@ internal class KotlinOkHttpTransferRunner(
             call.execute().use { resp ->
                 val ttfb = (System.currentTimeMillis() - reqStartMs).coerceAtLeast(1L)
                 activeState.lastProgressMs.set(System.currentTimeMillis())
+                if (resp.code == 429 || resp.code == 503) {
+                    // aria2-next/MDM rule: Retry-After is a floor, never shortened.
+                    retryAfterMs = resp.header("Retry-After")?.toLongOrNull()
+                        ?.let { (it * 1000L).coerceIn(0L, 600_000L) } ?: 0L
+                }
                 if (resp.code == 403 || resp.code == 410) throw HttpAuthExpiredException(resp.code)
                 // A server that answers a Range request with 200 sends the WHOLE
                 // file; writing it at `startOffset` silently corrupts the file.
@@ -1095,6 +1108,10 @@ internal class KotlinOkHttpTransferRunner(
                     val receiving = activeWorkersByLink.values.sumOf { it.get() }
                     hostLimits.refused(host, receiving)
                 }
+            }
+            if (retryAfterMs > 0) {
+                DiagnosticsCenter.log("RETRY_AFTER", "Server asked for ${retryAfterMs}ms backoff")
+                delay(retryAfterMs)
             }
             if (stalledOut.get()) throw LinkStallException(pinnedLinkKeyId ?: "unknown")
             throw ex
