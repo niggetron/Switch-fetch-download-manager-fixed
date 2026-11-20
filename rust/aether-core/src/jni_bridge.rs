@@ -253,6 +253,20 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativePauseDow
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeResumeDownload(
+    mut env: JNIEnv,
+    _class: JClass,
+    task_id: JString,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if let Ok(tid) = env.get_string(&task_id) {
+            let s: String = tid.into();
+            engine().resume_task(&s);
+        }
+    }));
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeCancelDownload(
     mut env: JNIEnv,
     _class: JClass,

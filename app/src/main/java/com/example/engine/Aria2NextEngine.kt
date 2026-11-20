@@ -103,68 +103,71 @@ class Aria2NextEngine(
         }
     }
 
-    private fun ensureDaemon(): Boolean = synchronized(this) {
-        if (isProcessAlive() && rpcCall("aria2.getVersion", emptyList()) != null) return true
-        val binary = binaryFile() ?: return false
-        secret = UUID.randomUUID().toString().replace("-", "")
-        val downloadDir = File(context.filesDir, "aria2-downloads").apply { mkdirs() }
-        val log = StringBuilder()
-        return try {
-            process?.destroy()
-            process = ProcessBuilder(
-                binary.absolutePath,
-                "--enable-rpc=true",
-                "--rpc-listen-all=false",
-                "--rpc-listen-port=$rpcPort",
-                "--rpc-secret=$secret",
-                "--dir=${downloadDir.absolutePath}",
-                "--continue=true",
-                "--max-overall-download-limit=0",
-                "--summary-interval=0",
-                "--console-log-level=warn",
-            ).redirectErrorStream(true).start()
+    private val daemonLog = StringBuilder()
 
-            // Drain stderr/stdout so the daemon never blocks on a full pipe, and
-            // keep the tail for an actionable error message in the UI.
-            Thread {
-                try {
-                    process?.inputStream?.bufferedReader()?.use { reader ->
-                        reader.forEachLine { line ->
-                            if (log.length < 8_000) log.append(line).append('\n')
+    /** Starts the daemon quickly, then waits for RPC readiness OUTSIDE the lock. */
+    private fun ensureDaemon(): Boolean {
+        val log = daemonLog
+        val spawned = synchronized(this) {
+            if (isProcessAlive() && rpcObject("aria2.getVersion", emptyList()) != null) return true
+            val binary = binaryFile() ?: return false
+            secret = UUID.randomUUID().toString().replace("-", "")
+            val downloadDir = File(context.filesDir, "aria2-downloads").apply { mkdirs() }
+            try {
+                process?.destroy()
+                process = ProcessBuilder(
+                    binary.absolutePath,
+                    "--enable-rpc=true",
+                    "--rpc-listen-all=false",
+                    "--rpc-listen-port=$rpcPort",
+                    "--rpc-secret=$secret",
+                    "--dir=${downloadDir.absolutePath}",
+                    "--continue=true",
+                    "--max-overall-download-limit=0",
+                    "--summary-interval=0",
+                    "--console-log-level=warn",
+                ).redirectErrorStream(true).start()
+                Thread {
+                    try {
+                        process?.inputStream?.bufferedReader()?.use { reader ->
+                            reader.forEachLine { line ->
+                                if (log.length < 8_000) log.append(line).append('\n')
+                            }
                         }
+                    } catch (t: Throwable) {
+                        // process exited; ignore
                     }
-                } catch (t: Throwable) {
-                    // process exited; ignore
-                }
-            }.apply { isDaemon = true }.start()
-
-            repeat(40) {
-                if (rpcCall("aria2.getVersion", emptyList()) != null) {
-                    lastError = ""
-                    DiagnosticsCenter.log("ARIA2_READY", "aria2-next JSON-RPC online on 127.0.0.1:$rpcPort")
-                    return true
-                }
-                Thread.sleep(200)
+                }.apply { isDaemon = true }.start()
+                true
+            } catch (t: Throwable) {
+                lastError = "Failed to start aria2-next: ${t.message ?: t.javaClass.simpleName}"
+                DiagnosticsCenter.log("ARIA2_ERROR", lastError)
+                false
             }
-            lastError = "aria2-next did not answer JSON-RPC on 127.0.0.1:$rpcPort. ${log.toString().takeLast(400)}"
-            DiagnosticsCenter.log("ARIA2_ERROR", lastError)
-            false
-        } catch (t: Throwable) {
-            lastError = "Failed to start aria2-next: ${t.message ?: t.javaClass.simpleName}"
-            DiagnosticsCenter.log("ARIA2_ERROR", lastError)
-            false
         }
+        if (!spawned) return false
+
+        repeat(40) {
+            if (rpcObject("aria2.getVersion", emptyList()) != null) {
+                lastError = ""
+                DiagnosticsCenter.log("ARIA2_READY", "aria2-next JSON-RPC online on 127.0.0.1:$rpcPort")
+                return true
+            }
+            Thread.sleep(200)
+        }
+        lastError = "aria2-next did not answer JSON-RPC on 127.0.0.1:$rpcPort. ${log.toString().takeLast(400)}"
+        DiagnosticsCenter.log("ARIA2_ERROR", lastError)
+        return false
     }
 
-    private fun rpcCall(method: String, params: List<Any>): JSONObject? {
+    /** JSON-RPC results are not always objects: addUri returns a string GID. */
+    private fun rpcResult(method: String, params: List<Any>): Any? {
         val token = if (secret.isBlank()) "" else "token:$secret:"
-        // Try with the aria2 token prefix first, then without: some aria2-next
-        // builds reject the token on introspection calls, others require it.
         val attempts = if (token.isEmpty()) listOf(params) else listOf(listOf(token) + params, params)
         for (callParams in attempts) {
             val body = JSONObject().apply {
                 put("jsonrpc", "2.0")
-                put("id", System.currentTimeMillis())
+                put("id", System.nanoTime() and 0x7FFFFFFF)
                 put("method", method)
                 put("params", JSONArray(callParams))
             }.toString().toRequestBody("application/json".toMediaType())
@@ -174,7 +177,7 @@ class Aria2NextEngine(
                     if (payload.isBlank()) return@use
                     val obj = JSONObject(payload)
                     if (obj.has("error") && !obj.isNull("error")) return@use
-                    obj.optJSONObject("result")?.let { return it }
+                    if (obj.has("result")) return obj.opt("result")
                 }
             } catch (t: Throwable) {
                 lastError = "RPC $method: ${t.message ?: t.javaClass.simpleName}"
@@ -183,6 +186,11 @@ class Aria2NextEngine(
         return null
     }
 
+    private fun rpcObject(method: String, params: List<Any>): JSONObject? =
+        rpcResult(method, params) as? JSONObject
+
+    private fun rpcCall(method: String, params: List<Any>): JSONObject? = rpcObject(method, params)
+
     private fun addUri(entity: DownloadEntity, settings: EngineSettings): String? {
         val parent = runCatching { File(entity.destinationUri).parentFile?.absolutePath }.getOrNull()
             ?: repository.getDownloadsDirectory().absolutePath
@@ -190,8 +198,13 @@ class Aria2NextEngine(
             put("out", entity.fileName)
             put("dir", parent)
             put("continue", "true")
-            put("split", settings.maxConcurrentWorkers.coerceIn(8, 32).toString())
-            put("max-connection-per-server", "16")
+            put("split", settings.maxConcurrentWorkers.coerceIn(8, 128).toString())
+            put("max-connection-per-server", "128")
+            put("max-overall-upload-limit", "0")
+            put("min-split-size", "1M")
+            put("connect-timeout", "15")
+            put("timeout", "30")
+            put("lowest-speed-limit", "0")
             put("min-split-size", "1M")
             put("file-allocation", "none")
             put("disk-cache", "64M")
@@ -202,11 +215,17 @@ class Aria2NextEngine(
             put("max-tries", "5")
             put("always-resume", "true")
             put("user-agent", "AetherIO-Omega/9.2 Android")
-            put("allow-overwrite", "false")
-            put("auto-file-renaming", "true")
+            put("allow-overwrite", "true")
+            put("auto-file-renaming", "false")
         }
-        val result = rpcCall("aria2.addUri", listOf(JSONArray(listOf(entity.url)), options)) ?: return null
-        val gid = result.optString("gid").ifBlank { null } ?: return null
+        val result = rpcResult("aria2.addUri", listOf(JSONArray(entity.allUrls.ifEmpty { listOf(entity.url) }), options))
+            ?: return null
+        // aria2 returns the GID as a JSON string; some wrappers return {"gid": "..."}.
+        val gid = when (result) {
+            is String -> result
+            is JSONObject -> result.optString("gid")
+            else -> ""
+        }.ifBlank { null } ?: return null
         gids[entity.id] = gid
         return gid
     }

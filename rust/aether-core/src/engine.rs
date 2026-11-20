@@ -237,6 +237,18 @@ impl NativeEngine {
         }
     }
 
+    pub fn resume_task(&self, task_id: &str) {
+        if let Some(h) = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(task_id)
+        {
+            h.paused.store(false, Ordering::Release);
+            h.hotplug_notify.notify_waiters();
+        }
+    }
+
     pub fn cancel_task(&self, task_id: &str) {
         if let Some(h) = self
             .tasks
@@ -486,8 +498,10 @@ impl NativeEngine {
                 .map(|v| v.eq_ignore_ascii_case("bytes"))
                 .unwrap_or(false);
 
-        let total_bytes = parse_total_length(&probe_headers, probe_status)
-            .unwrap_or(probe_first_bytes.len() as u64);
+        // Unknown length must stay unknown. Using the 16 KiB probe snippet as the
+        // total previously caused silent truncation AND a false COMPLETED outcome.
+        // 0 means "stream to EOF" in the worker path.
+        let total_bytes = parse_total_length(&probe_headers, probe_status).unwrap_or(0);
         let etag = probe_headers
             .get("etag")
             .or_else(|| probe_headers.get("last-modified"))
@@ -1012,6 +1026,10 @@ impl NativeEngine {
                                     let status = resp.status().as_u16();
                                     if status == 403 || status == 410 {
                                         Err(format!("TOKEN_EXPIRED:{status}"))
+                                    } else if status == 200 && range_hdr.is_some() {
+                                        // Range was requested but the server replied with the
+                                        // whole entity: writing it at unit.start corrupts the file.
+                                        Err("SERVER_IGNORED_RANGE".to_string())
                                     } else if !(status == 200 || status == 206) {
                                         Err(format!("HTTP {status}"))
                                     } else {

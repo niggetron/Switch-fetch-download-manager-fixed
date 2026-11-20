@@ -87,9 +87,14 @@ internal class KotlinOkHttpTransferRunner(
     private val ledgerFileProvider: (String) -> File,
     private val stagingFileProvider: (String) -> File,
 ) {
+    // A segment split by anti-dip has two writers. Track outstanding parts so a
+    // segment is marked COMMITTED only when BOTH halves are actually on disk.
+    private val bisectParts = ConcurrentHashMap<String, ConcurrentHashMap<Int, AtomicInteger>>()
+    private val hostLimits = HostLimits()
+
     private val sharedDispatcher = Dispatcher().apply {
         maxRequests = 128
-        maxRequestsPerHost = 64
+        maxRequestsPerHost = 128
     }
 
     private val baseClient = OkHttpClient.Builder()
@@ -358,21 +363,30 @@ internal class KotlinOkHttpTransferRunner(
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
                 val maxCap = when (settings.throughputProfile) {
-                    ThroughputProfile.TURBO_ANTI_DIP -> 40
-                    ThroughputProfile.MAX_MULTI_SOCKET -> 48
-                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 32
+                    ThroughputProfile.TURBO_ANTI_DIP -> 96
+                    ThroughputProfile.MAX_MULTI_SOCKET -> 128
+                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 64
+                }
+                val downloadHost = runCatching { java.net.URL(entity.url).host }.getOrNull().orEmpty()
+                val learnedCap = downloadHost.takeIf { it.isNotBlank() }?.let { hostLimits.cap(it) }
+                val effectiveMaxCap = if (learnedCap != null) minOf(maxCap, learnedCap) else maxCap
+                if (learnedCap != null) {
+                    DiagnosticsCenter.log(
+                        "HOST_LIMIT",
+                        "Using learned connection cap $learnedCap for $downloadHost",
+                    )
                 }
                 val baseDesired = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
                 val boostedDesired = if (settings.enableAutoSpeedUp || settings.throughputProfile != ThroughputProfile.SUSTAINED_ANTI_DIP) {
-                    maxOf(baseDesired, (activeLanes.size * 6).coerceAtMost(maxCap))
+                    maxOf(baseDesired, (activeLanes.size * 6).coerceAtMost(effectiveMaxCap))
                 } else {
                     baseDesired
                 }
                 // Start at the desired lane count, not the hard cap. The old
                 // `maxOf(boostedDesired, maxCap)` always launched 64 coroutines and
                 // the governor could never recover once congestion set in.
-                val maxPoolCoroutines = boostedDesired.coerceIn(1, maxCap)
-                val targetWorkers = AtomicInteger(boostedDesired.coerceIn(1, maxCap))
+                val maxPoolCoroutines = boostedDesired.coerceIn(1, effectiveMaxCap)
+                val targetWorkers = AtomicInteger(boostedDesired.coerceIn(1, effectiveMaxCap))
 
                 val flusherJob = engineScope.launch(Dispatchers.IO) {
                     var lastSampleTime = System.currentTimeMillis()
@@ -405,7 +419,7 @@ internal class KotlinOkHttpTransferRunner(
                             val adjusted = LinkScheduler.adjustAutoSpeedUp(
                                 currentWorkers = targetWorkers.get(),
                                 minWorkers = minW,
-                                maxWorkers = maxCap,
+                                maxWorkers = effectiveMaxCap,
                                 prevGoodputBps = prevGoodputBps,
                                 newGoodputBps = curSpeed.toDouble(),
                                 deltaRttMs = (curTtfb - prevTtfb).coerceAtLeast(0.0),
@@ -482,7 +496,7 @@ internal class KotlinOkHttpTransferRunner(
                                         } else if (settings.enableTailHedge ||
                                             settings.throughputProfile != ThroughputProfile.MAX_MULTI_SOCKET
                                         ) {
-                                            tryStealBisectedRange(activeRanges)
+                                            tryStealBisectedRange(id, activeRanges)
                                         } else {
                                             null
                                         }
@@ -742,6 +756,7 @@ internal class KotlinOkHttpTransferRunner(
      * Atomically bisects the slowest or largest remaining active worker range (Anti-Dip).
      */
     private fun tryStealBisectedRange(
+        taskId: String,
         activeRanges: ConcurrentHashMap<String, ActiveOkHttpRange>,
     ): OkHttpWorkUnit? {
         val now = System.currentTimeMillis()
@@ -775,6 +790,11 @@ internal class KotlinOkHttpTransferRunner(
             if (newVictimEnd <= cur || mid > oldEnd) return null
             if (victim.endOffset.compareAndSet(oldEnd, newVictimEnd)) {
                 telemetryLedger.recordAntiDipRescue()
+                // Two writers now own this segment; it is COMMITTED only when both finish.
+                bisectParts.computeIfAbsent(taskId) { ConcurrentHashMap() }
+                    .compute(victim.segIndex) { _, prev ->
+                        (prev ?: AtomicInteger(1)).also { it.incrementAndGet() }
+                    }
                 return OkHttpWorkUnit(
                     segIndex = victim.segIndex,
                     startOffset = mid,
@@ -931,6 +951,11 @@ internal class KotlinOkHttpTransferRunner(
                 val ttfb = (System.currentTimeMillis() - reqStartMs).coerceAtLeast(1L)
                 activeState.lastProgressMs.set(System.currentTimeMillis())
                 if (resp.code == 403 || resp.code == 410) throw HttpAuthExpiredException(resp.code)
+                // A server that answers a Range request with 200 sends the WHOLE
+                // file; writing it at `startOffset` silently corrupts the file.
+                if (resp.code == 200 && req.header("Range") != null) {
+                    throw IOException("Server ignored Range (HTTP 200) on segment ${unit.segIndex}")
+                }
                 if (!resp.isSuccessful && resp.code != 206) throw IOException("HTTP ${resp.code} on segment ${unit.segIndex}")
 
                 val proto = resp.protocol.toString().uppercase()
@@ -1017,7 +1042,14 @@ internal class KotlinOkHttpTransferRunner(
                     telemetryLedger.recordSyscallWriteBatch()
                 }
 
-                if (!unit.isBisectedSteal) {
+                val parts = bisectParts[taskId]?.get(unit.segIndex)
+                val fullyDone = if (parts == null) {
+                    true
+                } else {
+                    parts.decrementAndGet() <= 0
+                }
+                if (fullyDone) {
+                    bisectParts[taskId]?.remove(unit.segIndex)
                     bitMutex.withLock {
                         if (unit.segIndex < bitChars.size) {
                             bitChars[unit.segIndex] = SegmentState.COMMITTED.code
@@ -1031,6 +1063,10 @@ internal class KotlinOkHttpTransferRunner(
                     networkMonitor.updateLinkEwma(pinnedLinkKeyId, mbps)
                     networkMonitor.breakerRegistry[pinnedLinkKeyId]?.recordSuccess()
                 }
+                runCatching { java.net.URL(urls.firstOrNull().orEmpty()).host }.getOrNull()
+                    ?.takeIf { it.isNotBlank() }?.let { host ->
+                        hostLimits.working(host, activeWorkersByLink.values.sumOf { it.get() })
+                    }
                 return true
             }
         } catch (ce: CancellationException) {
@@ -1047,6 +1083,18 @@ internal class KotlinOkHttpTransferRunner(
             if (pinnedLinkKeyId != null && ex !is HttpAuthExpiredException) {
                 networkMonitor.breakerRegistry[pinnedLinkKeyId]?.recordFailureOrStall(immediateTrip = false)
                 networkMonitor.publishState()
+            }
+            // A refusal while other connections are receiving tells us the host's
+            // real connection ceiling. Learn it so future workers do not overshoot.
+            val msg = ex.message.orEmpty()
+            if (msg.contains("429") || msg.contains("503") ||
+                msg.contains("connect", ignoreCase = true) || msg.contains("refused", ignoreCase = true)
+            ) {
+                val host = runCatching { java.net.URL(urls.firstOrNull().orEmpty()).host }.getOrNull()
+                if (!host.isNullOrBlank()) {
+                    val receiving = activeWorkersByLink.values.sumOf { it.get() }
+                    hostLimits.refused(host, receiving)
+                }
             }
             if (stalledOut.get()) throw LinkStallException(pinnedLinkKeyId ?: "unknown")
             throw ex
@@ -1204,6 +1252,7 @@ internal class KotlinOkHttpTransferRunner(
         wifiBytes: Long,
         cellBytes: Long,
     ) {
+        bisectParts.remove(entity.id)
         runCatching { ledgerFileProvider(entity.id).delete() }
         repository.update(
             entity.copy(
@@ -1362,7 +1411,7 @@ internal class KotlinOkHttpTransferRunner(
         val cacheKey = "${endpoint?.linkKey?.id ?: "default"}|${endpoint?.netHandle ?: 0L}|$proxyType|$resolvedHost:$resolvedPort|s$effectiveShard"
         return clientPool.computeIfAbsent(cacheKey) {
             val builder = baseClient.newBuilder()
-                .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+                .connectionPool(ConnectionPool(64, 5, TimeUnit.MINUTES))
                 .dispatcher(sharedDispatcher)
                 .protocols(listOf(Protocol.HTTP_1_1))
 

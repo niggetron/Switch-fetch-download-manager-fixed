@@ -227,6 +227,7 @@ class AetherDownloadEngine(
 
     fun launchDownload(id: String) {
         if (activeJobs[id]?.isActive == true) return
+        AetherNativeBridge.resumeDownloadSafe(id) // no-op unless this task was paused in Rust
         aria2Engine.resume(id) // no-op unless this task was paused on the aria2-next backend
         ensureForegroundServiceRunning()
         val job = engineScope.launch {

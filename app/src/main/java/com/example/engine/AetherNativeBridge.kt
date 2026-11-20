@@ -120,6 +120,11 @@ object AetherNativeBridge {
         runCatching { nativePauseDownload(taskId) }
     }
 
+    fun resumeDownloadSafe(taskId: String) {
+        if (!isNativeLoaded) return
+        runCatching { nativeResumeDownload(taskId) }
+    }
+
     fun cancelDownloadSafe(taskId: String) {
         if (!isNativeLoaded) return
         runCatching { nativeCancelDownload(taskId) }
@@ -251,6 +256,7 @@ object AetherNativeBridge {
         protocolMode: String,
     )
     external fun nativePauseDownload(taskId: String)
+    external fun nativeResumeDownload(taskId: String)
     external fun nativeCancelDownload(taskId: String)
     external fun nativeUpdateTaskUrls(taskId: String, urlsNewlineSep: String)
     external fun nativeTaskOutcomeJson(taskId: String): String

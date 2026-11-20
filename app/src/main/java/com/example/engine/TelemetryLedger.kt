@@ -207,12 +207,12 @@ class TelemetryLedger(
                     cachedCpuHeadroomPct = pct
                     val thermal = powerManager.currentThermalStatus
                     val cap = when {
-                        thermal >= PowerManager.THERMAL_STATUS_CRITICAL -> 24
-                        thermal >= PowerManager.THERMAL_STATUS_SEVERE -> 32
-                        thermal >= PowerManager.THERMAL_STATUS_MODERATE -> 40
-                        pct != null && pct < 15 -> 32
-                        pct != null && pct < 35 -> 40
-                        else -> 48
+                        thermal >= PowerManager.THERMAL_STATUS_CRITICAL -> 32
+                        thermal >= PowerManager.THERMAL_STATUS_SEVERE -> 48
+                        thermal >= PowerManager.THERMAL_STATUS_MODERATE -> 80
+                        pct != null && pct < 15 -> 48
+                        pct != null && pct < 35 -> 80
+                        else -> 128
                     }
                     AetherNativeBridge.setThermalWorkerCapSafe(cap)
                 }.onFailure {

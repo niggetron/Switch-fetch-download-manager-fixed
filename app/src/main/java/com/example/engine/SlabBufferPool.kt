@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * Eliminates per-packet JVM byte[] heap allocations in the Kotlin fallback path.
  */
 class SlabBufferPool(
-    val slabSizeBytes: Int = 512 * 1024,
-    val maxSlabs: Int = 16, // 16 * 512 KiB = 8.0 MiB
+    val slabSizeBytes: Int = 256 * 1024,
+    val maxSlabs: Int = 96, // 96 * 256 KiB = 24 MiB direct ceiling
 ) {
     private val freeList = ConcurrentLinkedQueue<ByteBuffer>()
     private val totalAllocatedSlabs = AtomicInteger(0)
@@ -27,13 +27,15 @@ class SlabBufferPool(
         if (currentTotal < maxSlabs && totalAllocatedSlabs.compareAndSet(currentTotal, currentTotal + 1)) {
             return ByteBuffer.allocateDirect(slabSizeBytes)
         }
-        return ByteBuffer.allocateDirect(slabSizeBytes)
+        // Never grow the direct/off-heap budget past maxSlabs. Overflow uses
+        // heap memory so 128 workers cannot exhaust native memory on a phone.
+        return ByteBuffer.allocate(slabSizeBytes)
     }
 
     fun release(buffer: ByteBuffer) {
         activeInUseSlabs.updateAndGet { (it - 1).coerceAtLeast(0) }
         buffer.clear()
-        if (freeList.size < maxSlabs) {
+        if (buffer.isDirect && freeList.size < maxSlabs) {
             freeList.offer(buffer)
         }
     }

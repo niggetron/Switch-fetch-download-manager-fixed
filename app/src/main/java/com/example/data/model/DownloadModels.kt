@@ -5,7 +5,7 @@ import com.example.ui.theme.UiThemeConfig
 
 const val F2FS_SEGMENT_BYTES: Long = 4L * 1024L * 1024L // 4 MiB default adaptive BDP base
 const val MEDIASTORE_DIRECT_FD_THRESHOLD_BYTES: Long = 1L * 1024L * 1024L * 1024L // 1 GiB FUSE threshold
-const val MAX_CONCURRENT_WORKERS_CAP: Int = 64
+const val MAX_CONCURRENT_WORKERS_CAP: Int = 128
 
 enum class DownloadStatus {
     QUEUED,

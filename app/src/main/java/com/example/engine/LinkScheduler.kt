@@ -236,7 +236,7 @@ object LinkScheduler {
     ): Int {
         // Never exceed 24 lanes: beyond that, per-host congestion wiped out the
         // gains (70 Mbps peaks but 25 Mbps average on a throttled phone).
-        val clampedMax = maxWorkers.coerceIn(1, 48)
+        val clampedMax = maxWorkers.coerceIn(1, 128)
         val clampedMin = minWorkers.coerceIn(1, clampedMax)
         if (throttled || deltaRttMs > 40.0) {
             return (currentWorkers - 2).coerceAtLeast(clampedMin)
