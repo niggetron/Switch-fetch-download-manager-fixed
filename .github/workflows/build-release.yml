@@ -119,6 +119,36 @@ jobs:
             fi
           done
 
+      - name: Bundle libc++_shared.so required by libaether_core.so
+        run: |
+          # The Rust cdylib links the Android C++ runtime dynamically (NEEDED:
+          # libc++_shared.so). Without shipping it, System.loadLibrary() fails
+          # with "dlopen failed: library libc++_shared.so not found" and the app
+          # silently falls back to Kotlin even though the .so is in the APK.
+          LIBCXX="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" \
+            -path "*aarch64-linux-android*" -name libc++_shared.so -type f 2>/dev/null | head -n1)"
+          if [ -z "$LIBCXX" ]; then
+            echo "::error::libc++_shared.so not found under $ANDROID_NDK_HOME"
+            exit 1
+          fi
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp "$LIBCXX" app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+          echo "Bundled $LIBCXX -> app/src/main/jniLibs/arm64-v8a/libc++_shared.so"
+
+      - name: Verify every native library dependency is bundled
+        run: |
+          SO="app/src/main/jniLibs/arm64-v8a/libaether_core.so"
+          for dep in $(readelf -d "$SO" | grep NEEDED | sed 's/.*\[\(.*\)\]/\1/'); do
+            case "$dep" in
+              libc.so|libm.so|libdl.so|liblog.so) continue ;;
+            esac
+            if [ ! -f "app/src/main/jniLibs/arm64-v8a/$dep" ]; then
+              echo "::error::$dep is needed by libaether_core.so but is not bundled in jniLibs"
+              exit 1
+            fi
+            echo "Resolved native dependency: $dep"
+          done
+
       - name: Compute version & unique package name per build
         id: ver
         run: |
@@ -169,6 +199,10 @@ jobs:
           if [ -z "$APK" ]; then echo "::error::No release APK found"; exit 1; fi
           unzip -l "$APK" | grep "lib/arm64-v8a/libaether_core.so" || {
             echo "::error::libaether_core.so missing from packaged APK!";
+            exit 1;
+          }
+          unzip -l "$APK" | grep "lib/arm64-v8a/libc++_shared.so" || {
+            echo "::error::libc++_shared.so missing from packaged APK - native load will fail!";
             exit 1;
           }
           SO_SIZE="$(ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so | awk '{print $5}')"

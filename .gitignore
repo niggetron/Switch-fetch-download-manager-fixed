@@ -16,3 +16,4 @@
 local.properties
 .env
 debug.keystore
+rust/aether-core/target/

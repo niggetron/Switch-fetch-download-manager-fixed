@@ -57,7 +57,11 @@ object StoragePlacementHelper {
                     "Rust libaether_core.so is toggled OFF in Engine settings."
                 )
                 !nativeLoaded -> BackendSelectionResult.Unavailable(
-                    "Rust libaether_core.so not bundled in this build (compile via CI arm64-v8a or switch to Kotlin OkHttp)."
+                    buildString {
+                        append("Rust libaether_core.so failed to load: ")
+                        append(AetherNativeBridge.loadError ?: "not bundled in this build")
+                        append(". Install the CI arm64-v8a release APK (it includes libc++_shared.so), or switch to Kotlin OkHttp.")
+                    }
                 )
                 else -> BackendSelectionResult.Selected(ResolvedEngineBackend.RUST_LIBAETHER_CORE)
             }
