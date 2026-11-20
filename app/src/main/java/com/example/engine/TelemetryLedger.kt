@@ -35,6 +35,7 @@ data class TelemetrySnapshot(
     val ethAvgBps: Long = 0L,
     val rustPeakBps: Long = 0L,
     val kotlinPeakBps: Long = 0L,
+    val aria2PeakBps: Long = 0L,
     val wifiBytesTotal: Long = 0L,
     val wifi2BytesTotal: Long = 0L,
     val cellBytesTotal: Long = 0L,
@@ -105,6 +106,7 @@ class TelemetryLedger(
     private val ethPeakBps = AtomicLong(0L)
     private val rustPeakBps = AtomicLong(0L)
     private val kotlinPeakBps = AtomicLong(0L)
+    private val aria2PeakBps = AtomicLong(0L)
     private val kotlinAntiDipRescues = AtomicLong(0L)
 
     // True active-time running averages (sum of non-zero sample speeds / active sample count)
@@ -229,6 +231,7 @@ class TelemetryLedger(
         when (backend) {
             ResolvedEngineBackend.RUST_LIBAETHER_CORE -> rustPeakBps.updateAndGet { maxOf(it, speedBps) }
             ResolvedEngineBackend.KOTLIN_OKHTTP -> kotlinPeakBps.updateAndGet { maxOf(it, speedBps) }
+            ResolvedEngineBackend.ARIA2_NEXT -> aria2PeakBps.updateAndGet { maxOf(it, speedBps) }
         }
     }
 
@@ -240,6 +243,7 @@ class TelemetryLedger(
         ethPeakBps.set(0L)
         rustPeakBps.set(0L)
         kotlinPeakBps.set(0L)
+        aria2PeakBps.set(0L)
         kotlinAntiDipRescues.set(0L)
         synchronized(sampleLock) {
             aggActiveSum = 0L; aggActiveCount = 0L
@@ -260,6 +264,7 @@ class TelemetryLedger(
                 ethAvgBps = 0L,
                 rustPeakBps = 0L,
                 kotlinPeakBps = 0L,
+                aria2PeakBps = 0L,
                 antiDipRescues = 0L,
             )
         }
@@ -505,6 +510,7 @@ class TelemetryLedger(
             ethAvgBps = avgEth,
             rustPeakBps = rustPeakBps.get(),
             kotlinPeakBps = kotlinPeakBps.get(),
+            aria2PeakBps = aria2PeakBps.get(),
             wifiBytesTotal = (memfdSnap?.wifiBytesTotal ?: 0L) + wifiBytesCumulative.get(),
             wifi2BytesTotal = (memfdSnap?.wifi2BytesTotal ?: 0L) + wifi2BytesCumulative.get(),
             cellBytesTotal = (memfdSnap?.cellBytesTotal ?: 0L) + cellBytesCumulative.get(),
