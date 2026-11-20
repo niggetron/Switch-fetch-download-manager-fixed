@@ -71,7 +71,9 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     private val _fileSearchQuery = MutableStateFlow("")
     val fileSearchQuery: StateFlow<String> = _fileSearchQuery.asStateFlow()
 
-    private val _realTelemetry = MutableStateFlow(telemetryLedger.sampleSnapshot(false))
+    // Do not sample on construction: that used to load the native library and
+    // initialize the Rust engine before the first frame was drawn.
+    private val _realTelemetry = MutableStateFlow(TelemetrySnapshot())
     private val _simulatedTelemetry = MutableStateFlow<TelemetrySnapshot?>(null)
     private val _simulatedMatrix = MutableStateFlow<NetworkMatrixState?>(null)
 

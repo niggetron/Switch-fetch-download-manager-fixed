@@ -131,15 +131,24 @@ class TelemetryLedger(
     @Volatile
     private var cachedCpuHeadroomPct: Int? = null
 
+    // Never touch System.loadLibrary() from the Application constructor or main
+    // thread at startup. Native availability is refreshed lazily in the background
+    // once the process is fully up; this keeps a broken/slow .so from taking the
+    // whole app down on first frame.
     @Volatile
-    private var activeEngineBadgeLabel: String =
-        if (AetherNativeBridge.isNativeLoaded) "RUST READY" else "KOTLIN OKHTTP"
+    private var activeEngineBadgeLabel: String = "KOTLIN OKHTTP"
 
     @Volatile
-    private var cachedSnapshot: TelemetrySnapshot = TelemetrySnapshot(
-        isNativeRustActive = AetherNativeBridge.isNativeLoaded,
-        activeEngineBadge = activeEngineBadgeLabel,
-    )
+    private var cachedSnapshot: TelemetrySnapshot = TelemetrySnapshot()
+
+    fun refreshNativeBadge() {
+        val native = runCatching { AetherNativeBridge.isNativeLoaded }.getOrDefault(false)
+        activeEngineBadgeLabel = if (native) "RUST READY" else "KOTLIN OKHTTP"
+        cachedSnapshot = cachedSnapshot.copy(
+            isNativeRustActive = native,
+            activeEngineBadge = activeEngineBadgeLabel,
+        )
+    }
 
     @Volatile
     private var lastSampleTimestampMs: Long = 0L
@@ -440,7 +449,11 @@ class TelemetryLedger(
         val jvmUsedMb = (rt.totalMemory() - rt.freeMemory()) / (1024f * 1024f)
         val nativeMb = Debug.getNativeHeapAllocatedSize() / (1024f * 1024f)
 
-        val nativeStats = AetherNativeBridge.slabStatsSafe()
+        // Native slab stats initialize the whole Rust engine (Tokio runtime + 12 MiB
+        // pool). Only touch that path once a download is actually active.
+        val nativeStats = if (hasActiveDownloads) {
+            runCatching { AetherNativeBridge.slabStatsSafe() }.getOrNull()
+        } else null
         val slabAllocMb = if (nativeStats != null && nativeStats.size >= 2 && nativeStats[0] > 0L) {
             nativeStats[0] / (1024f * 1024f)
         } else {
@@ -460,7 +473,9 @@ class TelemetryLedger(
             DATA_SYNC_QUOTA_MS
         }
 
-        val nativeConns = AetherNativeBridge.connectionsListSafe()
+        val nativeConns = if (hasActiveDownloads) {
+            runCatching { AetherNativeBridge.connectionsListSafe() }.getOrDefault(emptyList())
+        } else emptyList()
         val combinedConns = (nativeConns + kotlinConnections.values)
             .sortedBy { it.rangeStart }
 
@@ -522,7 +537,7 @@ class TelemetryLedger(
             quotaRemainingMs = remaining,
             quotaActiveSession = sessionStart > 0L,
             pollingHzLabel = if (hasActiveDownloads) "4 Hz Active" else "Idle (0-Alloc)",
-            isNativeRustActive = AetherNativeBridge.isNativeLoaded,
+            isNativeRustActive = activeEngineBadgeLabel == "RUST READY",
             isMemfdMapped = memfdReader.isMapped,
             activeEngineBadge = activeEngineBadgeLabel,
             recentLiveSegments = liveSegmentRing.toList(),

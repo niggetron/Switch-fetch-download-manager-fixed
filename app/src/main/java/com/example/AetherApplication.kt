@@ -65,9 +65,13 @@ class AetherApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        telemetryLedger.attachMemfdIfAvailable()
         telemetryLedger.startCpuHeadroomMonitor(appScope)
         appScope.launch {
+            // Keep every native entry point off the main startup path. If the .so
+            // is missing, incompatible, or crashes during load, the UI still opens
+            // and the Kotlin OkHttp engine remains fully usable.
+            runCatching { telemetryLedger.attachMemfdIfAvailable() }
+            runCatching { telemetryLedger.refreshNativeBadge() }
             val saved = settingsRepository.current()
             dualWifiConnector.probeCapabilities()
             networkMonitor.start(saved)
