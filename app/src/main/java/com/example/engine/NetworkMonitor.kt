@@ -173,7 +173,7 @@ class NetworkMonitor(context: Context) {
                             cellRate = c.downstreamKbps * 1000.0 / 8.0,
                             cellQueue = 0.0,
                             cellRtt = 0.0,
-                            blockBytes = 2L * 1024L * 1024L,
+                            blockBytes = (2L * 1024L * 1024L).toDouble(),
                         )
                         val useWifi = when {
                             preferred == 0 && w.downstreamKbps >= c.downstreamKbps * 2 -> true
