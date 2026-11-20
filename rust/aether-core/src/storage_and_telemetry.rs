@@ -262,18 +262,16 @@ impl BoundedSlabPool {
     }
 }
 
-#[cfg(target_os = "android")]
-pub fn probe_io_uring_supported() -> bool {
-    let fd = unsafe { libc::syscall(425, 4u32, std::ptr::null_mut::<libc::c_void>()) };
-    if fd >= 0 {
-        unsafe { libc::close(fd as i32) };
-        true
-    } else {
-        false
-    }
-}
-
-#[cfg(not(target_os = "android"))]
+/// Never probe io_uring with a raw syscall on Android.
+///
+/// `io_uring_setup` (arm64 syscall 425) is blocked by Android's seccomp filter on
+/// modern devices. Calling it does NOT return EPERM - the kernel delivers SIGSYS,
+/// which kills the process instantly. This was the startup crash: `nativeEngineVersion`
+/// called this probe and took down the whole app.
+///
+/// The engine uses the safe `fallocate + pwrite + fdatasync` path on Android anyway
+/// (the `enableIoUringProbe` setting defaults to false), so report false without
+/// ever issuing the syscall.
 pub fn probe_io_uring_supported() -> bool {
     false
 }
