@@ -3,6 +3,11 @@ name: Build & Publish Release APK
 # Builds an arm64-v8a release APK on every push to main and publishes it to the
 # Releases tab with an automatically bumped version name (base from
 # app/build.gradle.kts, e.g. "1.0" -> "1.0.<run number>").
+#
+# Crucially, this workflow cross-compiles rust/aether-core into
+# app/src/main/jniLibs/arm64-v8a/libaether_core.so BEFORE Gradle runs. Without
+# that step the app always reported "libaether_core.so not bundled" and ran the
+# Kotlin OkHttp fallback.
 on:
   push:
     branches: [main]
@@ -33,6 +38,49 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (for Rust cross-compilation)
+        run: |
+          sdkmanager --install "platforms;android-36" "ndk;26.3.11579264" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "NDK installed at $ANDROID_HOME/ndk/26.3.11579264"
+
+      - name: Set up stable Rust with Android arm64 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build Rust native core (arm64-v8a)
+        working-directory: rust/aether-core
+        run: |
+          cargo ndk --target arm64-v8a --platform 24 \
+            -o ../../app/src/main/jniLibs build --release
+
+      - name: Verify native library is bundled
+        run: |
+          SO="app/src/main/jniLibs/arm64-v8a/libaether_core.so"
+          if [ ! -s "$SO" ]; then
+            echo "::error::libaether_core.so was not produced - check the Rust build step"
+            exit 1
+          fi
+          echo "Native core: $(stat -c%s "$SO") bytes"
+          file "$SO"
+          sha256sum "$SO"
+          echo "JNI symbols:"
+          nm -D "$SO" | grep 'Java_com_example_engine_AetherNativeBridge' || true
+
+      - name: Upload native library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libaether_core-arm64-v8a
+          path: app/src/main/jniLibs/arm64-v8a/libaether_core.so
+
       - name: Compute version
         id: ver
         run: |
@@ -57,12 +105,22 @@ jobs:
             -PciAbiFilter=arm64-v8a \
             --stacktrace
 
+      - name: Verify native library inside APK
+        run: |
+          APK="$(ls app/build/outputs/apk/release/*release*.apk 2>/dev/null | head -n1)"
+          if [ -z "$APK" ]; then echo "::error::No release APK found"; exit 1; fi
+          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/libaether_core.so'; then
+            echo "Verified: libaether_core.so is packaged in the APK"
+          else
+            echo "::error::libaether_core.so missing from APK - Gradle jniLibs config is wrong"
+            exit 1
+          fi
+
       - name: Stage APK for release
         run: |
           VERSION="${{ steps.ver.outputs.version_name }}"
           mkdir -p dist
           APK="$(ls app/build/outputs/apk/release/*release*.apk 2>/dev/null | head -n1)"
-          if [ -z "$APK" ]; then echo "::error::No release APK found"; exit 1; fi
           cp "$APK" "dist/AetherIO-v${VERSION}-arm64-v8a.apk"
           ls -la dist
 
@@ -75,5 +133,5 @@ jobs:
             "dist/AetherIO-v${VERSION}-arm64-v8a.apk" \
             --title "AetherIO v${VERSION}" \
             --latest \
-            --notes "$(printf 'Automated arm64-v8a release build\n\n- **Version name:** %s\n- **Version code:** %s\n- **Commit:** %s\n- **Branch:** %s\n' \
+            --notes "$(printf 'Automated arm64-v8a release build\n\n- **Version name:** %s\n- **Version code:** %s\n- **Commit:** %s\n- **Branch:** %s\n- **Native core:** Rust aether-core (BLAKE3 + GF256 RLNC + F2FS 2MB)\n' \
               "${VERSION}" "${{ github.run_number }}" "${{ github.sha }}" "${{ github.ref_name }}")"

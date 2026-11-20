@@ -5,12 +5,14 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Fixed-budget DirectByteBuffer slab pool (256 KB slabs, capped at 6.0 MB active budget)
+ * Fixed-budget DirectByteBuffer slab pool (512 KB slabs, capped at ~6 MB active budget)
  * to avoid per-packet JVM byte[] heap allocations during high-throughput streaming.
+ * If all tracked slabs are checked out, a short-lived heap buffer is used instead so
+ * allocation accounting never drifts from the actual direct-buffer population.
  */
 class SlabBufferPool(
-    val slabSizeBytes: Int = 256 * 1024,
-    val maxSlabs: Int = 24, // 24 * 256 KB = 6.0 MB
+    val slabSizeBytes: Int = 512 * 1024,
+    val maxSlabs: Int = 12, // 12 * 512 KB = 6.0 MB
 ) {
     private val freeList = ConcurrentLinkedQueue<ByteBuffer>()
     private val totalAllocatedSlabs = AtomicInteger(0)
@@ -18,23 +20,22 @@ class SlabBufferPool(
 
     fun acquire(): ByteBuffer {
         activeInUseSlabs.incrementAndGet()
-        val pooled = freeList.poll()
-        if (pooled != null) {
+        freeList.poll()?.let { pooled ->
             pooled.clear()
             return pooled
         }
-        val currentTotal = totalAllocatedSlabs.get()
-        if (currentTotal < maxSlabs && totalAllocatedSlabs.compareAndSet(currentTotal, currentTotal + 1)) {
+        val current = totalAllocatedSlabs.get()
+        if (current < maxSlabs && totalAllocatedSlabs.compareAndSet(current, current + 1)) {
             return ByteBuffer.allocateDirect(slabSizeBytes)
         }
-        // Fallback direct buffer if all 24 slabs are simultaneously checked out
-        return ByteBuffer.allocateDirect(slabSizeBytes)
+        // Overflow: do not add to the pool or the accounting would drift on trimIdle().
+        return ByteBuffer.allocate(slabSizeBytes)
     }
 
     fun release(buffer: ByteBuffer) {
         activeInUseSlabs.decrementAndGet().coerceAtLeast(0)
         buffer.clear()
-        if (freeList.size < maxSlabs) {
+        if (buffer.isDirect && freeList.size < maxSlabs) {
             freeList.offer(buffer)
         }
     }

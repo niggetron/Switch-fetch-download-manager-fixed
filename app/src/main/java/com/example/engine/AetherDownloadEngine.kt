@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.Call
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -66,10 +68,25 @@ class AetherDownloadEngine(
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val activeCalls = ConcurrentHashMap<String, MutableList<Call>>()
 
+    // OkHttp defaults cap a single host at 5 concurrent connections, which silently
+    // throttled the 8-worker engine. Dedicated pool + dispatcher unlock full parallelism.
+    private val connectionPool = ConnectionPool(
+        maxIdleConnections = 16,
+        keepAliveDuration = 10,
+        timeUnit = TimeUnit.MINUTES,
+    )
+    private val dispatcher = Dispatcher().apply {
+        maxRequests = 64
+        maxRequestsPerHost = 32
+    }
+
     private val baseClient = OkHttpClient.Builder()
         .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectionPool(connectionPool)
+        .dispatcher(dispatcher)
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
@@ -414,7 +431,8 @@ class AetherDownloadEngine(
 
                 try {
                     if (probeResult.supportsRange && totalBytes > 0L && dest.isRandomAccess && segmentCount > 1) {
-                        val workerCount = entity.workerCount.coerceIn(1, minOf(8, segmentCount))
+                        val workerCount = minOf(entity.workerCount, settings.maxConcurrentWorkers)
+                            .coerceIn(1, minOf(8, segmentCount))
                         val nextIndex = AtomicInteger(0)
 
                         coroutineScope {
@@ -744,6 +762,8 @@ class AetherDownloadEngine(
                 bitMutex.withLock {
                     bitChars[segIndex] = SegmentState.COMMITTED.code
                 }
+                // Feed the committed extent into the native (Rust) telemetry page.
+                AetherNativeBridge.recordCommit(segWritten)
                 return true
             }
         } finally {
@@ -777,6 +797,7 @@ class AetherDownloadEngine(
                 if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                 val source = resp.body?.source() ?: throw IOException("Empty response body")
                 var offset = 0L
+                var streamWritten = 0L
                 while (true) {
                     slab.clear()
                     val read = source.read(slab)
@@ -785,12 +806,14 @@ class AetherDownloadEngine(
                         slab.flip()
                         dest.writeAt(slab, offset)
                         offset += read
+                        streamWritten += read.toLong()
                         liveWrittenBytes.addAndGet(read.toLong())
                         telemetryLedger.recordBytesWritten(read.toLong())
                         syscallBatches.incrementAndGet()
                         telemetryLedger.recordSyscallWriteBatch()
                     }
                 }
+                AetherNativeBridge.recordCommit(streamWritten)
             }
         } finally {
             slabPool.release(slab)
@@ -870,7 +893,15 @@ class AetherDownloadEngine(
         val chunkDigest = MessageDigest.getInstance("SHA-256")
         val chunks = mutableListOf<CasChunkEntity>()
         var dedupMatchBytes = 0L
-        val buf = ByteArray(64 * 1024)
+        // Larger reads mean fewer syscalls on the verification pass.
+        val buf = ByteArray(256 * 1024)
+
+        // When the Rust core is loaded, chunk digests come from SIMD BLAKE3 via JNI.
+        // SHA-256 stays as the file digest (needed for user-supplied expectedSha256)
+        // and as the fallback chunk hasher.
+        val chunkCap = segSize.coerceIn(1L, 16L * 1024L * 1024L).toInt()
+        val nativeBuf = if (AetherNativeBridge.isNativeLoaded) ByteArray(chunkCap) else null
+        var nativeFilled = 0
 
         val stream = if (entity.isSafDestination) {
             val pfd = context.contentResolver.openFileDescriptor(Uri.parse(entity.destinationUri), "r")
@@ -878,6 +909,16 @@ class AetherDownloadEngine(
             ParcelFileDescriptor.AutoCloseInputStream(pfd)
         } else {
             FileInputStream(File(entity.destinationUri))
+        }
+
+        fun chunkHash(currentBytes: Long): String {
+            val native = nativeBuf
+            return if (native != null && nativeFilled >= 0) {
+                AetherNativeBridge.blake3Hex(native.copyOf(nativeFilled))
+                    ?: chunkDigest.digest().toHexString()
+            } else {
+                chunkDigest.digest().toHexString()
+            }
         }
 
         stream.use { input ->
@@ -889,10 +930,19 @@ class AetherDownloadEngine(
                 if (read == -1) break
                 fileDigest.update(buf, 0, read)
                 chunkDigest.update(buf, 0, read)
+                nativeBuf?.let { native ->
+                    if (nativeFilled >= 0 && nativeFilled + read <= native.size) {
+                        System.arraycopy(buf, 0, native, nativeFilled, read)
+                        nativeFilled += read
+                    } else {
+                        // Chunk larger than the native hash buffer: fall back to SHA-256.
+                        nativeFilled = -1
+                    }
+                }
                 currentChunkBytes += read
                 chunkRemaining -= read
                 if (chunkRemaining == 0L) {
-                    val cHash = chunkDigest.digest().toHexString()
+                    val cHash = chunkHash(currentChunkBytes)
                     if (repository.hasCasChunk(cHash)) dedupMatchBytes += currentChunkBytes
                     chunks += CasChunkEntity(
                         chunkHash = cHash,
@@ -900,12 +950,13 @@ class AetherDownloadEngine(
                         sourceDownloadId = entity.id,
                     )
                     chunkDigest.reset()
+                    nativeFilled = 0
                     chunkRemaining = segSize
                     currentChunkBytes = 0L
                 }
             }
             if (currentChunkBytes > 0L) {
-                val cHash = chunkDigest.digest().toHexString()
+                val cHash = chunkHash(currentChunkBytes)
                 if (repository.hasCasChunk(cHash)) dedupMatchBytes += currentChunkBytes
                 chunks += CasChunkEntity(
                     chunkHash = cHash,

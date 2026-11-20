@@ -160,7 +160,27 @@ class NetworkMonitor(context: Context) {
                     w != null && c != null -> {
                         val total = (w.downstreamKbps + c.downstreamKbps).coerceAtLeast(1)
                         val wifiShare = ((w.downstreamKbps.toFloat() / total) * 4f).toInt().coerceIn(1, 3)
-                        if (workerIndex % 4 < wifiShare) w.network to false else c.network to true
+                        val distributed = workerIndex % 4 < wifiShare
+
+                        // The Rust scheduler decides which link would deliver a 2 MB
+                        // block first. Honour it when one link clearly dominates;
+                        // otherwise keep the bandwidth-weighted distribution so both
+                        // radios stay saturated (true multipath aggregation).
+                        val preferred = AetherNativeBridge.selectLink(
+                            wifiRate = w.downstreamKbps * 1000.0 / 8.0,
+                            wifiQueue = 0.0,
+                            wifiRtt = 0.0,
+                            cellRate = c.downstreamKbps * 1000.0 / 8.0,
+                            cellQueue = 0.0,
+                            cellRtt = 0.0,
+                            blockBytes = 2L * 1024L * 1024L,
+                        )
+                        val useWifi = when {
+                            preferred == 0 && w.downstreamKbps >= c.downstreamKbps * 2 -> true
+                            preferred == 1 && c.downstreamKbps >= w.downstreamKbps * 2 -> false
+                            else -> distributed
+                        }
+                        if (useWifi) w.network to false else c.network to true
                     }
                     w != null -> w.network to false
                     c != null -> c.network to true

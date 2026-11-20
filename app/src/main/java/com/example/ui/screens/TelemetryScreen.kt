@@ -110,12 +110,14 @@ fun TelemetryScreen(
                 LayerMetricRow(
                     title = "L4 · DirectByteBuffer Slab & 2 MB Extent",
                     detail = String.format(
-                        "%s\nSlab Pool %.1f MB · JVM %.1f MB · Native %.1f MB · %d batches",
+                        "%s\nSlab %.1f MB · JVM %.1f MB · Native %.1f MB · %d batches\nRust arena %.1f MB · native committed %.1f MB",
                         com.example.engine.AetherNativeBridge.engineBackendLabel,
                         telemetry.slabAllocatedMb,
                         telemetry.jvmHeapUsedMb,
                         telemetry.nativeHeapMb,
                         telemetry.totalSyscallWriteBatches,
+                        com.example.engine.AetherNativeBridge.arenaUsedBytes() / (1024f * 1024f),
+                        com.example.engine.AetherNativeBridge.nativeTotalBytes() / (1024f * 1024f),
                     ),
                     color = ext.amber,
                 )

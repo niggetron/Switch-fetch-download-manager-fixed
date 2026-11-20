@@ -1,8 +1,8 @@
 [package]
 name = "aether-core"
-version = "6.0.0"
+version = "6.0.1"
 edition = "2024"
-description = "AetherIO Omega v6.0 Zero-Copy Pure Rust Transport, RLNC, and io_uring Storage Core"
+description = "AetherIO Omega v6.0 stable-Rust JNI core (BLAKE3 CAS, GF256 RLNC, multipath scheduler, 2MB F2FS extents)"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -10,16 +10,12 @@ name = "aether_core"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Core zero-copy Linux / Android kernel bindings
-rustix = { version = "1.0", features = ["fs", "mm", "net", "process"] }
+# io_uring is used by the optional 2 MB F2FS extent commit path (Linux/Android).
 io-uring = "0.7"
+# SIMD BLAKE3 for the content-addressed chunk index.
 blake3 = "1.6"
+# Stable JNI bindings (0.21 works with the Kotlin external fun signatures).
 jni = "0.21"
-
-# Multipath QUIC & TLS transport (noq v1.1.0 + aws-lc-rs per Blueprint Tier 3)
-# Enable when building with full network target toolchain:
-# noq = "1.1.0"
-# aws-lc-rs = "1.12"
 
 [profile.release]
 opt-level = 3

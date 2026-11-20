@@ -1,7 +1,5 @@
-[registry]
-global-min-publish-age = "3 days"
-
+# Stable Rust cross-compilation settings for Android arm64-v8a.
+# Build locally with: ./build_android.sh   (needs cargo-ndk or cargo-zigbuild)
 [target.aarch64-linux-android]
-# Build via: cargo zigbuild --target aarch64-linux-android.29 --release
-# Or via: cargo ndk -t arm64-v8a -o ../../app/src/main/jniLibs build --release
+# ARM64 NEON is a baseline feature; make it explicit for the hot loops.
 rustflags = ["-C", "target-feature=+neon"]

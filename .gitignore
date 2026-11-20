@@ -16,3 +16,5 @@
 local.properties
 .env
 debug.keystore
+# Rust cross-compilation artifacts (built in CI, never committed)
+rust/aether-core/target/
