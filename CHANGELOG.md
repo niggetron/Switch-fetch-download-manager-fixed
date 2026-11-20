@@ -2,6 +2,19 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.1] - Removing the Hidden 16-Lane Ceiling
+
+### Upgraded & Enhanced
+- Android 16 CPU-headroom values are no longer misread as percentages and used to hard-cap the native engine at 16 workers. PowerManager thermal status now maps to a soft 24/32/40/48 lane ceiling.
+- Network range size reduced to 256 KiB–4 MiB so a typical file exposes enough claimable ranges for 32–48 sockets (Ghost Downloader / aria2-next strategy).
+- Native slab pool raised to 64 × 256 KiB (16 MiB) so the semaphore no longer limits concurrency below the worker cap.
+- Default worker count raised to 32; Rust runtime and aria2-next daemon are warmed during app startup so the first download starts immediately.
+- aria2-next tuned with 16 connections/server, 1 MiB splits, no file allocation, 64 MiB disk cache, HTTP/2, retry/backoff and concurrent-download optimization.
+- Geo lookup now tries ipapi.co, ip-api.com and ipinfo.io with caching; dashboard shows the live download host, resolved CDN IP, city/country and ISP even when one provider fails.
+
+### Fixed
+- Task status flips to STREAMING immediately on dispatch instead of appearing queued while native/aria2 warms up.
+
 ## [9.2.0] - Triple-Engine Fork: aria2-next, Live Speed Dashboard & Adaptive Throughput
 
 ### Added
