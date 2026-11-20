@@ -49,6 +49,8 @@ class AetherDownloadEngine(
 
     private val aria2Engine = Aria2NextEngine(context = context, repository = repository)
 
+    fun aria2Status(): Pair<Boolean, String> = aria2Engine.isAvailable() to aria2Engine.lastError
+
     private val kotlinRunner = KotlinOkHttpTransferRunner(
         context = context,
         repository = repository,
@@ -416,6 +418,19 @@ class AetherDownloadEngine(
     }
 
     private suspend fun executeWithRustNative(entity: DownloadEntity, settings: EngineSettings) {
+        // Handles rotate on Wi-Fi/cellular reconnects. Re-push every link right
+        // before the Rust engine starts, otherwise workers fall back to
+        // `default:auto` and flap between networks mid-download.
+        networkMonitor.syncAllToNative()
+        if (networkMonitor.state.value.activeValidatedLinks.isEmpty()) {
+            DiagnosticsCenter.log(
+                "RUST_FALLBACK",
+                "No validated native link handles; routing via Kotlin OkHttp instead of unbound default:auto",
+            )
+            kotlinRunner.run(entity.copy(engineBackendUsed = ResolvedEngineBackend.KOTLIN_OKHTTP.id), settings)
+            return
+        }
+
         val id = entity.id
         val urls = entity.allUrls.ifEmpty { listOf(entity.url) }
         val cellCap = when {

@@ -358,9 +358,9 @@ internal class KotlinOkHttpTransferRunner(
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
                 val maxCap = when (settings.throughputProfile) {
-                    ThroughputProfile.TURBO_ANTI_DIP -> 20
-                    ThroughputProfile.MAX_MULTI_SOCKET -> 24
-                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 16
+                    ThroughputProfile.TURBO_ANTI_DIP -> 40
+                    ThroughputProfile.MAX_MULTI_SOCKET -> 48
+                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 32
                 }
                 val baseDesired = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
                 val boostedDesired = if (settings.enableAutoSpeedUp || settings.throughputProfile != ThroughputProfile.SUSTAINED_ANTI_DIP) {
@@ -412,7 +412,12 @@ internal class KotlinOkHttpTransferRunner(
                                 throttled = anyBreakerOpen,
                             )
                             targetWorkers.set(adjusted)
-                            prevGoodputBps = curSpeed.toDouble()
+                            // EWMA avoids shedding lanes on every normal 5G wobble.
+                            prevGoodputBps = if (prevGoodputBps <= 0.0) {
+                                curSpeed.toDouble()
+                            } else {
+                                0.6 * prevGoodputBps + 0.4 * curSpeed
+                            }
                             prevTtfb = curTtfb
                         }
 

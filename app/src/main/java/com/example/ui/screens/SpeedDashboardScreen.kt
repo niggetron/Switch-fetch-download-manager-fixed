@@ -23,14 +23,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Card
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,8 +46,21 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.engine.NetworkMatrixState
+import com.example.engine.ShizukuStatus
+import com.example.engine.ShizukuWifiState
 import com.example.engine.TelemetrySnapshot
+import com.example.ui.motion.AetherSharedKey
+import com.example.ui.motion.SharedPart
+import com.example.ui.motion.aetherSharedBounds
 import com.example.ui.theme.LocalAetherColors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.net.InetAddress
+import java.net.URL
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 /**
@@ -60,6 +77,10 @@ fun SpeedDashboardScreen(
     networkMatrix: NetworkMatrixState,
     useMBpsSpeedUnit: Boolean,
     onToggleSpeedUnit: () -> Unit,
+    shizukuState: ShizukuWifiState = ShizukuWifiState(),
+    onRequestShizukuPermission: () -> Unit = {},
+    aria2Available: Boolean = false,
+    aria2Error: String = "",
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalAetherColors.current
@@ -102,6 +123,34 @@ fun SpeedDashboardScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+        }
+
+        item(key = "engine_status") {
+            DashboardCard(title = "Engine & Privilege Status") {
+                InfoLine("Engine backend", telemetry.activeEngineBadge)
+                InfoLine("aria2-next binary", if (aria2Available) "Bundled & ready" else "Missing")
+                if (aria2Error.isNotBlank()) {
+                    Text(
+                        aria2Error,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFFF9C2B),
+                    )
+                }
+                InfoLine("Shizuku", shizukuState.status.label)
+                if (shizukuState.status != ShizukuStatus.AUTHORIZED) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = onRequestShizukuPermission) {
+                        Text(
+                            when (shizukuState.status) {
+                                ShizukuStatus.PERMISSION_REQUIRED -> "Grant Shizuku Permission"
+                                ShizukuStatus.INSTALLED_STOPPED -> "Start Shizuku"
+                                ShizukuStatus.NOT_INSTALLED -> "Get Shizuku"
+                                ShizukuStatus.AUTHORIZED -> "Shizuku Active"
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -218,6 +267,42 @@ private fun formatSpeed(bps: Long, useMBps: Boolean): String =
         String.format("%.1f Mbps", bps / 1_000_000f)
     }
 
+private data class GeoInfo(
+    val city: String,
+    val country: String,
+    val lat: Double,
+    val lon: Double,
+    val ip: String,
+    val isp: String,
+)
+
+private val geoClient = OkHttpClient.Builder()
+    .connectTimeout(3, TimeUnit.SECONDS)
+    .readTimeout(4, TimeUnit.SECONDS)
+    .build()
+
+private suspend fun fetchGeo(ip: String? = null): GeoInfo? = withContext(Dispatchers.IO) {
+    try {
+        val url = if (ip.isNullOrBlank()) "https://ipapi.co/json/" else "https://ipapi.co/$ip/json/"
+        val request = Request.Builder().url(url).header("User-Agent", "AetherIO-Omega/9.2").build()
+        geoClient.newCall(request).execute().use { resp ->
+            val body = resp.body?.string() ?: return@withContext null
+            val obj = JSONObject(body)
+            if (obj.has("error")) return@withContext null
+            GeoInfo(
+                city = obj.optString("city"),
+                country = obj.optString("country_name"),
+                lat = obj.optString("latitude").toDoubleOrNull() ?: 0.0,
+                lon = obj.optString("longitude").toDoubleOrNull() ?: 0.0,
+                ip = obj.optString("ip"),
+                isp = obj.optString("org"),
+            )
+        }
+    } catch (t: Throwable) {
+        null
+    }
+}
+
 @Composable
 private fun DashboardCard(
     title: String,
@@ -254,7 +339,14 @@ private fun ThroughputCard(
 ) {
     val peak = (history.maxOrNull() ?: 1L).coerceAtLeast(1L)
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .aetherSharedBounds(
+                key = AetherSharedKey("speed_dashboard_${title.lowercase()}", SharedPart.SPEED_CHART),
+                clipShape = RoundedCornerShape(18.dp),
+                useCockpitSpring = true,
+                zIndexInOverlay = 1f,
+            ),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
         onClick = onClick,
@@ -350,15 +442,51 @@ private fun ServerLocationCard(
     val via = link?.label ?: "No validated link"
     val localIp = link?.localIp?.takeIf { it.isNotBlank() } ?: "—"
     val iface = link?.interfaceName ?: "—"
+    val serverUrl = telemetry.activeConnections.firstOrNull()?.url.orEmpty()
+
+    var clientGeo by remember { mutableStateOf<GeoInfo?>(null) }
+    var serverGeo by remember { mutableStateOf<GeoInfo?>(null) }
+    LaunchedEffect(serverUrl) {
+        clientGeo = fetchGeo()
+        if (serverUrl.isNotBlank()) {
+            val host = runCatching { URL(serverUrl).host }.getOrNull()
+            if (!host.isNullOrBlank()) {
+                val ip = withContext(Dispatchers.IO) {
+                    runCatching { InetAddress.getByName(host).hostAddress }.getOrNull()
+                }
+                serverGeo = fetchGeo(ip)
+            }
+        }
+    }
+
+    // Lightweight, offline world silhouette (lon/lat) so the map works without tiles.
+    val continents = listOf(
+        listOf(-168.0, 65.0, -140.0, 70.0, -100.0, 72.0, -60.0, 60.0, -80.0, 25.0, -100.0, 15.0, -120.0, 30.0),
+        listOf(-80.0, 10.0, -50.0, 10.0, -35.0, -10.0, -55.0, -35.0, -75.0, -50.0),
+        listOf(-10.0, 60.0, 30.0, 70.0, 60.0, 60.0, 40.0, 35.0, -10.0, 35.0),
+        listOf(-17.0, 35.0, 50.0, 35.0, 40.0, -35.0, 15.0, -35.0),
+        listOf(30.0, 70.0, 180.0, 70.0, 180.0, 0.0, 100.0, 5.0, 60.0, 25.0),
+        listOf(110.0, -10.0, 155.0, -10.0, 155.0, -40.0, 110.0, -40.0),
+    )
 
     DashboardCard(title = "Server Location") {
         Canvas(
             Modifier
                 .fillMaxWidth()
-                .height(170.dp)
+                .height(190.dp)
                 .clip(RoundedCornerShape(12.dp))
+                .aetherSharedBounds(
+                    key = AetherSharedKey("speed_server_map", SharedPart.SPEED_SERVER_MAP),
+                    clipShape = RoundedCornerShape(12.dp),
+                    useCockpitSpring = true,
+                )
                 .background(Color(0xFF11151C)),
         ) {
+            fun project(lon: Double, lat: Double) = Offset(
+                ((lon + 180.0) / 360.0 * size.width).toFloat(),
+                ((90.0 - lat) / 180.0 * size.height).toFloat(),
+            )
+
             val gridColor = Color(0xFF222A33)
             for (x in 0..size.width.toInt() step 36) {
                 drawLine(gridColor, Offset(x.toFloat(), 0f), Offset(x.toFloat(), size.height), 1f)
@@ -366,33 +494,37 @@ private fun ServerLocationCard(
             for (y in 0..size.height.toInt() step 36) {
                 drawLine(gridColor, Offset(0f, y.toFloat()), Offset(size.width, y.toFloat()), 1f)
             }
-            val cities = listOf(
-                "New Delhi" to Offset(size.width * 0.46f, size.height * 0.30f),
-                "Mumbai" to Offset(size.width * 0.26f, size.height * 0.72f),
-                "Kolkata" to Offset(size.width * 0.70f, size.height * 0.55f),
-                "Karachi" to Offset(size.width * 0.16f, size.height * 0.40f),
-                "Kathmandu" to Offset(size.width * 0.56f, size.height * 0.38f),
-                "Dhaka" to Offset(size.width * 0.80f, size.height * 0.48f),
-            )
-            cities.forEach { (_, p) ->
-                drawCircle(Color(0xFFFF9C2B), radius = 4f, center = p)
+            continents.forEach { points ->
+                val path = Path().apply {
+                    moveTo(project(points[0], points[1]))
+                    for (i in 2 until points.size step 2) lineTo(project(points[i], points[i + 1]))
+                    close()
+                }
+                drawPath(path, Color(0xFF2A323C))
             }
-            val server = cities[0].second
-            val you = cities[2].second
+            val serverPoint = serverGeo?.let { project(it.lon, it.lat) }
+                ?: project(77.2, 28.6) // New Delhi fallback until geo resolves
+            val clientPoint = clientGeo?.let { project(it.lon, it.lat) }
+                ?: project(88.4, 22.6) // Kolkata fallback
             drawLine(
                 color = accent.copy(alpha = 0.55f + 0.35f * phase),
-                start = server,
-                end = you,
+                start = serverPoint,
+                end = clientPoint,
                 strokeWidth = 2.5f,
             )
-            drawCircle(Color(0xFFE5484D), radius = 9f, center = you)
-            drawCircle(Color.White, radius = 3f, center = you)
+            drawCircle(Color(0xFFFF9C2B), radius = 6f, center = serverPoint)
+            drawCircle(Color(0xFFE5484D), radius = 9f, center = clientPoint)
+            drawCircle(Color.White, radius = 3f, center = clientPoint)
         }
         Spacer(Modifier.height(10.dp))
         InfoLine("Connected via", "$via ($iface)")
-        InfoLine("Server location", "Auto-selected nearest edge")
+        InfoLine(
+            "Server location",
+            serverGeo?.let { "${it.city}, ${it.country} · ${it.ip}" } ?: "Resolving CDN edge…",
+        )
         InfoLine("Your network", "Active links ${network.activeValidatedLinks.size} · ${telemetry.activeWorkers} workers")
-        InfoLine("Your IP address", localIp)
+        InfoLine("Your IP address", clientGeo?.ip ?: localIp)
+        InfoLine("ISP / ASN", serverGeo?.isp?.ifBlank { clientGeo?.isp.orEmpty() } ?: "—")
     }
 }
 

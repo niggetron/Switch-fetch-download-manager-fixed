@@ -17,6 +17,12 @@ val ciAbiFilter = findProperty("ciAbiFilter") as String?
 val ciApplicationId = (findProperty("ciApplicationId") as String?)?.takeIf { it.isNotBlank() }
 
 android {
+  // Keep the bundled aria2-next ELF uncompressed so AssetManager streams it
+  // reliably and the extracted binary passes verification on device.
+  androidResources {
+    noCompress += "aria2-next"
+  }
+
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 

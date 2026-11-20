@@ -724,18 +724,25 @@ impl NativeEngine {
                         0.0
                     };
                     let cur_w = tw.load(Ordering::Acquire);
+                    // Smooth the sample: raw 600 ms windows swing wildly on 5G and
+                    // caused the governor to shed lanes after every normal dip.
+                    let smooth_bps = if prev_bps <= 0.0 {
+                        cur_bps
+                    } else {
+                        0.6 * prev_bps + 0.4 * cur_bps
+                    };
                     let next_w = adjust_auto_speed_up(
                         cur_w,
                         min_w,
                         max_pool_workers,
                         prev_bps,
-                        cur_bps,
+                        smooth_bps,
                         delta_rtt,
                         false,
                     );
                     tw.store(next_w, Ordering::Release);
                     prev_bytes = cur_bytes;
-                    prev_bps = cur_bps;
+                    prev_bps = smooth_bps;
                     prev_rtt = cur_rtt;
                 }
             }))

@@ -1,6 +1,19 @@
-# AetherIO v9.0 — Quad-Link Dual-Engine Download Accelerator for Android
+# AetherIO v9.2 — Quad-Link Triple-Engine Download Accelerator for Android
 
-AetherIO is a high-throughput, zero-merge Android download engine featuring **two individually toggleable engines** (**Pure Rust `libaether_core.so` arm64-v8a** + **Kotlin OkHttp Turbo**), **Quad-Link Multi-Network Bonding** (`Wi-Fi 1 + Wi-Fi 2 + Mobile 5G/LTE + USB Tethering/Ethernet`), **Anti-Dip Sustained Speed Architecture**, and **Motorsport Bike/Vehicle Live Speedometers**.
+AetherIO is a high-throughput, zero-merge Android download engine featuring **three individually toggleable engines** (**Pure Rust `libaether_core.so` arm64-v8a**, **Kotlin OkHttp Turbo**, and **aria2-next / Rayburst**), **Quad-Link Multi-Network Bonding** (`Wi-Fi 1 + Wi-Fi 2 + Mobile 5G/LTE + USB Tethering/Ethernet`), **Anti-Dip Sustained Speed Architecture**, **a Cloudflare-style live Speed dashboard**, and **Motorsport Bike/Vehicle Live Speedometers**.
+
+---
+
+## What's New in 9.2.0
+
+- **aria2-next engine is now a first-class backend.** Pick it globally in Engine settings or per download with the **Force aria2-next** chip in the New Download sheet. The dashboard shows binary status and the real daemon error if it fails to start.
+- **New Speed tab** modelled on the Cloudflare speed test: animated goodput charts, latency/jitter/loss tiles, network quality score, and a **geo-located world map** that resolves the CDN edge IP of the active download and your own public IP to draw the server → you route.
+- **Adaptive throughput governors** in both Rust and Kotlin smooth goodput samples and scale lane counts up to 48 when healthy, backing off gently on sustained dips instead of pinning 64 sockets and collapsing.
+- **Multipath reliability**: native link handles are re-pushed before each download and on every network change, so Wi-Fi/cellular reconnects no longer leave workers on unbound `default:auto` routes. Wi-Fi is accepted without `VALIDATED` on OEM ROMs such as HyperOS.
+- **Crash and packaging fixes**: removed the seccomp-killed `io_uring_setup` syscall, bundled `libc++_shared.so`, and made the Rust core build on stable Rust.
+- **Shizuku prompt** on the dashboard when the service is installed but permission has not been granted.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full Added / Upgraded / Fixed / Changed / Removed breakdown. GitHub Releases now generate notes from the commits between tags instead of repeating an old changelog block.
 
 ---
 
@@ -100,7 +113,9 @@ verified) into `app/src/main/assets/aria2-next`. The app extracts it to
 app-private storage, starts it as a loopback-only JSON-RPC daemon with a per-boot
 secret, and drives downloads via `aria2.addUri` / `aria2.tellStatus`. Enable it
 with the **aria2-next Engine (Rayburst)** toggle in Engine settings or choose it
-as a forced backend.
+per download with the **Force aria2-next** chip. The binary is stored uncompressed
+in the APK, verified by ELF magic after extraction, and the dashboard reports the
+exact daemon error if JSON-RPC does not come up.
 
 ## Throughput & stability fixes in this fork
 

@@ -419,6 +419,12 @@ fun NewDownloadSheet(
                     enabled = defaultSettings.enableKotlinOkHttpEngine,
                     label = { Text("Force Kotlin OkHttp") },
                 )
+                FilterChip(
+                    selected = backendOverride == EngineBackendPreference.FORCE_ARIA2_NEXT,
+                    onClick = { backendOverride = EngineBackendPreference.FORCE_ARIA2_NEXT },
+                    enabled = defaultSettings.enableAria2NextEngine,
+                    label = { Text("Force aria2-next") },
+                )
             }
 
             Text(

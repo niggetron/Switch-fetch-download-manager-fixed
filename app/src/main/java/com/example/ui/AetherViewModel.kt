@@ -981,4 +981,6 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
             _aria2Secret.value = app.aria2RpcSecret
         }
     }
+
+    fun aria2Status(): Pair<Boolean, String> = engine.aria2Status()
 }

@@ -399,6 +399,36 @@ class NetworkMonitor(context: Context) {
         }
     }
 
+    /** Re-push every discovered link to the Rust core (handles rotate on reconnect). */
+    fun syncAllToNative() {
+        discoveredByKey.values.forEach { link ->
+            val isCell = link.linkKey is LinkKey.Cellular
+            val relayHost = link.relayProxyHost
+            AetherNativeBridge.updateLinkHandleSafe(
+                linkKey = link.linkKey.id,
+                netHandle = link.netHandle,
+                downstreamKbps = link.downstreamKbps.toLong(),
+                rttMs = when {
+                    isCell -> 26L
+                    link.isRelay -> 18L
+                    else -> 14L
+                },
+                isCellular = isCell,
+                localIp = link.localIp,
+                proxyHost = relayHost.ifBlank {
+                    if (isCell) latestSettings.cellularProxyHost else latestSettings.proxyHost
+                },
+                proxyPort = if (link.relayProxyPort > 0) {
+                    link.relayProxyPort
+                } else if (isCell) {
+                    latestSettings.cellularProxyPort
+                } else {
+                    latestSettings.proxyPort
+                },
+            )
+        }
+    }
+
     fun refreshState() {
         val active = cm.activeNetwork
         if (active != null) {
@@ -406,6 +436,7 @@ class NetworkMonitor(context: Context) {
         } else {
             publishState()
         }
+        syncAllToNative()
     }
 
     private fun updateNetwork(

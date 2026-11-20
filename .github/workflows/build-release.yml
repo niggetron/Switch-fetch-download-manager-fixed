@@ -244,7 +244,7 @@ jobs:
           fi
 
           {
-            echo "# AetherIO v${VERSION} (arm64-v8a Dual-Engine Release)"
+            echo "# AetherIO v${VERSION} (arm64-v8a Triple-Engine Release)"
             echo ""
             if [ -n "${{ inputs.extra_notes }}" ]; then
               echo "> ${{ inputs.extra_notes }}"
@@ -256,20 +256,37 @@ jobs:
             echo "| **Version** | \`v${VERSION}\` (build \`${{ steps.ver.outputs.version_code }}\`) |"
             echo "| **Unique APK Package Name** | \`${PKG_NAME}\` *(changes on every CI build for clean side-by-side installs)* |"
             echo "| **ABI Architecture** | \`arm64-v8a\` |"
-            echo "| **Bundled Dual Engines** | **Pure Rust \`libaether_core.so\` (${{ steps.pkg.outputs.so_size }})** + **Kotlin OkHttp Turbo** |"
+            echo "| **Bundled Engines** | **Rust \`libaether_core.so\` (${{ steps.pkg.outputs.so_size }})** + **Kotlin OkHttp Turbo** + **aria2-next (Rayburst)** |"
             echo "| **APK Size** | \`${{ steps.pkg.outputs.apk_size }}\` |"
             echo "| **SHA-256** | \`${{ steps.pkg.outputs.sha256 }}\` |"
             echo "| **Commit / Branch** | \`${{ steps.ver.outputs.short_sha }}\` on \`${{ github.ref_name }}\` |"
             echo ""
 
-            if [ -f CHANGELOG.md ]; then
-              echo "## Release Changelog (Added · Upgraded · Fixed · Changed · Removed)"
-              awk '/^## \[/{flag++} flag==1{print}' CHANGELOG.md
-              echo ""
-            fi
+            echo "## What's Changed"
+            echo ""
+            section() {
+              LABEL="$1"; PATTERN="$2"
+              LINES="$(git log "${COMMIT_RANGE}" --no-merges --pretty=format:"%s" 2>/dev/null \
+                | grep -iE "$PATTERN" \
+                | sed -E 's/^[A-Za-z]+(\([^)]*\))?!?: //I' \
+                | sed 's/^/- /' || true)"
+              if [ -n "$LINES" ]; then
+                echo "### $LABEL"
+                echo "$LINES"
+                echo ""
+              fi
+            }
+            section "Added" '^feat'
+            section "Fixed" '^fix|^hotfix'
+            section "Upgraded & Enhanced" '^perf|^improve'
+            section "Changed" '^refactor|^chore|^style'
+            section "Removed" '^remove|^revert'
 
-            echo "## Git Commits Included (${COMMIT_RANGE})"
-            git log "${COMMIT_RANGE}" --no-merges --pretty=format:"- \`%h\` %s (%an)" 2>/dev/null || git log -n 10 --pretty=format:"- \`%h\` %s (%an)"
+            echo "### Commits in ${COMMIT_RANGE}"
+            git log "${COMMIT_RANGE}" --no-merges --pretty=format:"- \`%h\` %s (%an)" 2>/dev/null \
+              || git log -n 10 --pretty=format:"- \`%h\` %s (%an)"
+            echo ""
+            echo "[Full Changelog](https://github.com/${{ github.repository }}/compare/${PREV_TAG}...v${VERSION})"
             echo ""
           } > dist/RELEASE_NOTES.md
           cat dist/RELEASE_NOTES.md

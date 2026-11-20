@@ -507,6 +507,10 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 networkMatrix = networkMatrix,
                                                 useMBpsSpeedUnit = useMBpsSpeedUnit,
                                                 onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
+                                                shizukuState = shizukuState,
+                                                onRequestShizukuPermission = viewModel::requestShizukuPermission,
+                                                aria2Available = viewModel.aria2Status().first,
+                                                aria2Error = viewModel.aria2Status().second,
                                             )
                                         }
                                     }

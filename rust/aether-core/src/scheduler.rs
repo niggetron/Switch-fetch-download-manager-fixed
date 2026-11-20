@@ -6,7 +6,7 @@ use serde::Serialize;
 // 64 concurrent sockets to one CDN caused congestion collapse (70 Mbps spikes,
 // 25 Mbps average). 24 is enough to fill a 5G/Wi-Fi link while staying stable,
 // especially under the thermal throttling seen on real devices.
-pub const MAX_WORKERS_CAP: usize = 24;
+pub const MAX_WORKERS_CAP: usize = 48;
 
 /// Adaptive BDP extent sizing for high-speed Wi-Fi 6 / 5G / Quad-Link pipes:
 /// - < 50 Mbps -> 1 MiB
@@ -279,12 +279,12 @@ pub fn adjust_auto_speed_up(
         // Back off aggressively when adding sockets made things WORSE. The old
         // governor only ever increased workers, so a congested 64-worker pool
         // stayed at 64 forever and average throughput collapsed.
-        if gain < -0.08 {
-            let step = (current_workers / 4).max(2);
+        if gain < -0.06 {
+            let step = (current_workers / 6).max(2);
             return current_workers.saturating_sub(step).max(clamped_min);
         }
-        if gain > 0.05 && delta_rtt_ms < 18.0 {
-            let step = if current_workers < 12 { 4 } else { 2 };
+        if gain > 0.03 && delta_rtt_ms < 18.0 {
+            let step = if current_workers < 16 { 4 } else { 2 };
             return (current_workers + step).min(clamped_max);
         }
     }

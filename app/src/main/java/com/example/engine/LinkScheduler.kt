@@ -235,7 +235,7 @@ object LinkScheduler {
     ): Int {
         // Never exceed 24 lanes: beyond that, per-host congestion wiped out the
         // gains (70 Mbps peaks but 25 Mbps average on a throttled phone).
-        val clampedMax = maxWorkers.coerceIn(1, 24)
+        val clampedMax = maxWorkers.coerceIn(1, 48)
         val clampedMin = minWorkers.coerceIn(1, clampedMax)
         if (throttled || deltaRttMs > 40.0) {
             return (currentWorkers - 2).coerceAtLeast(clampedMin)
@@ -248,12 +248,12 @@ object LinkScheduler {
             // Scale DOWN when more sockets made throughput worse. Previously the
             // governor never decreased on a goodput drop, so 64 lanes stayed at 64
             // while average speed fell from 70 Mbps to 25 Mbps.
-            if (gain < -0.08) {
-                val step = (currentWorkers / 4).coerceAtLeast(2)
+            if (gain < -0.06) {
+                val step = (currentWorkers / 6).coerceAtLeast(2)
                 return (currentWorkers - step).coerceAtLeast(clampedMin)
             }
-            if (gain > 0.05 && deltaRttMs < 18.0) {
-                val step = if (currentWorkers < 12) 4 else 2
+            if (gain > 0.03 && deltaRttMs < 18.0) {
+                val step = if (currentWorkers < 16) 4 else 2
                 return (currentWorkers + step).coerceAtMost(clampedMax)
             }
         }

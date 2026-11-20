@@ -1,6 +1,36 @@
 # Changelog
 
-All notable changes to **AetherIO** are documented in this file. The automated GitHub Actions release pipeline embeds the latest release section below directly into every GitHub Release.
+All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
+
+## [9.2.0] - Triple-Engine Fork: aria2-next, Live Speed Dashboard & Adaptive Throughput
+
+### Added
+- **aria2-next (Rayburst) engine**: CI bundles the SHA-256-verified arm64 executable as an APK asset; the app runs it as a loopback JSON-RPC daemon with a per-boot secret and exposes `aria2.addUri`/`tellStatus`/`pause`/`remove`. Selectable in Engine settings and in the per-download backend chips.
+- **Cloudflare-style Speed dashboard tab**: Animated download/upload area charts, Latency/Jitter/Packet-Loss tiles, Network Quality Score, geo-located world map with live route (CDN edge IP → your public IP via ipapi.co), and latency/download/upload distribution cards.
+- **Shizuku privilege prompt** on the dashboard when Shizuku is installed but not authorized, with a direct grant/start action.
+- Engine binary/privilege status card with actionable aria2-next diagnostics.
+- Explicit `noCompress` asset rule for the aria2-next ELF and ELF-magic verification after extraction.
+
+### Upgraded & Enhanced
+- Adaptive lane governors in **both** Rust and Kotlin now use EWMA smoothing and can scale up to 48 lanes when the link is healthy; they shed lanes gently on sustained goodput loss instead of collapsing.
+- Native links are re-pushed to the Rust core before every download and on network changes, preventing `default:auto` unbound workers during Wi-Fi/cellular reconnects.
+- Wi-Fi links accepted with INTERNET + usable IP even when OEM ROMs omit `NET_CAPABILITY_VALIDATED`.
+- Shared-element cockpit spring transitions for dashboard charts and the server map.
+
+### Fixed
+- **Startup SIGSYS crash**: removed the seccomp-blocked raw `io_uring_setup` syscall (arm64 425) from `probe_io_uring_supported()`.
+- **`libc++_shared.so` missing from APK**: CI now bundles the NDK C++ runtime; `dlopen` no longer fails.
+- Release notes no longer paste the same historical changelog section into every release.
+- Misleading "aria2-next binary not bundled" error now reports the real extraction/daemon failure.
+- Rust unit-test expectations updated for the adaptive worker caps.
+
+### Changed
+- Worker caps: Rust 48, Kotlin 40/48/32 by throughput profile (was a hard 64).
+- Retry backoff is exponential (was a fixed 120 ms hammer loop).
+- Stale (> 5 s) TTFB samples are ignored by both governors.
+
+### Removed
+- Nightly-only Rust APIs (`allocator_api`, `DropGuard`, `conjure_zst`, `as_mut_unchecked`) — core now builds fully on stable Rust in CI.
 
 ## [9.1] - Hyperion 64-Stream Force-All-Links Engine, Rayburst UI, 1DM+ Properties, Shizuku Wi-Fi 2 Picker & 18-Theme Color Studio
 

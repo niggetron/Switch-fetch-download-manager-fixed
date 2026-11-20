@@ -49,6 +49,8 @@ enum class SharedPart {
     FILE_ICON,
     FILE_TITLE,
     FILE_LEDGER,
+    SPEED_CHART,
+    SPEED_SERVER_MAP,
 }
 
 data class AetherSharedKey(

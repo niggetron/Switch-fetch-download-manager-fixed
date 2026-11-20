@@ -16,6 +16,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -49,18 +50,45 @@ class Aria2NextEngine(
     @Volatile
     private var secret: String = ""
 
+    @Volatile
+    var lastError: String = ""
+        private set
+
     fun isAvailable(): Boolean = binaryFile() != null
+
+    private fun isElf(file: File): Boolean {
+        if (!file.exists() || file.length() < 4096L) return false
+        return try {
+            FileInputStream(file).use { input ->
+                val magic = ByteArray(4)
+                if (input.read(magic) != 4) return false
+                magic[0] == 0x7f.toByte() && magic[1] == 'E'.toByte() &&
+                    magic[2] == 'L'.toByte() && magic[3] == 'F'.toByte()
+            }
+        } catch (t: Throwable) {
+            false
+        }
+    }
 
     private fun binaryFile(): File? {
         val target = File(context.filesDir, "aria2-next")
-        if (target.exists() && target.length() > 1_000_000L) return target
+        if (isElf(target)) return target
         return try {
             context.assets.open("aria2-next").use { input ->
                 FileOutputStream(target).use { out -> input.copyTo(out) }
             }
             target.setExecutable(true, false)
-            if (target.length() > 1_000_000L) target else null
+            if (isElf(target)) {
+                lastError = ""
+                target
+            } else {
+                lastError = "Extracted aria2-next asset is not a valid ELF (${target.length()} bytes)"
+                DiagnosticsCenter.log("ARIA2_ERROR", lastError)
+                null
+            }
         } catch (t: Throwable) {
+            lastError = "Cannot extract aria2-next: ${t.message ?: t.javaClass.simpleName}"
+            DiagnosticsCenter.log("ARIA2_ERROR", lastError)
             null
         }
     }
@@ -80,6 +108,7 @@ class Aria2NextEngine(
         val binary = binaryFile() ?: return false
         secret = UUID.randomUUID().toString().replace("-", "")
         val downloadDir = File(context.filesDir, "aria2-downloads").apply { mkdirs() }
+        val log = StringBuilder()
         return try {
             process?.destroy()
             process = ProcessBuilder(
@@ -94,35 +123,64 @@ class Aria2NextEngine(
                 "--summary-interval=0",
                 "--console-log-level=warn",
             ).redirectErrorStream(true).start()
+
+            // Drain stderr/stdout so the daemon never blocks on a full pipe, and
+            // keep the tail for an actionable error message in the UI.
+            Thread {
+                try {
+                    process?.inputStream?.bufferedReader()?.use { reader ->
+                        reader.forEachLine { line ->
+                            if (log.length < 8_000) log.append(line).append('\n')
+                        }
+                    }
+                } catch (t: Throwable) {
+                    // process exited; ignore
+                }
+            }.apply { isDaemon = true }.start()
+
             repeat(40) {
-                if (rpcCall("aria2.getVersion", emptyList()) != null) return true
+                if (rpcCall("aria2.getVersion", emptyList()) != null) {
+                    lastError = ""
+                    DiagnosticsCenter.log("ARIA2_READY", "aria2-next JSON-RPC online on 127.0.0.1:$rpcPort")
+                    return true
+                }
                 Thread.sleep(200)
             }
+            lastError = "aria2-next did not answer JSON-RPC on 127.0.0.1:$rpcPort. ${log.toString().takeLast(400)}"
+            DiagnosticsCenter.log("ARIA2_ERROR", lastError)
             false
         } catch (t: Throwable) {
+            lastError = "Failed to start aria2-next: ${t.message ?: t.javaClass.simpleName}"
+            DiagnosticsCenter.log("ARIA2_ERROR", lastError)
             false
         }
     }
 
     private fun rpcCall(method: String, params: List<Any>): JSONObject? {
         val token = if (secret.isBlank()) "" else "token:$secret:"
-        val callParams = if (token.isEmpty()) params else listOf(token) + params
-        val body = JSONObject().apply {
-            put("jsonrpc", "2.0")
-            put("id", System.currentTimeMillis())
-            put("method", method)
-            put("params", JSONArray(callParams))
-        }.toString().toRequestBody("application/json".toMediaType())
-        return try {
-            client.newCall(Request.Builder().url(rpcUrl).post(body).build()).execute().use { resp ->
-                val payload = resp.body?.string().orEmpty()
-                if (payload.isBlank()) return null
-                val obj = JSONObject(payload)
-                if (obj.has("error") && !obj.isNull("error")) null else obj.optJSONObject("result")
+        // Try with the aria2 token prefix first, then without: some aria2-next
+        // builds reject the token on introspection calls, others require it.
+        val attempts = if (token.isEmpty()) listOf(params) else listOf(listOf(token) + params, params)
+        for (callParams in attempts) {
+            val body = JSONObject().apply {
+                put("jsonrpc", "2.0")
+                put("id", System.currentTimeMillis())
+                put("method", method)
+                put("params", JSONArray(callParams))
+            }.toString().toRequestBody("application/json".toMediaType())
+            try {
+                client.newCall(Request.Builder().url(rpcUrl).post(body).build()).execute().use { resp ->
+                    val payload = resp.body?.string().orEmpty()
+                    if (payload.isBlank()) return@use
+                    val obj = JSONObject(payload)
+                    if (obj.has("error") && !obj.isNull("error")) return@use
+                    obj.optJSONObject("result")?.let { return it }
+                }
+            } catch (t: Throwable) {
+                lastError = "RPC $method: ${t.message ?: t.javaClass.simpleName}"
             }
-        } catch (t: Throwable) {
-            null
         }
+        return null
     }
 
     private fun addUri(entity: DownloadEntity, settings: EngineSettings): String? {
@@ -162,7 +220,7 @@ class Aria2NextEngine(
             repository.update(
                 entity.copy(
                     status = DownloadStatus.FAILED.name,
-                    errorMessage = "aria2-next engine unavailable (binary not bundled)",
+                    errorMessage = "aria2-next engine unavailable: ${lastError.ifBlank { "binary not bundled" }}",
                     updatedAt = System.currentTimeMillis(),
                 )
             )
