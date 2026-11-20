@@ -592,7 +592,6 @@ impl NativeEngine {
             error_message: String::new(),
         });
 
-        let seg_count = ledger.states.len().max(1);
         let ledger_arc = Arc::new(Mutex::new(ledger));
         let breakers_arc = Arc::new(Mutex::new(HashMap::<String, LinkCircuitBreaker>::new()));
         let active_ranges = Arc::new(Mutex::new(HashMap::<String, Arc<ActiveRangeState>>::new()));

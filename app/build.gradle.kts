@@ -12,7 +12,7 @@ plugins {
 // unique package name per build (-PciApplicationId), and restrict the build to arm64-v8a.
 // Locally they are absent and the defaults below apply.
 val ciVersionCode = (findProperty("ciVersionCode") as String?)?.toIntOrNull() ?: 1
-val ciVersionName = (findProperty("ciVersionName") as String?) ?: "9.0"
+val ciVersionName = (findProperty("ciVersionName") as String?) ?: "9.1"
 val ciAbiFilter = findProperty("ciAbiFilter") as String?
 val ciApplicationId = (findProperty("ciApplicationId") as String?)?.takeIf { it.isNotBlank() }
 
@@ -189,6 +189,11 @@ val buildRustCore = tasks.register<Exec>("buildRustCore") {
   }
 
   environment("ANDROID_ABI", "arm64-v8a")
+  environment(
+    "RUSTFLAGS",
+    System.getenv("RUSTFLAGS")?.takeIf { it.isNotBlank() }
+      ?: "-C link-arg=-Wl,-z,max-page-size=16384",
+  )
   commandLine(
     "cargo", "ndk",
     "-t", "arm64-v8a",

@@ -111,17 +111,19 @@ jobs:
         run: |
           gradle :app:buildRustCore -PrequireRustBuild=true --stacktrace
           ls -lh app/src/main/jniLibs/arm64-v8a/libaether_core.so
-          readelf -l app/src/main/jniLibs/arm64-v8a/libaether_core.so | grep LOAD
-          readelf -l app/src/main/jniLibs/arm64-v8a/libaether_core.so | grep LOAD | grep -q "0x4000" || {
-            echo "::error::libaether_core.so is NOT 16 KB (0x4000) ELF aligned!";
-            exit 1;
-          }
+          readelf -lW app/src/main/jniLibs/arm64-v8a/libaether_core.so | grep LOAD
+          for align in $(readelf -lW app/src/main/jniLibs/arm64-v8a/libaether_core.so | awk '/LOAD/{print $NF}'); do
+            if (( align < 16384 )); then
+              echo "::error::LOAD segment alignment ${align} is less than 16 KB (0x4000)!"
+              exit 1
+            fi
+          done
 
       - name: Compute version & unique package name per build
         id: ver
         run: |
           BASE="$(grep -oP 'ciVersionName.*?\?:\s*"\K[^"]+' app/build.gradle.kts | head -n1)"
-          BASE="${BASE:-9.0}"
+          BASE="${BASE:-9.1}"
           OVERRIDE="${{ inputs.version_override }}"
           if [ -n "$OVERRIDE" ]; then
             VERSION="$OVERRIDE"

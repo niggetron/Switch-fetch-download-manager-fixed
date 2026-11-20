@@ -117,17 +117,18 @@ class MultiNetworkAndSchedulerTest {
     }
 
     @Test
-    fun `v9_0 adaptive BDP sizing up to 32 MiB and bidirectional autoSpeedUp scaling up to 16 workers`() {
+    fun `v9_1 adaptive BDP sizing up to 32 MiB and bidirectional autoSpeedUp scaling up to 64 workers`() {
         assertEquals(1L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(33_000))
         assertEquals(4L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(90_000))
         assertEquals(8L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(163_000))
         assertEquals(16L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(400_000))
         assertEquals(32L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(900_000))
-        assertEquals(16, LinkScheduler.effectiveWorkerCount(userMaxConnections = 24, validatedLinksCount = 4))
+        assertEquals(24, LinkScheduler.effectiveWorkerCount(userMaxConnections = 24, validatedLinksCount = 4))
+        assertEquals(64, LinkScheduler.effectiveWorkerCount(userMaxConnections = 96, validatedLinksCount = 4))
 
-        // Goodput improves > 6% with low RTT growth -> +2 workers
+        // Goodput improves > 5% with low RTT growth -> +4 workers below 24 (clamped at maxWorkers)
         assertEquals(
-            6,
+            8,
             LinkScheduler.adjustAutoSpeedUp(
                 currentWorkers = 4,
                 minWorkers = 2,
@@ -357,7 +358,7 @@ class MultiNetworkAndSchedulerTest {
         assertNotNull(bisected)
         assertEquals(2L * 1024L * 1024L, bisected!!.first)
         assertEquals(4L * 1024L * 1024L - 1L, bisected.second)
-        assertNull(LinkScheduler.bisectRange(0L, 512L * 1024L))
+        assertNull(LinkScheduler.bisectRange(0L, 256L * 1024L))
     }
 
     @Test
