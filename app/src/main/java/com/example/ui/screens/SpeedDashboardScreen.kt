@@ -170,9 +170,9 @@ fun SpeedDashboardScreen(
 
         item(key = "up") {
             ThroughputCard(
-                title = "Upload",
+                title = "Upload (estimate — not measured)",
                 value = formatSpeed(animatedUp.toLong(), useMBpsSpeedUnit),
-                percentile = "Estimated from active link upstream capacity",
+                percentile = "Indicative only: derived from link capacity, not observed upload bytes",
                 history = telemetry.speedHistoryBps.map { (it * 0.06f).toLong() },
                 color = Color(0xFFB388FF),
                 phase = 1f - infinite,
@@ -190,16 +190,16 @@ fun SpeedDashboardScreen(
                     Modifier.weight(1f),
                 )
                 MetricTile(
-                    "Jitter",
+                    "Stability",
                     "${telemetry.stabilityPercent}%",
-                    "stability",
+                    "measured goodput consistency",
                     ext.amber,
                     Modifier.weight(1f),
                 )
                 MetricTile(
-                    "Packet Loss",
-                    if (telemetry.blockedReasonLabel.equals("None", true)) "0%" else "—",
+                    "Block reason",
                     telemetry.blockedReasonLabel,
+                    "not packet loss",
                     ext.emerald,
                     Modifier.weight(1f),
                 )
@@ -207,7 +207,7 @@ fun SpeedDashboardScreen(
         }
 
         item(key = "quality") {
-            DashboardCard(title = "Network Quality Score") {
+            DashboardCard(title = "Network Quality (heuristic)") {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -218,7 +218,7 @@ fun SpeedDashboardScreen(
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Score derived from measured goodput, ${telemetry.activeWorkers} active workers, ${telemetry.stabilityPercent}% stability and ${telemetry.antiDipRescues} anti-dip rescues.",
+                    "Indicative only — stars are a heuristic over ${telemetry.activeWorkers} workers, ${telemetry.stabilityPercent}% stability and ${telemetry.antiDipRescues} rescues; not an ISP quality measurement.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -231,10 +231,10 @@ fun SpeedDashboardScreen(
 
         item(key = "latency_measurements") {
             DistributionCard(
-                title = "Latency Measurements",
-                subtitle = "TTFB distribution over the active session",
-                values = telemetry.speedHistoryBps.map { (it / 100_000L).coerceAtMost(400L) },
-                unit = "ms",
+                title = "Speed Stability Spread",
+                subtitle = "Distribution of recent goodput samples (real telemetry)",
+                values = telemetry.speedHistoryBps,
+                unit = "bps",
                 color = ext.cyan,
             )
         }
@@ -532,19 +532,20 @@ private fun ServerLocationCard(
                 }
                 drawPath(path, Color(0xFF2A323C))
             }
+            // Never draw fabricated fallback pins as if they were real locations.
             val serverPoint = serverGeo?.let { project(it.lon, it.lat) }
-                ?: project(77.2, 28.6) // New Delhi fallback until geo resolves
             val clientPoint = clientGeo?.let { project(it.lon, it.lat) }
-                ?: project(88.4, 22.6) // Kolkata fallback
-            drawLine(
-                color = accent.copy(alpha = 0.55f + 0.35f * phase),
-                start = serverPoint,
-                end = clientPoint,
-                strokeWidth = 2.5f,
-            )
-            drawCircle(Color(0xFFFF9C2B), radius = 6f, center = serverPoint)
-            drawCircle(Color(0xFFE5484D), radius = 9f, center = clientPoint)
-            drawCircle(Color.White, radius = 3f, center = clientPoint)
+            if (serverPoint != null && clientPoint != null) {
+                drawLine(
+                    color = accent.copy(alpha = 0.55f + 0.35f * phase),
+                    start = serverPoint,
+                    end = clientPoint,
+                    strokeWidth = 2.5f,
+                )
+                drawCircle(Color(0xFFFF9C2B), radius = 6f, center = serverPoint)
+                drawCircle(Color(0xFFE5484D), radius = 9f, center = clientPoint)
+                drawCircle(Color.White, radius = 3f, center = clientPoint)
+            }
         }
         Spacer(Modifier.height(10.dp))
         InfoLine("Connected via", "$via ($iface)")
@@ -555,7 +556,11 @@ private fun ServerLocationCard(
             serverGeo?.let {
                 listOf(it.city, it.country).filter { s -> s.isNotBlank() }.joinToString(", ")
                     .ifBlank { it.ip }.ifBlank { "Unknown" }
-            } ?: "Resolving CDN edge…",
+            } ?: if (serverHost == null) {
+                "No active transfer — start a download to resolve the CDN edge"
+            } else {
+                "Unavailable — geo providers did not resolve this IP"
+            },
         )
         InfoLine("Your network", "Active links ${network.activeValidatedLinks.size} · ${telemetry.activeWorkers} workers")
         InfoLine("Your IP address", clientGeo?.ip ?: localIp)

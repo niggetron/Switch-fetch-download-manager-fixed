@@ -2,6 +2,27 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.2] - 128 Lanes, Engine Correctness and Honest Telemetry
+
+### Added
+- Per-host connection-limit learning (two refusals, 10-minute decay) adapted from Mister Download Manager, so a server that allows 2 connections gets 2 instead of 128 wasted sockets.
+- Native `resumeTask` JNI API; aria2-next driven with the correct string GID result and 128-connection options.
+- Share-sheet intake: shared `http(s)` links are queued from `ACTION_SEND`.
+
+### Upgraded & Enhanced
+- Connection ceilings raised to 128 across Rust, OkHttp and aria2 with thermal/host-aware governors; small files start with one 64 KiB piece per connection.
+- Rust telemetry atomics are published once per 120 ms instead of once per network chunk; CAS scratch buffer allocated only when a real out-of-order gap exists.
+- `Retry-After` on 429/503 honored as a floor (capped at 10 minutes).
+- `PARTIAL_WAKE_LOCK` held by the FGS and WorkManager fallback.
+
+### Fixed
+- Range-ignoring servers returning HTTP 200 are rejected in both engines instead of corrupting the file.
+- Rust no longer truncates unknown-length responses to the 16 KiB probe and falsely reports COMPLETED.
+- Anti-dip split segments commit only after both halves are on disk.
+- Open/Share works again (FileProvider `Download/` path).
+- Backup rules no longer expose signed URLs, SAF URIs and proxy settings.
+- Speed dashboard no longer presents fabricated upload/latency/jitter/packet-loss/quality figures or fake map pins.
+
 ## [9.2.1] - Removing the Hidden 16-Lane Ceiling
 
 ### Upgraded & Enhanced
