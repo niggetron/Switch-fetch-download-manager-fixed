@@ -118,11 +118,11 @@ class MultiNetworkAndSchedulerTest {
 
     @Test
     fun `v9_1 adaptive BDP sizing up to 32 MiB and bidirectional autoSpeedUp scaling up to 64 workers`() {
-        assertEquals(1L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(33_000))
-        assertEquals(4L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(90_000))
-        assertEquals(8L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(163_000))
-        assertEquals(16L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(400_000))
-        assertEquals(32L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(900_000))
+        assertEquals(256L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(33_000))
+        assertEquals(512L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(90_000))
+        assertEquals(1L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(163_000))
+        assertEquals(2L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(400_000))
+        assertEquals(4L * 1024L * 1024L, LinkScheduler.adaptiveBdpSegmentBytes(900_000))
         assertEquals(24, LinkScheduler.effectiveWorkerCount(userMaxConnections = 24, validatedLinksCount = 4))
         assertEquals(64, LinkScheduler.effectiveWorkerCount(userMaxConnections = 96, validatedLinksCount = 4))
 

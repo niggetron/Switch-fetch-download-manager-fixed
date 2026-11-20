@@ -198,15 +198,23 @@ class TelemetryLedger(
             while (isActive) {
                 runCatching {
                     val value = getHeadroomMethod.first.invoke(shm, null) as? Number
-                    val pct = value?.toFloat()?.coerceIn(0f, 100f)?.toInt()
+                    // getCpuHeadroom may return milliwatts, not a percentage. Only
+                    // trust values that are plausibly 0..100; otherwise fall back
+                    // to PowerManager's thermal status instead of blindly capping
+                    // the native engine at 16 workers.
+                    val raw = value?.toFloat()
+                    val pct = raw?.takeIf { it in 0f..100f }?.toInt()
                     cachedCpuHeadroomPct = pct
-                    if (pct != null && pct < 20) {
-                        AetherNativeBridge.setThermalWorkerCapSafe(16)
-                    } else if (pct != null && pct < 40) {
-                        AetherNativeBridge.setThermalWorkerCapSafe(32)
-                    } else {
-                        AetherNativeBridge.setThermalWorkerCapSafe(64)
+                    val thermal = powerManager.currentThermalStatus
+                    val cap = when {
+                        thermal >= PowerManager.THERMAL_STATUS_CRITICAL -> 24
+                        thermal >= PowerManager.THERMAL_STATUS_SEVERE -> 32
+                        thermal >= PowerManager.THERMAL_STATUS_MODERATE -> 40
+                        pct != null && pct < 15 -> 32
+                        pct != null && pct < 35 -> 40
+                        else -> 48
                     }
+                    AetherNativeBridge.setThermalWorkerCapSafe(cap)
                 }.onFailure {
                     if (it.cause is UnsupportedOperationException || it is UnsupportedOperationException) {
                         cachedCpuHeadroomPct = null

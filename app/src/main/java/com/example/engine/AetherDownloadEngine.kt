@@ -51,6 +51,8 @@ class AetherDownloadEngine(
 
     fun aria2Status(): Pair<Boolean, String> = aria2Engine.isAvailable() to aria2Engine.lastError
 
+    fun warmAria2() = aria2Engine.warmup()
+
     private val kotlinRunner = KotlinOkHttpTransferRunner(
         context = context,
         repository = repository,
@@ -405,7 +407,14 @@ class AetherDownloadEngine(
             is BackendSelectionResult.Selected -> {
                 telemetryLedger.setActiveEngineBadge(selection.backend.badge)
                 DiagnosticsCenter.log("DISPATCH", "Starting ${entity.fileName} via ${selection.backend.badge}")
-                val tagged = entity.copy(engineBackendUsed = selection.backend.id)
+                // Flip to STREAMING immediately so the UI never shows a false
+                // "queued" state while the native/aria2 daemon is warming up.
+                val tagged = entity.copy(
+                    engineBackendUsed = selection.backend.id,
+                    status = DownloadStatus.STREAMING.name,
+                    errorMessage = null,
+                    updatedAt = System.currentTimeMillis(),
+                )
                 repository.update(tagged)
 
                 when (selection.backend) {

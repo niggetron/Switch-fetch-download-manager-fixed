@@ -190,10 +190,18 @@ class Aria2NextEngine(
             put("out", entity.fileName)
             put("dir", parent)
             put("continue", "true")
-            put("split", settings.maxConcurrentWorkers.coerceIn(4, 16).toString())
-            put("max-connection-per-server", "8")
+            put("split", settings.maxConcurrentWorkers.coerceIn(8, 32).toString())
+            put("max-connection-per-server", "16")
             put("min-split-size", "1M")
-            put("user-agent", "AetherIO-Omega/9.1 Android")
+            put("file-allocation", "none")
+            put("disk-cache", "64M")
+            put("enable-http2", "true")
+            put("uri-selector", "inorder")
+            put("optimize-concurrent-downloads", "true")
+            put("retry-wait", "2")
+            put("max-tries", "5")
+            put("always-resume", "true")
+            put("user-agent", "AetherIO-Omega/9.2 Android")
             put("allow-overwrite", "false")
             put("auto-file-renaming", "true")
         }
@@ -201,6 +209,10 @@ class Aria2NextEngine(
         val gid = result.optString("gid").ifBlank { null } ?: return null
         gids[entity.id] = gid
         return gid
+    }
+
+    fun warmup() {
+        runCatching { ensureDaemon() }
     }
 
     fun pause(taskId: String) {

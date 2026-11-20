@@ -207,7 +207,7 @@ data class RemoteZipEntry(
 }
 
 data class EngineSettings(
-    val maxConcurrentWorkers: Int = 16,
+    val maxConcurrentWorkers: Int = 32,
     val segmentSizeBytes: Long = F2FS_SEGMENT_BYTES,
     val enableTailHedge: Boolean = true,
     val enableAutoSpeedUp: Boolean = true,
@@ -278,7 +278,7 @@ data class NewDownloadRequest(
     val customFileName: String? = null,
     val expectedSha256: String? = null,
     val routeMode: NetworkRouteMode = NetworkRouteMode.AUTO_MULTIPATH,
-    val workers: Int = 16,
+    val workers: Int = 32,
     val safUriString: String? = null,
     val backendOverride: EngineBackendPreference? = null,
     val protocolMode: ProtocolMode = ProtocolMode.AUTO_HYBRID,

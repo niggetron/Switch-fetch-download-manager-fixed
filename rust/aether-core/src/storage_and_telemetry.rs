@@ -12,8 +12,8 @@ use rustix::fs::{FallocateFlags, MemfdFlags, fallocate, fdatasync, ftruncate, me
 use rustix::io::pwrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-pub const SLAB_BYTES: usize = 512 * 1024; // 512 KiB page-aligned slab buffer
-pub const MAX_SLABS: usize = 24; // 12.0 MiB bounded native RAM pool for 16 workers + async disk writer
+pub const SLAB_BYTES: usize = 256 * 1024; // 256 KiB page-aligned slab buffer
+pub const MAX_SLABS: usize = 64; // 16 MiB pool: enough for 48 workers + async disk writer
 pub const MIN_SYSTEM_RESERVE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB ENOSPC reserve guard
 
 /// 4,096-byte cache-line isolated Quad-Link telemetry page backed by Linux memfd_create().

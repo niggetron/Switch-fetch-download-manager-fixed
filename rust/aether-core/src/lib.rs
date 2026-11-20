@@ -181,10 +181,10 @@ mod tests {
 
     #[test]
     fn adaptive_bdp_worker_scaling_neighbor_absorption_and_client_pool() {
-        assert_eq!(adaptive_bdp_segment_bytes(33_000), 1024 * 1024);
-        assert_eq!(adaptive_bdp_segment_bytes(163_300), 8 * 1024 * 1024);
-        assert_eq!(adaptive_bdp_segment_bytes(400_000), 16 * 1024 * 1024);
-        assert_eq!(adaptive_bdp_segment_bytes(800_000), 32 * 1024 * 1024);
+        assert_eq!(adaptive_bdp_segment_bytes(33_000), 256 * 1024);
+        assert_eq!(adaptive_bdp_segment_bytes(163_300), 512 * 1024);
+        assert_eq!(adaptive_bdp_segment_bytes(400_000), 1024 * 1024);
+        assert_eq!(adaptive_bdp_segment_bytes(800_000), 2 * 1024 * 1024);
         assert_eq!(effective_worker_count(1, 2), 2);
         assert_eq!(effective_worker_count(64, 4), 48);
 

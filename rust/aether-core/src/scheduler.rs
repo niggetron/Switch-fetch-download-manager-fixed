@@ -8,24 +8,27 @@ use serde::Serialize;
 // especially under the thermal throttling seen on real devices.
 pub const MAX_WORKERS_CAP: usize = 48;
 
-/// Adaptive BDP extent sizing for high-speed Wi-Fi 6 / 5G / Quad-Link pipes:
-/// - < 50 Mbps -> 1 MiB
-/// - 50..120 Mbps -> 4 MiB
-/// - 120..250 Mbps -> 8 MiB
-/// - 250..600 Mbps -> 16 MiB
-/// - > 600 Mbps -> 32 MiB
+/// Network range sizing. Ghost Downloader / aria2-next sustain far higher rates
+/// with many small ranges than with a few huge extents: small ranges give every
+/// worker a claimable unit, so 32-48 sockets can actually be used on a 100 MB
+/// file. Storage is still coalesced into 512 KiB slabs by the disk writer.
+/// - < 50 Mbps -> 256 KiB
+/// - 50..120 Mbps -> 512 KiB
+/// - 120..250 Mbps -> 1 MiB
+/// - 250..600 Mbps -> 2 MiB
+/// - > 600 Mbps -> 4 MiB
 pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     let mbps = downstream_kbps as f64 / 1000.0;
     if mbps < 50.0 {
-        1024 * 1024 // 1 MiB
+        256 * 1024
     } else if mbps <= 120.0 {
-        4 * 1024 * 1024 // 4 MiB
+        512 * 1024
     } else if mbps <= 250.0 {
-        8 * 1024 * 1024 // 8 MiB
+        1024 * 1024
     } else if mbps <= 600.0 {
-        16 * 1024 * 1024 // 16 MiB
+        2 * 1024 * 1024
     } else {
-        32 * 1024 * 1024 // 32 MiB
+        4 * 1024 * 1024
     }
 }
 

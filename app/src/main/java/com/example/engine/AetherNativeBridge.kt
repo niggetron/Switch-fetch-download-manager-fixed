@@ -219,6 +219,11 @@ object AetherNativeBridge {
         return runCatching { nativeCreateTelemetryMemfd() }.getOrDefault(-1)
     }
 
+    fun warmup() {
+        if (isNativeLoaded) runCatching { nativeWarmup() }
+    }
+
+    external fun nativeWarmup()
     external fun nativeEngineVersion(): String
     external fun nativeCreateTelemetryMemfd(): Int
     external fun nativeUpdateLinkHandle(

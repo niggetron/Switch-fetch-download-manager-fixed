@@ -78,12 +78,13 @@ object LinkScheduler {
 
     fun adaptiveBdpSegmentBytes(downstreamKbps: Int): Long {
         val mbps = downstreamKbps / 1000.0
+        // Small ranges keep every socket fed (Ghost/aria2-next strategy).
         return when {
-            mbps < 50.0 -> 1L * 1024L * 1024L // 1 MiB
-            mbps <= 120.0 -> 4L * 1024L * 1024L // 4 MiB
-            mbps <= 250.0 -> 8L * 1024L * 1024L // 8 MiB
-            mbps <= 600.0 -> 16L * 1024L * 1024L // 16 MiB
-            else -> 32L * 1024L * 1024L // 32 MiB
+            mbps < 50.0 -> 256L * 1024L
+            mbps <= 120.0 -> 512L * 1024L
+            mbps <= 250.0 -> 1L * 1024L * 1024L
+            mbps <= 600.0 -> 2L * 1024L * 1024L
+            else -> 4L * 1024L * 1024L
         }
     }
 

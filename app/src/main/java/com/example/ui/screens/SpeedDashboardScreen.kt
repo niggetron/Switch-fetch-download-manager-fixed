@@ -282,26 +282,48 @@ private val geoClient = OkHttpClient.Builder()
     .readTimeout(4, TimeUnit.SECONDS)
     .build()
 
+private val geoCache = java.util.concurrent.ConcurrentHashMap<String, GeoInfo>()
+
 private suspend fun fetchGeo(ip: String? = null): GeoInfo? = withContext(Dispatchers.IO) {
-    try {
-        val url = if (ip.isNullOrBlank()) "https://ipapi.co/json/" else "https://ipapi.co/$ip/json/"
-        val request = Request.Builder().url(url).header("User-Agent", "AetherIO-Omega/9.2").build()
-        geoClient.newCall(request).execute().use { resp ->
-            val body = resp.body?.string() ?: return@withContext null
-            val obj = JSONObject(body)
-            if (obj.has("error")) return@withContext null
-            GeoInfo(
-                city = obj.optString("city"),
-                country = obj.optString("country_name"),
-                lat = obj.optString("latitude").toDoubleOrNull() ?: 0.0,
-                lon = obj.optString("longitude").toDoubleOrNull() ?: 0.0,
-                ip = obj.optString("ip"),
-                isp = obj.optString("org"),
-            )
+    val key = ip ?: "self"
+    geoCache[key]?.let { return@withContext it }
+    val target = ip?.takeIf { it.isNotBlank() }
+    val urls = buildList {
+        if (target == null) {
+            add("https://ipapi.co/json/")
+            add("http://ip-api.com/json/?fields=status,country,countryCode,city,lat,lon,query,isp,org,as")
+        } else {
+            add("https://ipapi.co/$target/json/")
+            add("http://ip-api.com/json/$target?fields=status,country,countryCode,city,lat,lon,query,isp,org,as")
+            add("https://ipinfo.io/$target/json")
         }
-    } catch (t: Throwable) {
-        null
     }
+    for (url in urls) {
+        try {
+            val request = Request.Builder().url(url).header("User-Agent", "AetherIO-Omega/9.2").build()
+            geoClient.newCall(request).execute().use { resp ->
+                val body = resp.body?.string() ?: return@use
+                if (body.isBlank()) return@use
+                val obj = JSONObject(body)
+                if (obj.has("error") || obj.optString("status") == "fail") return@use
+                val info = GeoInfo(
+                    city = obj.optString("city").ifBlank { obj.optString("cityName") },
+                    country = obj.optString("country_name").ifBlank { obj.optString("country") },
+                    lat = (obj.optString("latitude").ifBlank { obj.optString("lat") }).toDoubleOrNull() ?: 0.0,
+                    lon = (obj.optString("longitude").ifBlank { obj.optString("lon") }).toDoubleOrNull() ?: 0.0,
+                    ip = obj.optString("ip").ifBlank { obj.optString("query") }.ifBlank { target.orEmpty() },
+                    isp = obj.optString("org").ifBlank { obj.optString("isp") }.ifBlank { obj.optString("as") },
+                )
+                if (info.city.isNotBlank() || info.country.isNotBlank()) {
+                    geoCache[key] = info
+                    return@withContext info
+                }
+            }
+        } catch (t: Throwable) {
+            // try the next provider
+        }
+    }
+    null
 }
 
 @Composable
@@ -446,18 +468,20 @@ private fun ServerLocationCard(
     val iface = link?.interfaceName ?: "—"
     val serverUrl = telemetry.activeConnections.firstOrNull()?.url.orEmpty()
 
+    val serverHost = serverUrl.takeIf { it.isNotBlank() }?.let {
+        runCatching { URL(it).host }.getOrNull()
+    }
     var clientGeo by remember { mutableStateOf<GeoInfo?>(null) }
     var serverGeo by remember { mutableStateOf<GeoInfo?>(null) }
+    var serverIp by remember { mutableStateOf("") }
     LaunchedEffect(serverUrl) {
         clientGeo = fetchGeo()
-        if (serverUrl.isNotBlank()) {
-            val host = runCatching { URL(serverUrl).host }.getOrNull()
-            if (!host.isNullOrBlank()) {
-                val ip = withContext(Dispatchers.IO) {
-                    runCatching { InetAddress.getByName(host).hostAddress }.getOrNull()
-                }
-                serverGeo = fetchGeo(ip)
+        if (!serverHost.isNullOrBlank()) {
+            val ip = withContext(Dispatchers.IO) {
+                runCatching { InetAddress.getByName(serverHost).hostAddress }.getOrNull()
             }
+            serverIp = ip.orEmpty()
+            if (ip != null) serverGeo = fetchGeo(ip) ?: fetchGeo()
         }
     }
 
@@ -524,9 +548,14 @@ private fun ServerLocationCard(
         }
         Spacer(Modifier.height(10.dp))
         InfoLine("Connected via", "$via ($iface)")
+        InfoLine("Download host", serverHost ?: "No active connection yet")
+        InfoLine("Server IP", serverIp.ifBlank { "—" })
         InfoLine(
             "Server location",
-            serverGeo?.let { "${it.city}, ${it.country} · ${it.ip}" } ?: "Resolving CDN edge…",
+            serverGeo?.let {
+                listOf(it.city, it.country).filter { s -> s.isNotBlank() }.joinToString(", ")
+                    .ifBlank { it.ip }.ifBlank { "Unknown" }
+            } ?: "Resolving CDN edge…",
         )
         InfoLine("Your network", "Active links ${network.activeValidatedLinks.size} · ${telemetry.activeWorkers} workers")
         InfoLine("Your IP address", clientGeo?.ip ?: localIp)

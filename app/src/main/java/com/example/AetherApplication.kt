@@ -73,6 +73,11 @@ class AetherApplication : Application() {
             runCatching { telemetryLedger.attachMemfdIfAvailable() }
             runCatching { telemetryLedger.refreshNativeBadge() }
             val saved = settingsRepository.current()
+            // Warm the Rust runtime now so the first download starts instantly.
+            runCatching { AetherNativeBridge.warmup() }
+            if (saved.enableAria2NextEngine) {
+                runCatching { downloadEngine.warmAria2() }
+            }
             dualWifiConnector.probeCapabilities()
             networkMonitor.start(saved)
             downloadEngine.reconcileLedgersOnStartup()

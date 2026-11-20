@@ -109,7 +109,7 @@ class SettingsRepository(private val context: Context) {
             customCardBorderArgb = prefs[Keys.CUSTOM_CARD_BORDER_ARGB] ?: 0L,
         )
         EngineSettings(
-            maxConcurrentWorkers = (prefs[Keys.MAX_WORKERS] ?: 16).coerceIn(1, MAX_CONCURRENT_WORKERS_CAP),
+            maxConcurrentWorkers = (prefs[Keys.MAX_WORKERS] ?: 32).coerceIn(1, MAX_CONCURRENT_WORKERS_CAP),
             segmentSizeBytes = prefs[Keys.SEGMENT_SIZE] ?: F2FS_SEGMENT_BYTES,
             enableTailHedge = prefs[Keys.TAIL_HEDGE] ?: true,
             enableAutoSpeedUp = prefs[Keys.AUTO_SPEED_UP] ?: true,

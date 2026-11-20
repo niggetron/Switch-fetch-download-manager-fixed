@@ -46,6 +46,15 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
         .expect("Failed to allocate JNI version string")
 }
 
+/// Pre-build the Tokio runtime / TLS pools / slab arena so the first real
+/// download does not pay the initialization cost and appear to "queue".
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeWarmup() {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let _ = engine();
+    }));
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeCreateTelemetryMemfd(
     _env: JNIEnv,
