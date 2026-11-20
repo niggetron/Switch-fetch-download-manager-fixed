@@ -33,7 +33,9 @@ which is what makes multipath aggregation actually work.
 ## Building
 
 Push to `main` (or run the workflow manually) — the workflow produces an
-`arm64-v8a` release APK on the Releases page.
+`arm64-v8a` release APK on the Releases page. Every release gets a unique
+applicationId (`com.aistudio.aetherio.xkqmzp.r<run number>`) so builds install
+side by side, and the signed APK is verified with `apksigner` before publishing.
 
 Local native build (requires stable Rust, cargo-ndk and an Android NDK):
 

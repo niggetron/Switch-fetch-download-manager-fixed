@@ -13,13 +13,23 @@ plugins {
 val ciVersionCode = (findProperty("ciVersionCode") as String?)?.toIntOrNull() ?: 1
 val ciVersionName = (findProperty("ciVersionName") as String?) ?: "1.0"
 val ciAbiFilter = findProperty("ciAbiFilter") as String?
+// Each CI release gets a distinct applicationId so successive builds install
+// side by side instead of trying to "update" an already-signed package.
+val ciPackageSuffix = (findProperty("ciPackageSuffix") as String?)?.trim().orEmpty()
+val baseApplicationId = "com.aistudio.aetherio.xkqmzp"
+val releaseApplicationId =
+    if (ciPackageSuffix.isNotBlank() && ciPackageSuffix.matches(Regex("[A-Za-z][A-Za-z0-9_]*"))) {
+        "$baseApplicationId.$ciPackageSuffix"
+    } else {
+        baseApplicationId
+    }
 
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.aetherio.xkqmzp"
+    applicationId = releaseApplicationId
     minSdk = 24
     targetSdk = 36
     versionCode = ciVersionCode

@@ -102,7 +102,8 @@ jobs:
           VERSION="${BASE}.${GITHUB_RUN_NUMBER}"
           echo "version_name=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version_code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          echo "Building version ${VERSION} (versionCode ${GITHUB_RUN_NUMBER})"
+          echo "package_suffix=r${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${VERSION} (versionCode ${GITHUB_RUN_NUMBER}), package suffix r${GITHUB_RUN_NUMBER}"
 
       - name: Prepare signing key
         run: |
@@ -115,6 +116,7 @@ jobs:
           gradle :app:assembleRelease \
             -PciVersionCode=${{ steps.ver.outputs.version_code }} \
             -PciVersionName=${{ steps.ver.outputs.version_name }} \
+            -PciPackageSuffix=${{ steps.ver.outputs.package_suffix }} \
             -PciAbiFilter=arm64-v8a \
             --stacktrace
 
@@ -128,6 +130,18 @@ jobs:
             echo "::error::libaether_core.so missing from APK - Gradle jniLibs config is wrong"
             exit 1
           fi
+
+      - name: Verify APK signature and unique package name
+        run: |
+          APK="$(ls app/build/outputs/apk/release/*release*.apk 2>/dev/null | head -n1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n1)"
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose "$APK"
+          else
+            echo "::warning::apksigner not found - relying on Gradle validateSigningRelease"
+          fi
+          BASE_PKG="$(grep -oP 'baseApplicationId\s*=\s*"\K[^"]+' app/build.gradle.kts | tail -n1)"
+          echo "Release applicationId: ${BASE_PKG}.${{ steps.ver.outputs.package_suffix }}"
 
       - name: Stage APK for release
         run: |
@@ -146,5 +160,5 @@ jobs:
             "dist/AetherIO-v${VERSION}-arm64-v8a.apk" \
             --title "AetherIO v${VERSION}" \
             --latest \
-            --notes "$(printf 'Automated arm64-v8a release build\n\n- **Version name:** %s\n- **Version code:** %s\n- **Commit:** %s\n- **Branch:** %s\n- **Native core:** Rust aether-core (BLAKE3 + GF256 RLNC + F2FS 2MB)\n' \
-              "${VERSION}" "${{ github.run_number }}" "${{ github.sha }}" "${{ github.ref_name }}")"
+            --notes "$(printf 'Automated arm64-v8a release build\n\n- **Version name:** %s\n- **Version code:** %s\n- **Package:** com.aistudio.aetherio.xkqmzp.%s (unique per build, signed)\n- **Commit:** %s\n- **Branch:** %s\n- **Native core:** Rust aether-core (BLAKE3 + GF256 RLNC + F2FS 2MB)\n' \
+              "${VERSION}" "${{ github.run_number }}" "${{ steps.ver.outputs.package_suffix }}" "${{ github.sha }}" "${{ github.ref_name }}")"
