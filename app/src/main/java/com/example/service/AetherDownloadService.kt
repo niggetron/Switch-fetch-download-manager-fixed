@@ -37,6 +37,7 @@ class AetherDownloadService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -69,6 +70,7 @@ class AetherDownloadService : Service() {
 
         acquireWifiHighPerfLock()
         app.telemetryLedger.markFgsSessionStarted()
+        acquireWakeLock()
         val notification = buildNotification(
             activeCount = 1,
             speedBps = 0L,
@@ -193,6 +195,26 @@ class AetherDownloadService : Service() {
         wifiLock = null
     }
 
+    /** FGS alone does not keep the CPU awake with the screen off. */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "AetherIO::TransferWakeLock",
+        ).apply {
+            setReferenceCounted(false)
+            runCatching { acquire(6L * 60L * 60L * 1000L) }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        }
+        wakeLock = null
+    }
+
     private fun showQuotaResumeNotification() {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val openIntent = PendingIntent.getActivity(
@@ -215,6 +237,7 @@ class AetherDownloadService : Service() {
         val app = application as AetherApplication
         app.telemetryLedger.markFgsSessionStopped()
         releaseWifiLock()
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -254,6 +277,7 @@ class AetherDownloadService : Service() {
         // Keep cellular lease alive if user has Quad-Link cellular bonding enabled
         // so consecutive downloads never drop 5G/LTE between tasks!
         releaseWifiLock()
+        releaseWakeLock()
         serviceScope.cancel()
         super.onDestroy()
     }

@@ -3,6 +3,7 @@ package com.example.service
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -25,6 +26,12 @@ class AetherDownloadWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as? AetherApplication ?: return Result.failure()
+        val wakeLock = runCatching {
+            (applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AetherIO::WorkerWakeLock")
+                .apply { setReferenceCounted(false); acquire(6L * 60L * 60L * 1000L) }
+        }.getOrNull()
+        try {
         runCatching {
             AetherDownloadService.ensureChannel(applicationContext)
             val notification = NotificationCompat.Builder(applicationContext, AetherDownloadService.CHANNEL_ID)
@@ -59,6 +66,9 @@ class AetherDownloadWorker(
             delay(1500L)
         }
         return Result.success()
+        } finally {
+            runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+        }
     }
 
     companion object {

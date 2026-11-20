@@ -3,12 +3,10 @@
     <files-path
         name="aether_downloads_internal"
         path="downloads/" />
+    <!-- DownloadRepository.getExternalFilesDir(DIRECTORY_DOWNLOADS) resolves to "Download" (singular). -->
     <external-files-path
         name="aether_downloads_external"
-        path="Downloads/" />
-    <cache-path
-        name="aether_cache"
-        path="." />
+        path="Download/" />
     <cache-path
         name="diagnostics"
         path="diagnostics/" />

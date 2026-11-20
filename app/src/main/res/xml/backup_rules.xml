@@ -1,13 +1,12 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Download URLs frequently contain signed/expiring tokens; never back them up. -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="aetherio_omega.db" />
+    <exclude domain="database" path="aetherio_omega.db-wal" />
+    <exclude domain="database" path="aetherio_omega.db-shm" />
+    <exclude domain="sharedpref" path="aether_engine_prefs.xml" />
+    <exclude domain="file" path="ledgers/" />
+    <exclude domain="file" path="staging/" />
+    <exclude domain="file" path="aria2-downloads/" />
+    <exclude domain="file" path="aria2-next" />
 </full-backup-content>
