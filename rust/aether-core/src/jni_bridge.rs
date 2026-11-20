@@ -76,7 +76,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeVerifyBl
     _class: JClass,
     data: JByteArray,
     expected_hex: JString,
-) -> jboolean {
+) -> jint {
     let bytes = env.convert_byte_array(data).unwrap_or_default();
     let expected: String = env
         .get_string(&expected_hex)
