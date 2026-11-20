@@ -17,3 +17,5 @@ local.properties
 .env
 debug.keystore
 rust/aether-core/target/
+# aria2-next arm64 executable is fetched by CI, never committed
+app/src/main/assets/aria2-next

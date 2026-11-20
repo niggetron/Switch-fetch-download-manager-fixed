@@ -89,6 +89,7 @@ import com.example.ui.screens.ColorStudioSheet
 import com.example.ui.screens.DualWifiConnectorSheet
 import com.example.ui.screens.FilesScreen
 import com.example.ui.screens.NewDownloadSheet
+import com.example.ui.screens.SpeedDashboardScreen
 import com.example.ui.screens.TelemetryScreen
 import com.example.ui.screens.TransfersScreen
 import com.example.ui.theme.AetherTheme
@@ -98,6 +99,7 @@ import com.example.util.Formatters
 const val ROUTE_TRANSFERS = "transfers"
 const val ROUTE_FILES = "files"
 const val ROUTE_ENGINE = "engine"
+const val ROUTE_SPEED = "speed"
 
 private data class NavDestination(
     val route: String,
@@ -110,6 +112,7 @@ private val destinations = listOf(
     NavDestination(ROUTE_TRANSFERS, "Transfers", Icons.Filled.Download, Icons.Outlined.Download),
     NavDestination(ROUTE_FILES, "Files", Icons.Filled.Folder, Icons.Outlined.Folder),
     NavDestination(ROUTE_ENGINE, "Engine", Icons.Filled.Speed, Icons.Outlined.Speed),
+    NavDestination(ROUTE_SPEED, "Speed", Icons.Filled.Speed, Icons.Outlined.Speed),
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalSharedTransitionApi::class)
@@ -494,6 +497,16 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 onPruneCas = viewModel::pruneCasCache,
                                                 onCopyDiagnostics = viewModel::copyDiagnosticsToClipboard,
                                                 onCopyAria2Secret = viewModel::copyAria2SecretToClipboard,
+                                            )
+                                        }
+                                    }
+                                    composable(ROUTE_SPEED) {
+                                        CompositionLocalProvider(LocalAnimatedVisibilityScope provides this@composable) {
+                                            SpeedDashboardScreen(
+                                                telemetry = telemetry,
+                                                networkMatrix = networkMatrix,
+                                                useMBpsSpeedUnit = useMBpsSpeedUnit,
+                                                onToggleSpeedUnit = viewModel::toggleSpeedDisplayUnit,
                                             )
                                         }
                                     }

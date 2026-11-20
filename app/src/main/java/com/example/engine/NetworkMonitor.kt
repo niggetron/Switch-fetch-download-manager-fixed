@@ -435,7 +435,13 @@ class NetworkMonitor(context: Context) {
         val isCell = resolvedCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
         if (!isEthOrUsb && !isWifi && !isCell) return
 
-        val usableLease = fromRequestedLease && (isCell || isEthOrUsb) && localIp.isNotBlank()
+        // OEM ROMs (notably Xiaomi/HyperOS) often never set NET_CAPABILITY_VALIDATED
+        // on the secondary Wi-Fi network even though it has INTERNET + a usable IP.
+        // Requiring VALIDATED made Wi-Fi invisible and left downloads cellular-only.
+        // Captive portals are still rejected above, so accepting INTERNET + real IP
+        // here is safe and restores true Wi-Fi + mobile bonding.
+        val usableLease = localIp.isNotBlank() &&
+            (fromRequestedLease || isWifi || isCell || isEthOrUsb)
         if (!hasValidated && !usableLease) {
             return
         }

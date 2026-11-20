@@ -677,17 +677,15 @@ impl NativeEngine {
                 1
             };
             let desired = effective_worker_count(cfg.max_workers, link_count);
+            // Do NOT jump straight to the hard cap. The old `boosted.max(thermal_cap)`
+            // pinned every turbo download to 64 workers, which collapsed average
+            // throughput under congestion and thermal throttling.
             let boosted = if turbo_on || auto_speed_on {
-                desired.max((link_count * 6).min(MAX_WORKERS_CAP))
+                desired.max((link_count * 4).min(MAX_WORKERS_CAP))
             } else {
                 desired
             };
-            let upper = if auto_speed_on {
-                boosted.max(thermal_cap.min(MAX_WORKERS_CAP))
-            } else {
-                boosted
-            };
-            upper.min(thermal_cap).max(1)
+            boosted.min(thermal_cap).min(MAX_WORKERS_CAP).max(1)
         } else {
             1
         };
@@ -716,8 +714,15 @@ impl NativeEngine {
                     tokio::time::sleep(Duration::from_millis(600)).await;
                     let cur_bytes = w_tot_s.load(Ordering::Relaxed);
                     let cur_bps = (cur_bytes.saturating_sub(prev_bytes) as f64) / 0.6;
-                    let cur_rtt = live_telemetry_page().ttfb_ms.load(Ordering::Relaxed) as f64;
-                    let delta_rtt = (cur_rtt - prev_rtt).max(0.0);
+                    let raw_rtt = live_telemetry_page().ttfb_ms.load(Ordering::Relaxed) as f64;
+                    // A stale 30 s TTFB from a dead probe must not be treated as a
+                    // fresh RTT spike (or as a 0 ms improvement on the next tick).
+                    let cur_rtt = if raw_rtt > 5_000.0 { 0.0 } else { raw_rtt };
+                    let delta_rtt = if prev_rtt > 0.0 && cur_rtt > 0.0 {
+                        (cur_rtt - prev_rtt).max(0.0)
+                    } else {
+                        0.0
+                    };
                     let cur_w = tw.load(Ordering::Acquire);
                     let next_w = adjust_auto_speed_up(
                         cur_w,
@@ -1313,7 +1318,11 @@ impl NativeEngine {
                             if attempts >= 5 {
                                 break;
                             }
-                            tokio::time::sleep(Duration::from_millis(120)).await;
+                            // Exponential backoff: a hammering 120 ms retry loop on
+                            // Connect failures kept the modem/CDN saturated and made
+                            // recovery impossible (seen as hundreds of SEG_ERR lines).
+                            let backoff_ms = (120u64 << (attempts - 1).min(4)).min(2_000);
+                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                         }
                     }
                 }

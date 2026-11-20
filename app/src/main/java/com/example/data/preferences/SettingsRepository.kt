@@ -51,6 +51,7 @@ class SettingsRepository(private val context: Context) {
         // Dual-engine A/B testing & v8.0 flags
         val ENABLE_RUST_ENGINE = booleanPreferencesKey("enable_rust_engine")
         val ENABLE_KOTLIN_OKHTTP = booleanPreferencesKey("enable_kotlin_okhttp_engine")
+        val ENABLE_ARIA2_NEXT = booleanPreferencesKey("enable_aria2_next_engine")
         val PREFERRED_BACKEND = stringPreferencesKey("preferred_engine_backend")
         val ENABLE_HTTP3_QUIC = booleanPreferencesKey("enable_http3_quic")
         val ENABLE_WREQ_EMULATION = booleanPreferencesKey("enable_wreq_emulation")
@@ -127,6 +128,7 @@ class SettingsRepository(private val context: Context) {
             uiThemeConfig = uiThemeConfig,
             enableRustEngine = prefs[Keys.ENABLE_RUST_ENGINE] ?: true,
             enableKotlinOkHttpEngine = prefs[Keys.ENABLE_KOTLIN_OKHTTP] ?: true,
+            enableAria2NextEngine = prefs[Keys.ENABLE_ARIA2_NEXT] ?: false,
             preferredEngineBackend = prefs[Keys.PREFERRED_BACKEND]
                 ?.let { runCatching { EngineBackendPreference.valueOf(it) }.getOrNull() }
                 ?: EngineBackendPreference.AUTO_PREFER_RUST,
@@ -181,6 +183,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.THEME_MODE] = updated.themeMode.name
             prefs[Keys.ENABLE_RUST_ENGINE] = updated.enableRustEngine
             prefs[Keys.ENABLE_KOTLIN_OKHTTP] = updated.enableKotlinOkHttpEngine
+            prefs[Keys.ENABLE_ARIA2_NEXT] = updated.enableAria2NextEngine
             prefs[Keys.PREFERRED_BACKEND] = updated.preferredEngineBackend.name
             prefs[Keys.ENABLE_HTTP3_QUIC] = updated.enableHttp3Quic
             prefs[Keys.ENABLE_WREQ_EMULATION] = updated.enableWreqEmulation

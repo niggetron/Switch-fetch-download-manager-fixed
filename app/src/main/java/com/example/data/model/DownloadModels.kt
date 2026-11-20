@@ -43,6 +43,7 @@ enum class EngineBackendPreference(val label: String, val badge: String) {
     AUTO_PREFER_RUST("Auto (Prefer Rust)", "AUTO"),
     FORCE_RUST_NATIVE("Rust libaether_core.so", "RUST"),
     FORCE_KOTLIN_OKHTTP("Kotlin OkHttp Engine", "OKHTTP"),
+    FORCE_ARIA2_NEXT("aria2-next (Rayburst engine)", "ARIA2"),
 }
 
 enum class BrowserProfile(val wireId: String, val label: String) {
@@ -224,6 +225,7 @@ data class EngineSettings(
     // Dual-engine A/B toggles & v8.0/v9.1 feature flags
     val enableRustEngine: Boolean = true,
     val enableKotlinOkHttpEngine: Boolean = true,
+    val enableAria2NextEngine: Boolean = false,
     val preferredEngineBackend: EngineBackendPreference = EngineBackendPreference.AUTO_PREFER_RUST,
     val enableHttp3Quic: Boolean = true,
     val enableWreqEmulation: Boolean = true,

@@ -37,6 +37,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Bundle aria2-next (Rayburst engine) arm64 executable
+        run: |
+          mkdir -p app/src/main/assets
+          VER="3.1.1"
+          BASE="https://github.com/AnInsomniacy/aria2-next/releases/download/v${VER}"
+          curl -fsSL -o app/src/main/assets/aria2-next \
+            "${BASE}/aria2-next-${VER}-android-arm64"
+          curl -fsSL -o /tmp/aria2-checksums.sha256 "${BASE}/aria2-next-${VER}-checksums.sha256"
+          EXPECTED="$(awk '$2 ~ /android-arm64$/ {print $1}' /tmp/aria2-checksums.sha256)"
+          ACTUAL="$(sha256sum app/src/main/assets/aria2-next | awk '{print $1}')"
+          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::aria2-next checksum mismatch"; exit 1
+          fi
+          chmod +x app/src/main/assets/aria2-next
+          echo "Bundled aria2-next ${VER} (${ACTUAL})"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:

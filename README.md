@@ -90,3 +90,25 @@ gradle :app:assembleDebug
 ```
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the complete version history.
+
+---
+
+## Third engine: aria2-next (Rayburst)
+
+CI downloads the official `aria2-next` Android arm64 executable (v3.1.1, SHA-256
+verified) into `app/src/main/assets/aria2-next`. The app extracts it to
+app-private storage, starts it as a loopback-only JSON-RPC daemon with a per-boot
+secret, and drives downloads via `aria2.addUri` / `aria2.tellStatus`. Enable it
+with the **aria2-next Engine (Rayburst)** toggle in Engine settings or choose it
+as a forced backend.
+
+## Throughput & stability fixes in this fork
+
+- Both engines now **scale down** workers when adding sockets lowers goodput —
+  no more permanent 64-lane congestion collapse (70 Mbps spikes / 25 Mbps avg).
+- Rust and OkHttp lane caps reduced to 24/20 with thermal-aware ceilings.
+- Exponential backoff on connection failures replaced the 120 ms hammer loop.
+- Stale 30 s TTFB samples are ignored by both adaptive governors.
+- Wi-Fi links are accepted with INTERNET + a usable IP even when OEM ROMs never
+  set `NET_CAPABILITY_VALIDATED`, restoring Wi-Fi + mobile bonding.
+- Startup SIGSYS crash (seccomp-blocked `io_uring_setup`, syscall 425) removed.

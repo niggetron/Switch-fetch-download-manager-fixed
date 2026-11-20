@@ -18,6 +18,7 @@ import java.net.URLDecoder
 enum class ResolvedEngineBackend(val id: String, val badge: String) {
     RUST_LIBAETHER_CORE("RUST_LIBAETHER_CORE", "Rust libaether_core.so"),
     KOTLIN_OKHTTP("KOTLIN_OKHTTP", "Kotlin OkHttp"),
+    ARIA2_NEXT("ARIA2_NEXT", "aria2-next (Rayburst)"),
 }
 
 sealed class BackendSelectionResult {
@@ -46,9 +47,11 @@ object StoragePlacementHelper {
         settings: EngineSettings,
         nativeLoaded: Boolean,
         overridePreference: EngineBackendPreference? = null,
+        aria2Available: Boolean = false,
     ): BackendSelectionResult {
         val rustAllowed = settings.enableRustEngine && nativeLoaded
         val kotlinAllowed = settings.enableKotlinOkHttpEngine
+        val aria2Allowed = settings.enableAria2NextEngine && aria2Available
         val pref = overridePreference ?: settings.preferredEngineBackend
 
         return when (pref) {
@@ -72,11 +75,22 @@ object StoragePlacementHelper {
                 BackendSelectionResult.Unavailable("Kotlin OkHttp engine is toggled OFF in Engine settings.")
             }
 
+            EngineBackendPreference.FORCE_ARIA2_NEXT -> when {
+                !settings.enableAria2NextEngine -> BackendSelectionResult.Unavailable(
+                    "aria2-next engine is toggled OFF in Engine settings."
+                )
+                !aria2Available -> BackendSelectionResult.Unavailable(
+                    "aria2-next binary is not bundled in this build (CI fetches the arm64 release asset)."
+                )
+                else -> BackendSelectionResult.Selected(ResolvedEngineBackend.ARIA2_NEXT)
+            }
+
             EngineBackendPreference.AUTO_PREFER_RUST -> when {
                 rustAllowed -> BackendSelectionResult.Selected(ResolvedEngineBackend.RUST_LIBAETHER_CORE)
+                aria2Allowed -> BackendSelectionResult.Selected(ResolvedEngineBackend.ARIA2_NEXT)
                 kotlinAllowed -> BackendSelectionResult.Selected(ResolvedEngineBackend.KOTLIN_OKHTTP)
                 else -> BackendSelectionResult.Unavailable(
-                    "Both Rust Native and Kotlin OkHttp engines are disabled. Re-enable at least one engine in Engine settings."
+                    "All download engines are disabled. Re-enable at least one engine in Engine settings."
                 )
             }
         }

@@ -47,6 +47,8 @@ class AetherDownloadEngine(
     private val activeJobs = ConcurrentHashMap<String, Job>()
     private val activeCalls = ConcurrentHashMap<String, MutableList<Call>>()
 
+    private val aria2Engine = Aria2NextEngine(context = context, repository = repository)
+
     private val kotlinRunner = KotlinOkHttpTransferRunner(
         context = context,
         repository = repository,
@@ -221,6 +223,7 @@ class AetherDownloadEngine(
 
     fun launchDownload(id: String) {
         if (activeJobs[id]?.isActive == true) return
+        aria2Engine.resume(id) // no-op unless this task was paused on the aria2-next backend
         ensureForegroundServiceRunning()
         val job = engineScope.launch {
             try {
@@ -240,6 +243,7 @@ class AetherDownloadEngine(
 
     suspend fun pause(id: String) {
         AetherNativeBridge.pauseDownloadSafe(id)
+        aria2Engine.pause(id)
         activeCalls[id]?.forEach { runCatching { it.cancel() } }
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
@@ -273,6 +277,7 @@ class AetherDownloadEngine(
         val ids = activeJobs.keys.toList()
         for (id in ids) {
             AetherNativeBridge.pauseDownloadSafe(id)
+            aria2Engine.pause(id)
             activeCalls[id]?.forEach { runCatching { it.cancel() } }
             activeJobs[id]?.cancel()
             activeJobs.remove(id)
@@ -292,6 +297,7 @@ class AetherDownloadEngine(
 
     suspend fun cancel(id: String) {
         AetherNativeBridge.cancelDownloadSafe(id)
+        aria2Engine.stop(id)
         activeCalls[id]?.forEach { runCatching { it.cancel() } }
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
@@ -381,6 +387,7 @@ class AetherDownloadEngine(
             settings = settings,
             nativeLoaded = AetherNativeBridge.isNativeLoaded,
             overridePreference = perTaskPref,
+            aria2Available = aria2Engine.isAvailable(),
         )
 
         when (selection) {
@@ -402,6 +409,7 @@ class AetherDownloadEngine(
                 when (selection.backend) {
                     ResolvedEngineBackend.RUST_LIBAETHER_CORE -> executeWithRustNative(tagged, settings)
                     ResolvedEngineBackend.KOTLIN_OKHTTP -> kotlinRunner.run(tagged, settings)
+                    ResolvedEngineBackend.ARIA2_NEXT -> aria2Engine.run(tagged, settings)
                 }
             }
         }

@@ -376,6 +376,14 @@ fun TelemetryScreen(
                     modifier = Modifier.testTag("toggle_kotlin_engine"),
                 )
 
+                EngineToggleRow(
+                    title = "aria2-next Engine (Rayburst)",
+                    subtitle = "Bundled arm64 aria2-compatible daemon · adaptive ranges, endgame racing, JSON-RPC",
+                    checked = settings.enableAria2NextEngine,
+                    onCheckedChange = { on -> onUpdateSettings { it.copy(enableAria2NextEngine = on) } },
+                    modifier = Modifier.testTag("toggle_aria2_next_engine"),
+                )
+
                 Text(
                     text = "ACTIVE BACKEND PRIORITY",
                     style = MaterialTheme.typography.labelSmall,

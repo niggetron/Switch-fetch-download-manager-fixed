@@ -358,9 +358,9 @@ internal class KotlinOkHttpTransferRunner(
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
                 val maxCap = when (settings.throughputProfile) {
-                    ThroughputProfile.TURBO_ANTI_DIP,
-                    ThroughputProfile.MAX_MULTI_SOCKET -> 64
-                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 32
+                    ThroughputProfile.TURBO_ANTI_DIP -> 20
+                    ThroughputProfile.MAX_MULTI_SOCKET -> 24
+                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 16
                 }
                 val baseDesired = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
                 val boostedDesired = if (settings.enableAutoSpeedUp || settings.throughputProfile != ThroughputProfile.SUSTAINED_ANTI_DIP) {
@@ -368,8 +368,10 @@ internal class KotlinOkHttpTransferRunner(
                 } else {
                     baseDesired
                 }
-                val maxPoolCoroutines = maxOf(boostedDesired, if (settings.enableAutoSpeedUp) maxCap else boostedDesired)
-                    .coerceIn(1, maxCap)
+                // Start at the desired lane count, not the hard cap. The old
+                // `maxOf(boostedDesired, maxCap)` always launched 64 coroutines and
+                // the governor could never recover once congestion set in.
+                val maxPoolCoroutines = boostedDesired.coerceIn(1, maxCap)
                 val targetWorkers = AtomicInteger(boostedDesired.coerceIn(1, maxCap))
 
                 val flusherJob = engineScope.launch(Dispatchers.IO) {
@@ -399,7 +401,7 @@ internal class KotlinOkHttpTransferRunner(
                                 it.currentState(now) != BreakerState.CLOSED
                             }
                             val curTtfb = telemetryLedger.latestTtfbMs()
-                                .takeIf { it > 0L }?.toDouble() ?: prevTtfb
+                                .takeIf { it in 1L..5_000L }?.toDouble() ?: prevTtfb
                             val adjusted = LinkScheduler.adjustAutoSpeedUp(
                                 currentWorkers = targetWorkers.get(),
                                 minWorkers = minW,
