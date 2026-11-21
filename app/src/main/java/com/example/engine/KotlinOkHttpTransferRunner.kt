@@ -1104,7 +1104,6 @@ internal class KotlinOkHttpTransferRunner(
                 }
                 if (fullyDone) {
                     bisectParts[taskId]?.remove(unit.segIndex)
-                    segmentRetries.remove(unit.segIndex) // reset so a recovered segment isn't failed later
                     bitMutex.withLock {
                         if (unit.segIndex < bitChars.size) {
                             bitChars[unit.segIndex] = SegmentState.COMMITTED.code
@@ -1476,12 +1475,12 @@ internal class KotlinOkHttpTransferRunner(
         // Evict clients bound to an older Network handle. OkHttpClients created via
         // newBuilder() share the base pool, but we give each shard its own pool, so
         // stale entries otherwise leak sockets/threads on every Wi-Fi/5G reconnect.
-        if (handle != 0L && (activeWorkersByLink[linkId]?.get() ?: 0) == 0) {
+        if (handle != 0L) {
             val stale = clientPool.keys.filter { it.startsWith("$linkId|") && !it.contains("|$handle|") }
             stale.forEach { key ->
                 clientPool.remove(key)?.let { old ->
-                    runCatching { old.connectionPool().evictAll() }
-                    runCatching { old.dispatcher().executorService().shutdown() }
+                    runCatching { old.connectionPool.evictAll() }
+                    runCatching { old.dispatcher.executorService.shutdown() }
                 }
             }
         }
