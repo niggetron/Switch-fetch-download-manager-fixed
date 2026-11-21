@@ -278,6 +278,26 @@ pub fn adjust_auto_speed_up(
     delta_rtt_ms: f64,
     throttled: bool,
 ) -> usize {
+    // C19/W3: thin shim keeps all existing callers/tests unchanged.
+    adjust_auto_speed_up_with_cv(
+        current_workers, min_workers, max_workers, prev_goodput_bps,
+        new_goodput_bps, delta_rtt_ms, throttled, 0.0,
+    )
+}
+
+/// Same controller as [`adjust_auto_speed_up`] but suppresses gain-driven
+/// steps when the recent goodput signal is noisy (CV > 15%). Safety branches
+/// (breaker/RTT-spike) remain ungated so they can always shed lanes.
+pub fn adjust_auto_speed_up_with_cv(
+    current_workers: usize,
+    min_workers: usize,
+    max_workers: usize,
+    prev_goodput_bps: f64,
+    new_goodput_bps: f64,
+    delta_rtt_ms: f64,
+    throttled: bool,
+    sample_cv: f64,
+) -> usize {
     let clamped_max = max_workers.clamp(1, MAX_WORKERS_CAP);
     let clamped_min = min_workers.clamp(1, clamped_max);
     if throttled || delta_rtt_ms > 40.0 {
@@ -286,7 +306,8 @@ pub fn adjust_auto_speed_up(
     if prev_goodput_bps <= 0.0 && new_goodput_bps > 0.0 && delta_rtt_ms < 20.0 {
         return (current_workers + 4).min(clamped_max);
     }
-    if prev_goodput_bps > 0.0 {
+    // Safety/bootstrap branches above are never gated by signal noise.
+    if prev_goodput_bps > 0.0 && sample_cv <= 0.15 {
         let gain = (new_goodput_bps - prev_goodput_bps) / prev_goodput_bps;
         // Back off aggressively when adding sockets made things WORSE. The old
         // governor only ever increased workers, so a congested 64-worker pool

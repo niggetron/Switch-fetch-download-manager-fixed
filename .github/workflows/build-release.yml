@@ -210,7 +210,11 @@ jobs:
 
       - name: Run Android Unit Tests & Release Vital Lint
         run: |
-          gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace
+          set -o pipefail
+          gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace 2>&1 | tee /tmp/android_test.log || {
+            python3 -c "d=open('/tmp/android_test.log').read()[-6000:]; print('::error::'+d.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))"
+            exit 1
+          }
           gradle :app:lintVitalRelease -PskipRustBuild=true --stacktrace
 
       - name: Build arm64-v8a release APK (Dual-Engine Rust + Kotlin, Unique Package Name)

@@ -233,6 +233,11 @@ object LinkScheduler {
         newGoodputBps: Double,
         deltaRttMs: Double,
         throttled: Boolean,
+        // C19/W3: coefficient of variation of the last 5 raw goodput samples.
+        // Default 0 keeps every existing caller/test unchanged; callers that
+        // measure it can suppress gain-driven steps on a noisy signal, which
+        // prevents the add-lanes -> drop -> shed-lanes limit cycle.
+        sampleCv: Double = 0.0,
     ): Int {
         // Cap at the global 128-lane ceiling; the adaptive governor and the
         // per-host connection-limit learner decide how many lanes are active.
@@ -244,7 +249,9 @@ object LinkScheduler {
         if (prevGoodputBps <= 0.0 && newGoodputBps > 0.0 && deltaRttMs < 20.0) {
             return (currentWorkers + 4).coerceAtMost(clampedMax)
         }
-        if (prevGoodputBps > 0.0) {
+        // Safety/bootstrap branches above are never gated; only gain-driven
+        // steps wait for a reasonably stable goodput signal (CV <= 15%).
+        if (prevGoodputBps > 0.0 && sampleCv <= 0.15) {
             val gain = (newGoodputBps - prevGoodputBps) / prevGoodputBps
             // Scale DOWN when more sockets made throughput worse. Previously the
             // governor never decreased on a goodput drop, so 64 lanes stayed at 64

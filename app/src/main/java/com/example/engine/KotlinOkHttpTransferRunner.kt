@@ -429,6 +429,10 @@ internal class KotlinOkHttpTransferRunner(
                     var lastSampleBytes = liveWrittenBytes.get()
                     var lastDiskForceMs = System.currentTimeMillis()
                     var prevGoodputBps = 0.0
+                    // C19/W3: rolling raw-goodput window for the stability gate.
+                    // CV over the last 5 samples suppresses lane steps while the
+                    // signal is noisy, killing the add/shed oscillation cycle.
+                    val goodputWindow = java.util.ArrayDeque<Double>()
                     var prevTtfb = probeResult.ttfbMs.toDouble()
 
                     while (isActive) {
@@ -452,6 +456,17 @@ internal class KotlinOkHttpTransferRunner(
                             }
                             val curTtfb = telemetryLedger.latestTtfbMs()
                                 .takeIf { it in 1L..5_000L }?.toDouble() ?: prevTtfb
+                            // C19/W3: CV of the last 5 RAW goodput samples. A noisy
+                            // signal must not trigger a lane step (kills oscillation).
+                            goodputWindow.addLast(curSpeed.toDouble())
+                            while (goodputWindow.size > 5) goodputWindow.removeFirst()
+                            val sampleCv = if (goodputWindow.size >= 3) {
+                                val mean = goodputWindow.average()
+                                if (mean > 0.0) {
+                                    val variance = goodputWindow.sumOf { (it - mean) * (it - mean) } / goodputWindow.size
+                                    kotlin.math.sqrt(variance) / mean
+                                } else 0.0
+                            } else 0.0
                             val adjusted = LinkScheduler.adjustAutoSpeedUp(
                                 currentWorkers = targetWorkers.get(),
                                 minWorkers = minW,
@@ -460,6 +475,7 @@ internal class KotlinOkHttpTransferRunner(
                                 newGoodputBps = curSpeed.toDouble(),
                                 deltaRttMs = (curTtfb - prevTtfb).coerceAtLeast(0.0),
                                 throttled = anyBreakerOpen,
+                                sampleCv = sampleCv,
                             )
                             targetWorkers.set(adjusted)
                             // EWMA avoids shedding lanes on every normal 5G wobble.

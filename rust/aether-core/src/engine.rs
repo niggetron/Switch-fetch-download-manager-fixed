@@ -797,6 +797,9 @@ impl NativeEngine {
             Some(tokio::spawn(async move {
                 let mut prev_bytes = w_tot_s.load(Ordering::Relaxed);
                 let mut prev_bps = 0.0f64;
+                // C19/W3: rolling raw-goodput window for the stability gate (CV).
+                let mut bps_window: std::collections::VecDeque<f64> =
+                    std::collections::VecDeque::with_capacity(5);
                 let mut prev_rtt = live_telemetry_page().ttfb_ms.load(Ordering::Relaxed) as f64;
                 while !done_flag.load(Ordering::Acquire)
                     && !h_s.cancelled.load(Ordering::Acquire)
@@ -822,7 +825,26 @@ impl NativeEngine {
                     } else {
                         0.6 * prev_bps + 0.4 * cur_bps
                     };
-                    let next_w = adjust_auto_speed_up(
+                    // C19/W3: CV over the last 5 RAW goodput samples gates
+                    // gain-driven steps so a noisy link does not cause the
+                    // add-lanes -> goodput drop -> shed-lanes oscillation.
+                    bps_window.push_back(cur_bps);
+                    if bps_window.len() > 5 {
+                        bps_window.pop_front();
+                    }
+                    let sample_cv = if bps_window.len() >= 3 {
+                        let mean = bps_window.iter().sum::<f64>() / bps_window.len() as f64;
+                        if mean > 0.0 {
+                            let var = bps_window.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>()
+                                / bps_window.len() as f64;
+                            var.sqrt() / mean
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+                    let next_w = adjust_auto_speed_up_with_cv(
                         cur_w,
                         min_w,
                         max_pool_workers,
@@ -830,6 +852,7 @@ impl NativeEngine {
                         smooth_bps,
                         delta_rtt,
                         false,
+                        sample_cv,
                     );
                     tw.store(next_w, Ordering::Release);
                     prev_bytes = cur_bytes;
