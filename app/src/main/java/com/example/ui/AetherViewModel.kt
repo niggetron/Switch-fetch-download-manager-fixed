@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -1026,4 +1027,36 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun aria2Status(): Pair<Boolean, String> = cachedAria2Status
+
+    // ── Test mode: auto profile benchmark ──────────────────────────────────────
+    private val _benchmarkResult = kotlinx.coroutines.flow.MutableStateFlow("Not run yet")
+    val benchmarkResult: kotlinx.coroutines.flow.StateFlow<String> = _benchmarkResult.asStateFlow()
+
+    /**
+     * Runs every transport/profile combination for a short burst, picks the
+     * fastest, and saves a PNG result card + log into Download/AetherIO/Benchmark.
+     */
+    fun runProfileBenchmark(url: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _benchmarkResult.value = "Benchmarking $url …"
+            runCatching {
+                val handle = networkMonitor.state.value.activeValidatedLinks.firstOrNull()?.netHandle ?: 0L
+                val report = com.example.engine.ProfileBenchmark.run(app, url, handle)
+                val best = report.best
+                if (best != null) {
+                    com.example.engine.BenchmarkPreference.profile = best.profile
+                    com.example.engine.BenchmarkPreference.protocol = best.protocol
+                }
+                val summary = buildString {
+                    append("Best: ${best?.protocol}/${best?.profile} — ")
+                    append(String.format(Locale.US, "%.2f MB/s", (best?.bytesPerSec ?: 0L) / 1_048_576.0))
+                    append("\nSaved: ${report.pngFile.absolutePath}\nLog: ${report.logFile.absolutePath}")
+                }
+                _benchmarkResult.value = summary
+                _snackbarEvents.tryEmit("Profile benchmark finished · result card saved")
+            }.onFailure {
+                _benchmarkResult.value = "Benchmark failed: ${it.message ?: it.javaClass.simpleName}"
+            }
+        }
+    }
 }

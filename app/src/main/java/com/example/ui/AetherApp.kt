@@ -497,6 +497,8 @@ fun AetherApp(viewModel: AetherViewModel) {
                                                 onPruneCas = viewModel::pruneCasCache,
                                                 onCopyDiagnostics = viewModel::copyDiagnosticsToClipboard,
                                                 onCopyAria2Secret = viewModel::copyAria2SecretToClipboard,
+                                                benchmarkResult = viewModel.benchmarkResult.collectAsStateWithLifecycle().value,
+                                                onRunBenchmark = viewModel::runProfileBenchmark,
                                             )
                                         }
                                     }

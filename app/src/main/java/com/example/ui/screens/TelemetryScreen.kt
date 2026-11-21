@@ -119,6 +119,9 @@ fun TelemetryScreen(
     onSaveDiagnosticsJson: (Uri) -> Unit = {},
     onShareDiagnosticsBundle: () -> Unit = {},
     onSelectGauge: (String) -> Unit = {},
+    // Test mode — auto profile benchmark
+    benchmarkResult: String = "Not run yet",
+    onRunBenchmark: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -669,19 +672,32 @@ fun TelemetryScreen(
                     }
                 }
 
+                // USER REQUEST: no manual worker slider — auto-adaptive only.
                 Column {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Default Worker Concurrency", style = MaterialTheme.typography.titleSmall)
-                        Text("${settings.maxConcurrentWorkers} / $MAX_CONCURRENT_WORKERS_CAP streams", style = MonoMetricStyle, color = ext.cyan)
-                    }
-                    Slider(
-                        value = settings.maxConcurrentWorkers.toFloat().coerceIn(1f, MAX_CONCURRENT_WORKERS_CAP.toFloat()),
-                        onValueChange = {
-                            val count = it.roundToInt().coerceIn(1, MAX_CONCURRENT_WORKERS_CAP)
-                            onUpdateSettings { s -> s.copy(maxConcurrentWorkers = count) }
-                        },
-                        valueRange = 1f..MAX_CONCURRENT_WORKERS_CAP.toFloat(),
+                    Text("Worker Concurrency: FULLY AUTOMATIC", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Up to $MAX_CONCURRENT_WORKERS_CAP lanes, scaled live by the governor. Safety limits: link quality, RTT, thermal headroom, server refusals.",
+                        style = MonoMetricStyle,
+                        color = ext.cyan,
                     )
+                }
+
+                // Test mode: benchmark every transport/profile combination and
+                // save a PNG result card + log into Download/AetherIO/Benchmark.
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Auto Profile Benchmark (Test Mode)", style = MaterialTheme.typography.titleSmall)
+                    var benchmarkUrl by remember { mutableStateOf("https://speed.cloudflare.com/__down?bytes=104857600") }
+                    OutlinedTextField(
+                        value = benchmarkUrl,
+                        onValueChange = { benchmarkUrl = it },
+                        label = { Text("Benchmark URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(onClick = { onRunBenchmark(benchmarkUrl.trim()) }) {
+                        Text("RUN ALL PROFILES → PNG + LOG")
+                    }
+                    Text(benchmarkResult, style = MonoMetricStyle, color = ext.emerald)
                 }
 
                 EngineToggleRow(

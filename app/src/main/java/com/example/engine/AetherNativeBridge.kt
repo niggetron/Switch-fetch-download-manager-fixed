@@ -255,6 +255,11 @@ object AetherNativeBridge {
 
     external fun nativeWarmup()
     external fun nativeEngineVersion(): String
+    external fun nativeBenchmarkProfiles(url: String, netHandle: Long): String
+
+    /** Test mode: returns JSON [{protocol,profile,bytesPerSec}, ...]. */
+    fun benchmarkProfilesSafe(url: String, netHandle: Long): String? =
+        if (isNativeLoaded) runCatching { nativeBenchmarkProfiles(url, netHandle) }.getOrNull() else null
     external fun nativeCreateTelemetryMemfd(): Int
     external fun nativeUpdateLinkHandle(
         linkKey: String,

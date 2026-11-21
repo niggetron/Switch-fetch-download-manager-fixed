@@ -511,23 +511,19 @@ fun NewDownloadSheet(
                 }
             }
 
+            // USER REQUEST: no manual stream slider — concurrency is fully
+            // automatic. The governor ramps up to the 128 hard ceiling and sheds
+            // lanes the moment goodput stops improving.
             Column {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        text = "Adaptive BDP Streams (Ghost Auto-Boost)",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        text = "${workerCount.roundToInt()} / $MAX_CONCURRENT_WORKERS_CAP streams",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = ext.emerald,
-                    )
-                }
-                Slider(
-                    value = workerCount,
-                    onValueChange = { workerCount = it },
-                    valueRange = 1f..MAX_CONCURRENT_WORKERS_CAP.toFloat(),
+                Text(
+                    text = "Auto-Adaptive Streams — up to $MAX_CONCURRENT_WORKERS_CAP lanes",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "Fully dynamic · governed by live goodput, RTT, thermal and link health",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ext.emerald,
                 )
             }
 

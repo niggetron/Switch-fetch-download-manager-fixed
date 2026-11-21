@@ -386,18 +386,11 @@ internal class KotlinOkHttpTransferRunner(
                 }
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
-                // T3: the profile-only ceiling ignored the user's worker-count
-                // slider (TURBO_ANTI_DIP pinned every download to 96 even when 128
-                // was selected). The setting is now the ceiling; the profile only
-                // shapes ramp/anti-dip behaviour and SUSTAINED still lowers the cap.
-                val profileCeiling = when (settings.throughputProfile) {
-                    ThroughputProfile.SUSTAINED_ANTI_DIP -> 64
-                    else -> com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
-                }
-                val maxCap = minOf(
-                    entity.workerCount.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
-                    profileCeiling,
-                ).coerceAtLeast(1)
+                // USER REQUEST: no manual connection ceiling. The governor owns
+                // concurrency end-to-end — it ramps up to the 128 hard ceiling when
+                // goodput keeps improving and sheds lanes the moment it stops.
+                // Host-limit learning and thermal stay as SAFETY floors only.
+                val maxCap = com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
                 val downloadHost = runCatching { java.net.URL(entity.url).host }.getOrNull().orEmpty()
                 val learnedCap = downloadHost.takeIf { it.isNotBlank() }?.let { hostLimits.cap(it) }
                 val effectiveMaxCap = if (learnedCap != null) minOf(maxCap, learnedCap).coerceAtLeast(1) else maxCap

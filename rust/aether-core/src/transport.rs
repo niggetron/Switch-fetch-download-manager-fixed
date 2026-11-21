@@ -882,6 +882,45 @@ pub async fn probe_bound_link_blocked_reason(
     }
 }
 
+/// Benchmark a single (transport, emulation profile) combination by timing a
+/// short ranged GET. Used by the in-app test mode to pick the best config.
+pub async fn measure_config_goodput(
+    ctx: &TransportContext,
+    link_key: &str,
+    net_handle: u64,
+    url: &str,
+    profile: &str,
+    protocol: &str,
+    want_bytes: usize,
+) -> io::Result<u64> {
+    let start = Instant::now();
+    if protocol == "h3" {
+        let range = format!("bytes=0-{}", want_bytes.saturating_sub(1));
+        let (_status, _headers, bytes) =
+            fetch_h3_range_bytes(ctx, link_key, net_handle, url, Some(&range), want_bytes).await?;
+        let secs = start.elapsed().as_secs_f64().max(0.01);
+        return Ok((bytes.len() as f64 / secs) as u64);
+    }
+    let client = ctx
+        .get_or_build_wreq_client(link_key, None, None, None, profile, 0)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let range = format!("bytes=0-{}", want_bytes.saturating_sub(1));
+    let resp = send_wreq_range_request(&client, url, Some(&range))
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let mut got = 0usize;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        got += chunk.len();
+        if got >= want_bytes {
+            break;
+        }
+    }
+    let secs = start.elapsed().as_secs_f64().max(0.01);
+    Ok((got as f64 / secs) as u64)
+}
+
 pub async fn send_wreq_range_request(
     client: &WreqClient,
     url: &str,

@@ -1720,6 +1720,41 @@ impl NativeEngine {
         }
     }
 
+    /// Test mode: time a short range GET for each (transport, browser-profile)
+    /// combination and return a JSON result card. Never mutates download state.
+    pub async fn benchmark_profiles(&self, url: &str, net_handle: u64) -> String {
+        const WANT: usize = 2 * 1024 * 1024;
+        let combos: [(&str, &str); 4] = [
+            ("wreq", "chrome134"),
+            ("wreq", "chrome131"),
+            ("wreq", "okhttp5"),
+            ("h3", "chrome134"),
+        ];
+        let link_key = "benchmark:auto";
+        let mut out = String::from("[");
+        for (idx, (protocol, profile)) in combos.iter().enumerate() {
+            let bps = tokio::time::timeout(
+                Duration::from_secs(12),
+                crate::transport::measure_config_goodput(
+                    &self.transport, link_key, net_handle, url, profile, protocol, WANT,
+                ),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or(0);
+            if idx > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "{{\"protocol\":\"{}\",\"profile\":\"{}\",\"bytesPerSec\":{}}}",
+                protocol, profile, bps
+            ));
+        }
+        out.push(']');
+        out
+    }
+
     async fn execute_single_probe(
         &self,
         url: &str,

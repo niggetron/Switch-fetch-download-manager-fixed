@@ -29,6 +29,17 @@ import java.util.concurrent.ConcurrentHashMap
 private const val MIN_EXTENT_BYTES = 1L * 1024L * 1024L
 
 /**
+ * Test-mode benchmark result. When a benchmark has been run, new Rust downloads
+ * use the winning transport/emulation profile automatically.
+ */
+object BenchmarkPreference {
+    @Volatile
+    var profile: String? = null
+    @Volatile
+    var protocol: String? = null
+}
+
+/**
  * Unified Dual-Engine Coordinator for AetherIO v8.0:
  * Routes each download strictly according to user toggles (`enableRustEngine`,
  * `enableKotlinOkHttpEngine`, and `preferredEngineBackend` / per-task override) between:
@@ -157,7 +168,9 @@ class AetherDownloadEngine(
             downloadedBytes = 0L,
             status = DownloadStatus.QUEUED.name,
             routeMode = request.routeMode.name,
-            workerCount = request.workers.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
+            // USER REQUEST: concurrency is fully dynamic — always arm the hard
+            // ceiling; the adaptive governor finds the real optimum per link.
+            workerCount = com.example.data.model.MAX_CONCURRENT_WORKERS_CAP,
             destinationUri = destUri,
             isSafDestination = isSaf,
             supportsRange = zipEntry != null,
@@ -482,8 +495,12 @@ class AetherDownloadEngine(
             directFd = directFd,
             maxWorkers = entity.workerCount.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
             maxCellularBytes = cellCap,
-            browserProfile = entity.browserProfile,
-            protocolMode = entity.protocolMode,
+            // Test-mode winner overrides the manual profile selection.
+            browserProfile = BenchmarkPreference.profile ?: entity.browserProfile,
+            protocolMode = when (BenchmarkPreference.protocol) {
+                "h3" -> "h3_quic"
+                else -> entity.protocolMode
+            },
         )
         if (!started) {
             mediaStoreTarget?.let { target ->

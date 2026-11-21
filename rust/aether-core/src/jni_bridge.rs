@@ -57,6 +57,28 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
     })
 }
 
+/// Test mode: benchmark every transport/profile combination and return JSON.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeBenchmarkProfiles<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    url: JString<'local>,
+    net_handle: jlong,
+) -> JString<'local> {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let target: String = env.get_string(&url).map(Into::into).unwrap_or_default();
+        let eng = engine();
+        match eng.runtime.block_on(eng.benchmark_profiles(&target, net_handle as u64)) {
+            json if !json.is_empty() => json,
+            _ => "[]".to_string(),
+        }
+    }))
+    .unwrap_or_else(|_| "[]".to_string());
+    env.new_string(result).unwrap_or_else(|_| unsafe {
+        JString::from_raw(std::ptr::null_mut())
+    })
+}
+
 /// Pre-build the Tokio runtime / TLS pools / slab arena so the first real
 /// download does not pay the initialization cost and appear to "queue".
 #[unsafe(no_mangle)]
