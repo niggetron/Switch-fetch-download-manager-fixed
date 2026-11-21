@@ -1632,7 +1632,7 @@ fn try_steal_bisected_range(
         .collect();
 
     let mut best: Option<(f64, Arc<ActiveRangeState>)> = None;
-    for st in candidates {
+    for st in &candidates {
         let cur = st.current_offset.load(Ordering::Acquire);
         let end = st.end_offset.load(Ordering::Acquire);
         if end <= cur {
@@ -1656,7 +1656,7 @@ fn try_steal_bisected_range(
             .map(|(score, _)| est_eta_secs > *score)
             .unwrap_or(true)
         {
-            best = Some((est_eta_secs, st));
+            best = Some((est_eta_secs, st.clone()));
         }
     }
 
