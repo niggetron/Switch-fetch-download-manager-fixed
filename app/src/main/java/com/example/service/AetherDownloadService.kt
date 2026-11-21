@@ -88,13 +88,18 @@ class AetherDownloadService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is ForegroundServiceStartNotAllowedException) {
-                DiagnosticsCenter.log("FGS_HANDOFF", "ForegroundServiceStartNotAllowedException — handing off to WorkManager")
-                AetherDownloadWorker.enqueueHandoff(applicationContext)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            throw e
+            // C16: on API 36 HyperOS, SecurityException (FGS type mismatch),
+            // BadNotificationException or binder failures are also possible.
+            // Rethrowing used to crash the app with locks + quota clock left dirty.
+            // Degrade every FGS-start failure to the same safe handoff.
+            DiagnosticsCenter.log(
+                "FGS_HANDOFF",
+                "${e.javaClass.simpleName} — handing off to WorkManager: ${e.message.orEmpty()}",
+            )
+            runCatching { markFgsSessionStopped() }
+            AetherDownloadWorker.enqueueHandoff(applicationContext)
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         startMonitorLoop(app)

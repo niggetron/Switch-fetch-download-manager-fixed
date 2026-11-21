@@ -753,9 +753,11 @@ internal class KotlinOkHttpTransferRunner(
                     updatedAt = System.currentTimeMillis(),
                 )
             )
+            // C13: release per-task bisection bookkeeping on EVERY terminal exit;
+            // otherwise stale part counters corrupt a later resume of the same id.
+            bisectParts.remove(id)
             if (representationChanged) {
                 runCatching { ledgerFileProvider(id).delete() }
-                bisectParts.remove(id)
             }
             return
         }
@@ -823,7 +825,10 @@ internal class KotlinOkHttpTransferRunner(
             StoragePlacementHelper.promoteLocalFileToMediaStore(
                 context = context,
                 sourceFile = File(entity.destinationUri),
-                fileName = entity.fileName,
+                // C14: use the actual (deduped) destination name, not the
+                // originally requested one — otherwise MediaStore rows collide
+                // with an existing file of the original name.
+                fileName = File(entity.destinationUri).name,
                 mimeType = entity.mimeType,
             )
         }
