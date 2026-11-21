@@ -1,11 +1,15 @@
-//! AetherIO v9.0 Async Rust Download Orchestrator (Quad-Link Superbike & Anti-Dip):
-//! - Persistent pooled `wreq::Client` per link (zero TLS/TCP Slow Start dips between segments)
-//! - Single-connection Stream 0 probe first (206 + ETag + RFC 6266 + magic MIME + ENOSPC)
-//! - Simultaneous Quad-Link bonding across Wi-Fi 1 + Wi-Fi 2 + Mobile 5G/LTE + USB Tethering/Ethernet
-//! - Coalesced 512 KiB slab filling -> Decoupled Async Disk-Writer Task (network never stalls on fdatasync!)
-//! - True Atomic Live Range Bisection + Anti-Dip Watchdog (eliminates 400 Mbps -> 3 Mbps tail dips)
-//! - Batched crash-safe `fdatasync` + `AETHLDG2` checkpointing (every 16 MiB or 2s + final flush)
-//! - Real-time 4-link memfd `TelemetryPage` updates & throttled `ActiveConnectionSnapshot` registry
+//! Rust download orchestrator: task lifecycle, Stream-0 probe, worker fan-out,
+//! live range bisection, and the decoupled disk writer. Does NOT parse manifests
+//! (HLS/DASH parsing is in `hls_dash.rs`, and the parsed segments are currently
+//! only logged) and does NOT do raw socket I/O (that is `transport.rs`).
+//!
+//! Invariants:
+//! - `max_workers` is clamped to `MAX_WORKERS_CAP` (128); thermal/governor decide activity.
+//! - Network chunks are accumulated into 256 KiB slabs; slabs return to the pool
+//!   BEFORE fdatasync so slow disks do not stall network workers.
+//! - Data `fdatasync` always precedes ledger `fdatasync` (crash consistency).
+//! - Range workers use `ActiveRangeState` CAS to split a slow tail; the stolen
+//!   half is `[mid, old_end]`. See `ARCHITECTURE.md` for the full flow.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};

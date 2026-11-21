@@ -1,16 +1,18 @@
-//! Project AetherIO Engine v9.0 — Unified Pure Rust Data Plane (`libaether_core.so`)
+//! AetherIO Rust data plane (`libaether_core.so`) — loaded by JNI from Kotlin.
 //!
-//! Compiles on 100% stable Rust (`edition = "2024"`, `panic = "unwind"`).
-//! - Lock-free Semaphore(24) + ArrayQueue `BoundedSlabPool` (12.0 MiB hard cap, TCP backpressure)
-//! - Persistent pooled `wreq::Client` per link + Decoupled Async Disk-Writer Task
-//! - Real `memfd_create()` mmap'd 4,096-byte Quad-Link `TelemetryPage` (Wi-Fi 1 + Wi-Fi 2 + 5G + USB)
-//! - Pre-connect socket2 tuning (SO_RCVBUF 8 MiB, TCP_NODELAY, TCP_USER_TIMEOUT = 10s)
-//! - Pre-drop `android_getnetworkblockedreason(sock_fd)` diagnostics + `android_setsocknetwork`
-//! - True Atomic Live Range Bisection + Anti-Dip Watchdog (eliminates 400 Mbps -> 3 Mbps dips)
-//! - `wreq` (BoringSSL `prefix-symbols`, `.no_proxy()`, identity ranges) + `quinn`/`h3` 0-RTT QUIC
-//! - `AETHLDG2` crash-safe binary ledger (per-slab BLAKE3 + batched `fdatasync` -> `msync`)
-//! - Page-cache sequential SHA-256 advancement prior to `POSIX_FADV_DONTNEED`
-//! - Adaptive HLS/DASH parser, hardened Aria2 `127.0.0.1:6800` JSON-RPC, and redacted diagnostics
+//! Builds on stable Rust (`edition = "2024"`, `panic = "unwind"`). Module map
+//! and the full execution flow are documented in `ARCHITECTURE.md` at the repo
+//! root — start there. The 6 unit tests in `mod tests` below are the executable
+//! spec for the numeric invariants (segment sizing, ledger codec, worker caps).
+//!
+//! Current verified facts (see ARCHITECTURE.md canonical constants):
+//! - 64 x 256 KiB slabs = 16 MiB bounded pool; worker cap 128, default 32.
+//! - Ranges 256 KiB .. 4 MiB by link speed.
+//! - `TelemetryPage` is a 4096-byte ABI shared with Kotlin's memfd reader.
+//! - H3/QUIC is used ONLY for the 16 KiB Stream-0 probe; bulk bytes use wreq/H2.
+//! - `probe_io_uring_supported()` always returns false (Android seccomp).
+//! - `AETHLDG2` ledger is crash-safe with CRC32C + Leased -> Pending rollback.
+//! - Full sequential SHA-256 is seeded from the ledger frontier on resume.
 
 pub mod aria2_rpc;
 pub mod cas;

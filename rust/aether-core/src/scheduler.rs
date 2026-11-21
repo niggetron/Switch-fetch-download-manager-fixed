@@ -1,11 +1,17 @@
+//! Pure scheduling policy for the Rust data plane: link selection, circuit
+//! breakers, adaptive worker ramping, per-host mirror selection and range
+//! bisection helpers. This module performs NO I/O and owns NO global state;
+//! callers pass in snapshots and own the breaker maps.
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-// 64 concurrent sockets to one CDN caused congestion collapse (70 Mbps spikes,
-// 25 Mbps average). 24 is enough to fill a 5G/Wi-Fi link while staying stable,
-// especially under the thermal throttling seen on real devices.
+/// Hard ceiling for range workers (both Rust and Kotlin, see `DownloadModels.kt`).
+/// The adaptive governor and thermal cap decide how many of these are actually
+/// active; this is only the upper bound. Early fixed caps of 24/64 were removed
+/// because they left high-BDP 5G/Wi-Fi links underutilised.
 pub const MAX_WORKERS_CAP: usize = 128;
 
 /// Network range sizing. Ghost Downloader / aria2-next sustain far higher rates
@@ -32,7 +38,8 @@ pub fn adaptive_bdp_segment_bytes(downstream_kbps: u64) -> u64 {
     }
 }
 
-/// Guarantees at least one active worker per validated active link (and up to 24 total).
+/// Guarantees at least one active worker per validated active link (up to
+/// `MAX_WORKERS_CAP` total).
 pub fn effective_worker_count(user_max_connections: usize, validated_active_links: usize) -> usize {
     user_max_connections
         .max(validated_active_links)
@@ -259,7 +266,9 @@ pub fn select_mirror_for_link<'a>(urls: &'a [String], link_key: &str, seg_index:
     urls[(base + seg_index) % urls.len()].as_str()
 }
 
-/// Ghost-style bidirectional closed-loop autoSpeedUp controller scaling cleanly up to 64 workers.
+/// Bidirectional closed-loop autoSpeedUp controller. Adds lanes while goodput
+/// rises and RTT stays clean; sheds lanes on goodput loss or RTT inflation so a
+/// congested CDN cannot leave 128 sockets permanently pinned.
 pub fn adjust_auto_speed_up(
     current_workers: usize,
     min_workers: usize,

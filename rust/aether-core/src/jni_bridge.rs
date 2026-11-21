@@ -1,3 +1,10 @@
+//! The ONLY Rust <-> Kotlin boundary. Every `#[unsafe(no_mangle)] extern
+//! "system"` function here must match an `external fun` in
+//! `app/.../engine/AetherNativeBridge.kt`. All work is wrapped in
+//! `catch_unwind`: panics MUST NOT cross the FFI boundary (Cargo uses
+//! `panic = "unwind"`, so an uncaught panic aborts the Android process).
+//! JNI allocation calls return empty/zero on failure rather than `.expect()`.
+
 use std::net::IpAddr;
 use std::os::fd::IntoRawFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -37,7 +44,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
             "fallocate+pwrite+fdatasync"
         };
         format!(
-            "libaether_core.so v9.1 Hyperion (64-Stream Sharded Multi-Socket · Force-All-Links · Pooled wreq+H3 · Async Disk Writer 12 MiB · Anti-Dip Bisection · memfd · {uring})"
+            "libaether_core.so (128-lane adaptive · Force-All-Links · Pooled wreq/H2 · Async Disk Writer 16 MiB · Anti-Dip Bisection · memfd · H3 probe only · {uring})"
         )
     }))
     .unwrap_or_else(|_| "libaether_core.so v9.1 (recovered panic)".to_string());

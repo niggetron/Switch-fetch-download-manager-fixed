@@ -5,8 +5,11 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Bounded 8.0 MiB DirectByteBuffer slab pool (16 x 512 KiB slabs) matching v7.1 BoundedSlabPool.
- * Eliminates per-packet JVM byte[] heap allocations in the Kotlin fallback path.
+ * DirectByteBuffer slab pool for the Kotlin OkHttp engine: 96 x 256 KiB = 24 MiB
+ * direct-memory ceiling. Slabs are reused across ranges to avoid per-packet
+ * heap allocations. Overflow beyond `maxSlabs` uses GC-managed heap buffers so
+ * 128 workers cannot exhaust native memory on a phone. Mirrors the Rust
+ * `BoundedSlabPool` (64 x 256 KiB = 16 MiB); see ARCHITECTURE.md.
  */
 class SlabBufferPool(
     val slabSizeBytes: Int = 256 * 1024,

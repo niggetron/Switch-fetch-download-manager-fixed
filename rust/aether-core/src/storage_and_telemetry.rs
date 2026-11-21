@@ -190,7 +190,15 @@ impl Drop for SlabLeaseGuard {
     }
 }
 
-/// Lock-free Semaphore-gated BoundedSlabPool (24 × 512 KiB = 12.0 MiB hard cap).
+//! Storage substrate and shared telemetry for the Rust data plane.
+//!
+//! Owns: the fixed-size slab pool, the 4 KiB memfd telemetry page, and the
+//! pwrite / fdatasync / ENOSPC helpers. Does NOT decide which bytes to write.
+//! INVARIANT: `TelemetryPage` byte offsets are an ABI shared with Kotlin's
+//! `MemfdTelemetryReader` - never reorder fields. `probe_io_uring_supported()`
+//! always returns false (Android seccomp kills syscall 425).
+
+/// Lock-free Semaphore-gated BoundedSlabPool (64 × 256 KiB = 16 MiB hard cap).
 pub struct BoundedSlabPool {
     semaphore: Arc<Semaphore>,
     queue: Arc<ArrayQueue<Vec<u8>>>,
