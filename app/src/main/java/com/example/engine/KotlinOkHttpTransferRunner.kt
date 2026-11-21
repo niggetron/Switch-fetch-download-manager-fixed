@@ -275,7 +275,13 @@ internal class KotlinOkHttpTransferRunner(
             segmentBytes = segSize,
             etagOrLastMod = probeResult.eTag.orEmpty(),
         )
-        val bitfield = reconcileBitfield(entity, ledger, segmentCount, totalBytes)
+        // C29: a fresh ledger (new validator) must never inherit the stale Room
+        // bitfield — same-length representation changes would splice old bytes.
+        val validatorChanged = !entity.eTag.isNullOrBlank() && probeResult.eTag != entity.eTag
+        val bitfield = reconcileBitfield(
+            entity, ledger, segmentCount, totalBytes,
+            trustRoomCheckpoint = !validatorChanged,
+        )
 
         if (totalBytes > 0L && (!entity.isSafDestination || useStagedSaf)) {
             val dir = if (useStagedSaf) {
@@ -1886,8 +1892,17 @@ internal class KotlinOkHttpTransferRunner(
         }
     }
 
-    private fun reconcileBitfield(entity: DownloadEntity, ledger: AetherBinaryLedger, segCount: Int, totalBytes: Long): String {
-        val roomValid = entity.segmentBitfield.length == segCount && totalBytes == entity.totalBytes
+    private fun reconcileBitfield(
+        entity: DownloadEntity,
+        ledger: AetherBinaryLedger,
+        segCount: Int,
+        totalBytes: Long,
+        trustRoomCheckpoint: Boolean = true,
+    ): String {
+        // C29: when the remote representation changed (or the ledger was freshly
+        // created), the Room bitfield is stale and must be discarded.
+        val roomValid = trustRoomCheckpoint &&
+            entity.segmentBitfield.length == segCount && totalBytes == entity.totalBytes
         return CharArray(segCount) { idx ->
             val ledgerDone = idx < ledger.states.size && ledger.states[idx] == AetherBinaryLedger.STATE_DONE
             val roomState = if (roomValid) SegmentState.fromCode(entity.segmentBitfield[idx]) else SegmentState.PENDING

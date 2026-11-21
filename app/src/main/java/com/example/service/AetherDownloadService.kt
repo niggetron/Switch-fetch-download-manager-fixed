@@ -96,7 +96,7 @@ class AetherDownloadService : Service() {
                 "FGS_HANDOFF",
                 "${e.javaClass.simpleName} — handing off to WorkManager: ${e.message.orEmpty()}",
             )
-            runCatching { markFgsSessionStopped() }
+            runCatching { app.telemetryLedger.markFgsSessionStopped() }
             AetherDownloadWorker.enqueueHandoff(applicationContext)
             stopSelf()
             return START_NOT_STICKY

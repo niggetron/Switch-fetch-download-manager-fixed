@@ -263,7 +263,9 @@ class Aria2NextEngine(
         // retired names ("disk-cache", "uri-selector", "optimize-concurrent-downloads",
         // "always-resume") are silently ignored. Only real Task-scope options below.
         // HTTP/2 is decided internally: h1 for parallel ranges, 2TLS otherwise.
-        val lanes = settings.maxConcurrentWorkers.coerceIn(1, 256)
+        // C23: honour the per-task worker count and the shared 128-lane cap so
+        // switching backends does not jump from 128 to 256 lanes.
+        val lanes = entity.workerCount.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP)
         val options = JSONObject().apply {
             put("out", entity.fileName)
             put("dir", parent)

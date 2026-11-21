@@ -216,6 +216,9 @@ class AetherDownloadEngine(
                         updatedAt = System.currentTimeMillis(),
                     )
                 )
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                // C31: pause/cancel must not be rewritten to FAILED by this catch.
+                throw ce
             } catch (ex: Exception) {
                 repository.update(
                     entity.copy(

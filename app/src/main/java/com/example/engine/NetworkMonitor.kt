@@ -136,7 +136,11 @@ class NetworkMonitor(context: Context) {
             updateNetwork(network, caps = caps, fromRequestedLease = false)
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) =
             updateNetwork(network, lp = linkProperties, fromRequestedLease = false)
-        override fun onLost(network: Network) = removeNetwork(network)
+        // C27: for registerDefaultNetworkCallback, onLost fires when a network
+        // LOSES DEFAULT STATUS, not only when it disconnects. Removing the link
+        // here collapsed multipath whenever Wi-Fi<->cell default flipped even
+        // though Wi-Fi was still up. Per-transport callbacks own real removals.
+        override fun onLost(network: Network) = Unit
     }
 
     private val wifiCallback = object : ConnectivityManager.NetworkCallback() {

@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use tokio::runtime::Runtime;
 use tokio::sync::{Notify, mpsc};
 
-use crate::cas::{ContiguousSha256Verifier, blake3_digest_bytes};
+use crate::cas::ContiguousSha256Verifier;
 use crate::diagnostics::{
     FLAG_ANTI_DIP_WATCHDOG, FLAG_AUTO_SPEED_UP, FLAG_FORCE_ALL_LINKS, FLAG_HTTP3_QUIC,
     FLAG_MULTI_LINK, FLAG_TAIL_HEDGE, FLAG_TURBO_MULTI_SOCKET, is_flag_enabled, record_diag,
@@ -679,7 +679,10 @@ impl NativeEngine {
             while let Some(job) = disk_rx.blocking_recv() {
                 if job.len > 0 {
                     let slice = &job.slab.as_slice()[..job.len];
-                    let slab_b3 = blake3_digest_bytes(slice);
+                    // W29: BLAKE3 per-slab digests are never consumed for verification
+                    // (only SHA-256 is compared to expectedSha256), so hashing every
+                    // slab on the single writer thread was pure CPU cost. The ledger
+                    // keeps its digest slots zeroed — format unchanged.
                     if let Err(e) = pwrite_all(&writer_file, slice, job.offset) {
                         *writer_err.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.to_string());
                         break;
@@ -697,13 +700,8 @@ impl NativeEngine {
                     }
                     {
                         let mut lg = writer_ledger.lock().unwrap_or_else(|p| p.into_inner());
-                        let slab_idx = (job.offset / SLAB_BYTES as u64) as usize;
-                        // P3 (C2 audit): only record full, aligned slab digests. A bisected
-                        // steal begins at a 4 KiB-aligned `mid`, so hashing its partial slab
-                        // would overwrite the victim's aligned digest in the same bucket.
-                        if job.offset % SLAB_BYTES as u64 == 0 && job.len as usize == SLAB_BYTES {
-                            lg.record_slab_digest(slab_idx, slab_b3);
-                        }
+                        // W29: per-slab BLAKE3 digest recording removed from the hot
+                        // path (digests are metadata-only and never verified).
                         // P2 (C2 audit): use this writer's LOCAL frontier directly. Reading
                         // it back from the global telemetry page lets a concurrent task's
                         // writer overwrite the slot between the store above and this load,
