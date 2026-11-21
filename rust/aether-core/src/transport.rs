@@ -13,9 +13,9 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket as StdUdpSocket};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Buf;
 use http::{HeaderMap, HeaderValue, Request, StatusCode};
@@ -303,6 +303,7 @@ impl TransportContext {
             let prev_ip = *existing.local_ip.read().unwrap_or_else(|p| p.into_inner());
             let prev_px = existing.proxy_override.read().unwrap_or_else(|p| p.into_inner()).clone();
             let prev_handle = existing.net_handle.load(Ordering::Relaxed);
+            let prev_iface = existing.interface_name.read().unwrap_or_else(|p| p.into_inner()).clone();
             existing.update_handle(net_handle, downstream_kbps, rtt_ms, local_ip, interface_name.clone());
             *existing
                 .proxy_override
@@ -310,7 +311,11 @@ impl TransportContext {
                 .unwrap_or_else(|p| p.into_inner()) = proxy_override.clone();
             // A rotated Network handle or interface name makes cached clients
             // (whose sockets are bound to the OLD network) stale - invalidate.
-            if prev_ip != local_ip || prev_px != proxy_override || prev_handle != net_handle {
+            if prev_ip != local_ip
+                || prev_px != proxy_override
+                || prev_handle != net_handle
+                || prev_iface != interface_name
+            {
                 self.invalidate_client_pool_for_link(&link_key);
             }
             false
@@ -512,7 +517,14 @@ pub async fn connect_bound_tcp(
         let resolved = resolve_with_race(&px.host, px.port, net_handle).await?;
         let mut stream = connect_socket_bound(resolved, net_handle).await?;
         if px.is_socks5h && !px.is_http {
-            perform_socks5h_handshake(&mut stream, host, port).await?;
+            // C20: a proxy that accepts TCP but never answers the greeting used
+            // to hang this coroutine forever (read_exact has no implicit timeout).
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                perform_socks5h_handshake(&mut stream, host, port),
+            )
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "SOCKS5h handshake timeout"))??;
         }
         return Ok((stream, t0.elapsed()));
     }
@@ -570,6 +582,15 @@ pub async fn resolve_with_race(
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "No DNS A/AAAA record"))
 }
 
+fn next_dns_txid() -> u16 {
+    static COUNTER: AtomicU16 = AtomicU16::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    nanos as u16 ^ COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37)
+}
+
 async fn udp_dns_a_query(
     host: String,
     port: u16,
@@ -584,7 +605,14 @@ async fn udp_dns_a_query(
     let udp = UdpSocket::from_std(std_udp)?;
 
     let mut pkt = Vec::with_capacity(64);
-    pkt.extend_from_slice(&[0xAE, 0x71, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    // C20: a hard-coded TXID let an on-path responder forge a valid-looking reply.
+    // Mix a per-query counter with sub-second time so the ID is not predictable.
+    let txid = next_dns_txid();
+    pkt.extend_from_slice(&[
+        (txid >> 8) as u8,
+        (txid & 0xFF) as u8,
+        0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
     for label in host.split('.').filter(|s| !s.is_empty()) {
         if label.len() > 63 {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "DNS label"));
@@ -607,7 +635,7 @@ async fn udp_dns_a_query(
     // the relay path connects by raw IP and would leak to the attacker.
     if from != server
         || n < 12
-        || resp[0] != 0xAE || resp[1] != 0x71 // echoed TXID
+        || u16::from_be_bytes([resp[0], resp[1]]) != txid // echoed TXID
         || (resp[2] & 0x80) == 0 // QR bit: must be a response
         || (resp[3] & 0x0F) != 0 // rcode: NOERROR only
     {
@@ -916,7 +944,13 @@ pub async fn fetch_h3_range_bytes(
         .connect(remote_addr, host)
         .map_err(|e| io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let conn = match connecting.into_0rtt() {
-        Ok((zero_rtt, _accepted)) => zero_rtt,
+        Ok((zero_rtt, accepted)) => {
+            // C20/W11: the ZeroRttAccepted future was discarded, so a server
+            // rejecting early data went unnoticed and the probe could be reset.
+            // Await confirmation (bounded) before sending on the connection.
+            let _ = tokio::time::timeout(Duration::from_secs(2), accepted).await;
+            zero_rtt
+        }
         Err(conn_fut) => conn_fut
             .await
             .map_err(|e| io::Error::new(std::io::ErrorKind::TimedOut, e.to_string()))?,

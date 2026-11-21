@@ -33,7 +33,8 @@ use crate::ledger::{AetherLedger, SegmentStatus};
 use crate::scheduler::{
     ActiveConnectionSnapshot, LinkCircuitBreaker, LinkDispatchStats, MAX_WORKERS_CAP,
     absorb_empty_right_of, adaptive_bdp_segment_bytes, adjust_auto_speed_up,
-    effective_worker_count, select_link_with_force_all, select_lowest_rtt_link,
+    adjust_auto_speed_up_with_cv, effective_worker_count, select_link_with_force_all,
+    select_lowest_rtt_link,
     select_mirror_for_link,
 };
 use crate::storage_and_telemetry::{
