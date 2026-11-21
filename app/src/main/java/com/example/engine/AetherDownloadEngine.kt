@@ -186,12 +186,19 @@ class AetherDownloadEngine(
             try {
                 repository.update(entity.copy(status = DownloadStatus.STREAMING.name, updatedAt = startMs))
                 val targetFile = File(entity.destinationUri)
+                // C12 audit: the callback delivers CUMULATIVE bytes, while
+                // recordBytesWritten() adds a delta to the running counters. Passing
+                // `done` directly inflated every per-link total and speed sample by
+                // O(N * total) and fabricated huge "measured" peaks. Track the delta.
+                var lastZipProgress = 0L
                 val written = RemoteZipInspector.extractRemoteZipEntry(
                     url = entity.url,
                     entry = entry,
                     targetFile = targetFile,
                 ) { done, total ->
-                    telemetryLedger.recordBytesWritten(done)
+                    val delta = (done - lastZipProgress).coerceAtLeast(0L)
+                    lastZipProgress = done
+                    telemetryLedger.recordBytesWritten(delta)
                 }
                 val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
                 val avg = (written * 1000L) / elapsed

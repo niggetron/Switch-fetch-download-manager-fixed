@@ -3,6 +3,7 @@ package com.example.engine
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.content.FileProvider
 import java.io.File
 import java.text.SimpleDateFormat
@@ -148,29 +149,33 @@ object DiagnosticsCenter {
      * Captures a 1 Hz flight-recorder telemetry sample for speed-dip & multi-network root-cause export.
      */
     fun recordFlightSample(telemetry: TelemetrySnapshot) {
-        val now = System.currentTimeMillis()
-        if (now - lastFlightSampleMs < 950L) return
-        lastFlightSampleMs = now
-        val sample = FlightRecorderSample(
-            timestampMs = now,
-            backendBadge = telemetry.activeEngineBadge,
-            instantBps = telemetry.instantBps,
-            wifi1Bps = telemetry.wifiBps,
-            wifi2Bps = telemetry.wifi2Bps,
-            cellBps = telemetry.cellBps,
-            usbBps = telemetry.ethBps,
-            activeWorkers = telemetry.activeWorkers,
-            wifi1Workers = telemetry.wifiWorkers,
-            wifi2Workers = telemetry.wifi2Workers,
-            cellWorkers = telemetry.cellularWorkers,
-            usbWorkers = telemetry.ethWorkers,
-            ttfbMs = telemetry.lastTtfbMs,
-            stabilityPct = telemetry.stabilityPercent,
-            antiDipRescues = telemetry.antiDipRescues,
-            blockedReason = telemetry.blockedReasonLabel,
-            thermalStatus = telemetry.thermalStatusLabel,
-        )
+        // C12 audit: gate on a MONOTONIC clock (wall-clock steps could stall the
+        // recorder for minutes) and make the check-and-set atomic with the deque
+        // append — there are two producers (UI 4 Hz loop + engine/service loop)
+        // and the old @Volatile check-then-set let both record near-duplicate samples.
+        val gateNow = SystemClock.elapsedRealtime()
         synchronized(lock) {
+            if (gateNow - lastFlightSampleMs < 950L) return
+            lastFlightSampleMs = gateNow
+            val sample = FlightRecorderSample(
+                timestampMs = System.currentTimeMillis(), // display only — not used for intervals
+                backendBadge = telemetry.activeEngineBadge,
+                instantBps = telemetry.instantBps,
+                wifi1Bps = telemetry.wifiBps,
+                wifi2Bps = telemetry.wifi2Bps,
+                cellBps = telemetry.cellBps,
+                usbBps = telemetry.ethBps,
+                activeWorkers = telemetry.activeWorkers,
+                wifi1Workers = telemetry.wifiWorkers,
+                wifi2Workers = telemetry.wifi2Workers,
+                cellWorkers = telemetry.cellularWorkers,
+                usbWorkers = telemetry.ethWorkers,
+                ttfbMs = telemetry.lastTtfbMs,
+                stabilityPct = telemetry.stabilityPercent,
+                antiDipRescues = telemetry.antiDipRescues,
+                blockedReason = telemetry.blockedReasonLabel,
+                thermalStatus = telemetry.thermalStatusLabel,
+            )
             if (flightSamples.size >= MAX_FLIGHT_SAMPLES) flightSamples.removeFirst()
             flightSamples.addLast(sample)
         }

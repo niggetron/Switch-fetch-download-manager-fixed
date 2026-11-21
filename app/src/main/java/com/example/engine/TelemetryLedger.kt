@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Debug
 import android.os.PowerManager
+import android.os.SystemClock
 import com.example.data.model.ActiveConnectionInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -98,7 +99,10 @@ class TelemetryLedger(
     private val cellBytesCumulative = AtomicLong(0L)
     private val ethBytesCumulative = AtomicLong(0L)
 
-    private val lastWindowCheckMs = AtomicLong(System.currentTimeMillis())
+    // C12: interval/rate math must use a monotonic clock. NTP steps or user
+    // time changes on wall clock previously produced huge/negative dtMs ->
+    // fake speed dips and bogus peaks, and could stall sample recording.
+    private val lastWindowCheckMs = AtomicLong(SystemClock.elapsedRealtime())
     private val peakBps = AtomicLong(0L)
     private val wifiPeakBps = AtomicLong(0L)
     private val wifi2PeakBps = AtomicLong(0L)
@@ -396,7 +400,7 @@ class TelemetryLedger(
     }
 
     fun sampleSnapshotIfStale(hasActiveDownloads: Boolean, maxAgeMs: Long = 600L): TelemetrySnapshot {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastSampleTimestampMs > 0L && (now - lastSampleTimestampMs) < maxAgeMs) {
             return cachedSnapshot
         }
@@ -404,7 +408,7 @@ class TelemetryLedger(
     }
 
     fun sampleSnapshot(hasActiveDownloads: Boolean): TelemetrySnapshot = synchronized(sampleLock) {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         if (lastSampleTimestampMs > 0L && (now - lastSampleTimestampMs) < 160L) {
             return@synchronized cachedSnapshot
         }
