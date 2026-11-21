@@ -123,7 +123,12 @@ jobs:
 
       - name: Run Rust host unit tests (aether-core v9.0)
         working-directory: rust/aether-core
-        run: cargo test --lib
+        run: |
+          set -o pipefail
+          cargo test --lib 2>&1 | tee /tmp/rust_test.log || {
+            grep -E '^(error|warning: unused|  -->|   -->|  = note)' /tmp/rust_test.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+            exit 1
+          }
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
