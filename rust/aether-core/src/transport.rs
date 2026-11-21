@@ -488,19 +488,19 @@ pub async fn resolve_with_race(
     let h_g = host.to_string();
     let h_cf = host.to_string();
 
-    let sys_fut = Box::pin(async move {
+    let sys_fut: futures_util::future::BoxFuture<'static, std::io::Result<SocketAddr>> = Box::pin(async move {
         let mut addrs = tokio::net::lookup_host((h_sys.as_str(), port)).await?;
         addrs
             .next()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "System DNS empty"))
     });
-    let g_fut = Box::pin(udp_dns_a_query(
+    let g_fut: futures_util::future::BoxFuture<'static, std::io::Result<SocketAddr>> = Box::pin(udp_dns_a_query(
         h_g,
         port,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53),
         net_handle,
     ));
-    let cf_fut = Box::pin(udp_dns_a_query(
+    let cf_fut: futures_util::future::BoxFuture<'static, std::io::Result<SocketAddr>> = Box::pin(udp_dns_a_query(
         h_cf,
         port,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
