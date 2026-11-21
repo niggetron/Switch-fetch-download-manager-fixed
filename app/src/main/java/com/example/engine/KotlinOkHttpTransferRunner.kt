@@ -398,8 +398,12 @@ internal class KotlinOkHttpTransferRunner(
                     ((totalBytes + 65_535L) / 65_536L).coerceAtLeast(1L)
                 } else Long.MAX_VALUE
                 val rampCap = minOf(effectiveMaxCap.toLong(), bySize).toInt().coerceAtLeast(1)
-                val maxPoolCoroutines = minOf(boostedDesired, rampCap).coerceIn(1, effectiveMaxCap)
-                val targetWorkers = AtomicInteger(maxPoolCoroutines)
+                // Launch enough coroutines for the GOVERNOR's full range so a ramp-up
+                // can actually materialize. Surplus workers park cheaply (O(1) check)
+                // until targetWorkers rises. Previously only `boostedDesired` workers
+                // existed, so a governor target of 96 was a no-op with 32 coroutines.
+                val maxPoolCoroutines = rampCap.coerceIn(1, effectiveMaxCap)
+                val targetWorkers = AtomicInteger(minOf(boostedDesired, rampCap).coerceAtLeast(1))
 
                 val flusherJob = engineScope.launch(Dispatchers.IO) {
                     var lastSampleTime = System.currentTimeMillis()
@@ -489,6 +493,8 @@ internal class KotlinOkHttpTransferRunner(
                         val nextIndex = AtomicInteger(0)
 
                         coroutineScope {
+                            // Parked workers exit when there is no work left AND the
+                            // governor target has not grown beyond their index.
                             val jobs = (0 until maxPoolCoroutines).map { workerId ->
                                 async(Dispatchers.IO) {
                                     while (isActive && failureReason == null) {
@@ -561,35 +567,36 @@ internal class KotlinOkHttpTransferRunner(
                                                 .incrementAndGet()
                                             val canRetry = attempts < OKHTTP_MAX_SEGMENT_RETRIES &&
                                                 (ex is LinkStallException || isNetworkFlap(ex) || ex is IOException)
-                                            // Unwind bisection bookkeeping on failure so the
-                                            // segment can be re-claimed cleanly and does not
-                                            // stay permanently un-COMMITTABLE.
-                                            val partsForSeg = bisectParts[id]?.get(unit.segIndex)
-                                            if (partsForSeg != null) {
-                                                partsForSeg.decrementAndGet()
-                                                bisectParts[id]?.remove(unit.segIndex)
-                                                activeRanges.values.firstOrNull { it.segIndex == unit.segIndex }
-                                                    ?.let { range ->
-                                                        val s = unit.segIndex.toLong() * segSize
-                                                        val e = minOf(s + segSize - 1L, totalBytes - 1L)
-                                                        range.endOffset.set(e)
+                                            // On ANY failure, cancel every active range for
+                                            // this segment, restore its full extent, and reset
+                                            // to PENDING. This guarantees the whole segment is
+                                            // re-downloaded from scratch with no overlapping
+                                            // pwrites and no permanently un-COMMITTABLE state.
+                                            bisectParts[id]?.remove(unit.segIndex)
+                                            val fullEnd = minOf(
+                                                unit.segIndex.toLong() * segSize + segSize - 1L,
+                                                totalBytes - 1L,
+                                            )
+                                            val siblingCalls = mutableListOf<Call>()
+                                            activeRanges.entries.removeIf { entry ->
+                                                val range = entry.value
+                                                if (range.segIndex == unit.segIndex) {
+                                                    range.endOffset.set(fullEnd)
+                                                    synchronized(callsForTask) {
+                                                        callsForTask.firstOrNull { it.request().header("Range")?.contains("${range.startOffset}-") == true }?.let { siblingCalls.add(it) }
                                                     }
+                                                    true
+                                                } else false
                                             }
-                                            val otherHalfActive = activeRanges.values.any {
-                                                it !== null && it.segIndex == unit.segIndex
-                                            }
+                                            siblingCalls.forEach { runCatching { it.cancel() } }
                                             bitMutex.withLock {
-                                                if (!otherHalfActive &&
-                                                    SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED
-                                                ) {
+                                                if (SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED) {
                                                     bitChars[unit.segIndex] = SegmentState.PENDING.code
                                                     pendingSegments.incrementAndGet()
                                                 }
                                             }
                                             if (canRetry) {
-                                                if (!unit.isBisectedSteal) {
-                                                    nextIndex.updateAndGet { cur -> minOf(cur, unit.segIndex) }
-                                                }
+                                                nextIndex.updateAndGet { cur -> minOf(cur, unit.segIndex) }
                                                 delay(120L)
                                                 continue
                                             }
