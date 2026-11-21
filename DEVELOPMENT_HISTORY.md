@@ -124,13 +124,19 @@ Six independent specialist agents (architecture/HLD-LLD, scheduler/planner, tran
 
 ---
 
+## Phase 5 — Rust Network binding & safe bisection (commits `6b2e099`–`718e51e`)
+
+These two P0s from the specialist audit were fixed after the history file was first written:
+
+1. **Rust bulk socket binding**: interface names now flow from Kotlin `NetworkMonitor` through JNI into `BoundLinkState`; wreq bulk clients apply `.interface(name)` (SO_BINDTODEVICE) plus `local_address(ip)`. Network handle/interface changes invalidate cached clients; `bind_fd_to_network` uses `dlopen("libandroid_net.so")` with a diagnostic when unavailable. True netId binding for wreq 0.16 still requires a custom hyper connector, but device-level pinning is now active.
+2. **Rust bisection corruption**: `SplitState` tracks outstanding writers per fixed segment; Done is set only when all parts finish; any failure cancels siblings and rolls the segment back to Pending. Cuts are speed-weighted and 4096-aligned, with a real EWMA for laggard detection.
+
 ## Bugs found but NOT yet fixed (carried forward)
 
 These were documented by the specialist audits and remain on the roadmap:
 
-1. **Rust bulk socket `Network` binding (P0)**: wreq 0.16 exposes no pre-connect fd hook; a custom hyper connector using `android_setsocknetwork` or a JNI `Network.bindSocket` callback is required. Kotlin OkHttp already binds correctly.
-2. **Rust scheduler planner rewrite (P0)**: adopt MDM/aria2-next claim/commit planning with speed-weighted, 4096-aligned cuts, takeover/extend and endgame racing; current CAS bisection has orphaned-half failure and premature-Done bugs.
-3. **Bisection failure handling in Rust** (same family): restore full segment on failure; do not let one half mark the whole segment Done.
+1. **True netId socket binding for Rust**: wreq 0.16 has no pre-connect fd hook; full `android_setsocknetwork` binding requires a custom hyper connector (device-level SO_BINDTODEVICE pinning is now active as a stopgap).
+2. **Full MDM/aria2-next planner**: takeover/extend and endgame racing are not yet ported; the current CAS bisection now fails safely but lacks those advanced behaviours.
 4. **Telemetry page is global**: concurrent tasks overwrite each other's counters; seqlock in unused `_pad2` bytes proposed.
 5. **Non-atomic ledger rewrite** in Rust and Kotlin; temp-file + atomic rename proposed.
 6. **Feature flags with no payload effect**: H3 bulk, io_uring probe, aria2-RPC control, RLNC, Alt-Svc, HLS/DASH segment scheduling.

@@ -2,6 +2,13 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.5] - Rust Network Binding & Safe Bisection
+
+### Fixed
+- **P0 Rust bulk socket binding**: Android interface names (`wlan0`, `rmnet_dataX`, …) now flow from `NetworkMonitor` through JNI into `BoundLinkState`; bulk wreq clients use `.interface()` (SO_BINDTODEVICE) plus `local_address(ip)` so secondary Wi-Fi/5G bytes egress the selected device. Network-handle/interface rotation now invalidates cached clients and the cache key includes the interface.
+- **P0 bisection corruption**: bisected segments now track outstanding writers (`SplitState`); the segment is marked Done only when ALL sub-ranges finish, and any failure cancels sibling ranges and rolls the whole segment back to Pending. Added speed-weighted, 4096-aligned cuts and a real EWMA so laggards are detected.
+- `bind_fd_to_network` now `dlopen`s `libandroid_net.so` and records a diagnostic instead of silently returning success when `android_setsocknetwork` is unavailable.
+
 ## [9.2.4] - Rust Engine Correctness, Architecture & Onboarding
 
 ### Added
