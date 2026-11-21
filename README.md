@@ -13,6 +13,8 @@ AetherIO is a high-throughput, zero-merge Android download engine featuring **th
 - **Crash and packaging fixes**: removed the seccomp-killed `io_uring_setup` syscall, bundled `libc++_shared.so`, and made the Rust core build on stable Rust.
 - **Shizuku prompt** on the dashboard when the service is installed but permission has not been granted.
 
+**9.2.3** optimises the OkHttp hot path: per-slab byte coalescing, O(1) claim checks, a working 128-lane governor, no built-in OkHttp retries, client eviction on network rotation, and safe bisection failure recovery.
+
 **9.2.2** raises the ceiling to 128 connections with per-host learning (MDM), fixes the aria2 JSON-RPC GID bug, rejects Range-ignoring servers, prevents bisection corruption, adds wake locks and share-intent intake, and removes fabricated dashboard metrics.
 
 **9.2.1** removes the hidden 16-lane ceiling: thermal headroom is now a soft 24–48 lane governor, ranges are sized 256 KiB–4 MiB so 32–48 sockets all have work, the slab pool is 64 × 256 KiB, and both the Rust runtime and aria2-next daemon are warmed at startup. Geo lookup now fails over across three providers and shows the live host/CDN IP/city/ISP.

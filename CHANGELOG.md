@@ -2,6 +2,22 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.3] - OkHttp Engine Hot-Path Optimisation
+
+### Upgraded & Enhanced
+- OkHttp engine now accumulates per-chunk byte accounting into a single per-slab update (was 4-6 contended atomics per 8-64 KiB socket read).
+- Replaced the O(segments) pending scan under the global claim mutex with an O(1) atomic counter.
+- Telemetry connection upserts throttled from 150 ms to 450 ms; at 128 workers this removes ~640 `ActiveConnectionInfo` allocations/sec.
+- Worker pool now launches enough coroutines for the governor's full ramp range, so a target of 96-128 actually materializes instead of being a no-op.
+- OkHttp built-in retries disabled (we own backoff); timeouts raised to 30 s; `callTimeout=0`.
+- Stale per-network-handle OkHttp clients are evicted on rotation to prevent socket/thread/FD leaks.
+- Flush threshold aligned with the actual 256 KiB slab.
+
+### Fixed
+- Bisection failure now cancels sibling ranges, restores the full segment and resets to PENDING — no overlapping writes and no permanently un-COMMITTABLE segments.
+- `Retry-After` backoff no longer trips the stall watchdog and false-breaks a compliant server.
+- `LinkStallException` classified as a network flap so migration logic runs.
+
 ## [9.2.2] - 128 Lanes, Engine Correctness and Honest Telemetry
 
 ### Added
