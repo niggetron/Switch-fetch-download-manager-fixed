@@ -488,36 +488,35 @@ pub async fn resolve_with_race(
     let h_g = host.to_string();
     let h_cf = host.to_string();
 
-    let mut sys_fut = Box::pin(async move {
+    let sys_fut = Box::pin(async move {
         let mut addrs = tokio::net::lookup_host((h_sys.as_str(), port)).await?;
         addrs
             .next()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "System DNS empty"))
     });
-    let mut g_fut = Box::pin(udp_dns_a_query(
+    let g_fut = Box::pin(udp_dns_a_query(
         h_g,
         port,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53),
         net_handle,
     ));
-    let mut cf_fut = Box::pin(udp_dns_a_query(
+    let cf_fut = Box::pin(udp_dns_a_query(
         h_cf,
         port,
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53),
         net_handle,
     ));
 
-    tokio::select! {
-        res = &mut sys_fut, if true => {
-            if res.is_ok() { return res; }
-        }
-        res = &mut g_fut => {
-            if res.is_ok() { return res; }
-        }
-        res = &mut cf_fut => {
-            if res.is_ok() { return res; }
-        }
+    // Drive ALL racers until the first success. The old `tokio::select!` returned
+    // on first COMPLETION (even an Err), then abandoned the still-running resolvers
+    // and fell through to a fourth, unbound lookup_host - defeating the race.
+    // `select_ok` polls every future, ignores individual errors and returns the
+    // first success; only when ALL fail do we fall back below.
+    let attempts = [sys_fut, g_fut, cf_fut];
+    if let Ok((addr, _remaining)) = futures_util::future::select_ok(attempts).await {
+        return Ok(addr);
     }
+    // All bound resolvers failed; fall back to the default-network resolver.
     tokio::net::lookup_host((host, port))
         .await?
         .next()

@@ -12,7 +12,12 @@ use crate::storage_and_telemetry::{flush_fdatasync, pwrite_all};
 pub const LEDGER_MAGIC: &[u8; 8] = b"AETHLDG2";
 pub const LEDGER_VERSION: u32 = 2;
 pub const LEDGER_HEADER_LEN: usize = 72;
-pub const SLAB_DIGEST_BYTES: usize = 32; // BLAKE3 256-bit digest per 512 KiB slab
+pub const SLAB_DIGEST_BYTES: usize = 32; // BLAKE3 256-bit digest per 256 KiB I/O slab
+// Digest granularity must match the writer's SLAB_BYTES (256 KiB). Previously the
+// array was sized for 512 KiB while the writer indexed at 256 KiB, silently
+// dropping ~half the digests. Kotlin derives the count from the byte length so
+// this stays binary-compatible with AETHLDG2 v2.
+pub const SLAB_DIGEST_GRANULARITY: u64 = 256 * 1024;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +82,7 @@ impl AetherLedger {
         let slab_count = if total_len == 0 {
             0
         } else {
-            total_len.div_ceil(512 * 1024) as u32
+            total_len.div_ceil(SLAB_DIGEST_GRANULARITY) as u32
         };
         Self {
             total_len,

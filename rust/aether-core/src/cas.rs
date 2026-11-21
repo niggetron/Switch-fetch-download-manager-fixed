@@ -52,12 +52,29 @@ pub struct ContiguousSha256Verifier {
 
 impl ContiguousSha256Verifier {
     pub fn new(total_len: u64) -> Self {
+        Self::with_offset(total_len, 0)
+    }
+
+    /// Create a verifier whose contiguous frontier starts at `frontier`.
+    ///
+    /// On resume, already-written bytes live at the front of the file. The caller
+    /// must feed those bytes via [`Self::record_and_advance`] (or pre-hash them)
+    /// before hashing new ranges. Starting at 0 with a non-zero frontier produced
+    /// a hash of only the fresh bytes - the hash of an empty string for a fully
+    /// resumed file - while still reporting COMPLETED.
+    pub fn with_offset(total_len: u64, frontier: u64) -> Self {
         Self {
             hasher: Sha256::new(),
-            contiguous_offset: 0,
+            contiguous_offset: frontier,
             total_len,
             completed_ranges: BTreeSet::new(),
         }
+    }
+
+    /// Hash `prefix_bytes` from an already-complete prefix into the running digest.
+    /// Used once at resume time over `[0, frontier)`.
+    pub fn seed_prefix(&mut self, prefix_bytes: &[u8]) {
+        self.hasher.update(prefix_bytes);
     }
 
     pub fn contiguous_offset(&self) -> u64 {

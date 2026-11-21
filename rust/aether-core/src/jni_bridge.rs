@@ -42,8 +42,11 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
     }))
     .unwrap_or_else(|_| "libaether_core.so v9.1 (recovered panic)".to_string());
 
-    env.new_string(label)
-        .expect("Failed to allocate JNI version string")
+    // NEVER panic across an extern "system" boundary: Cargo sets panic=unwind,
+    // and a JNI allocation failure would abort the whole Android process.
+    env.new_string(label).unwrap_or_else(|_| unsafe {
+        JString::from_raw(std::ptr::null_mut())
+    })
 }
 
 /// Pre-build the Tokio runtime / TLS pools / slab arena so the first real
@@ -171,7 +174,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSetTherm
     let _ = catch_unwind(AssertUnwindSafe(|| {
         engine()
             .thermal_worker_cap
-            .store((max_workers as i64).clamp(1, 64), std::sync::atomic::Ordering::Release);
+            .store((max_workers as i64).clamp(1, 128), std::sync::atomic::Ordering::Release);
     }));
 }
 
@@ -230,7 +233,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeStartDow
             output_path: out_path,
             ledger_path: ldg_path,
             direct_fd: direct_fd as i32,
-            max_workers: (max_workers as usize).clamp(1, 64),
+            max_workers: (max_workers as usize).clamp(1, 128),
             max_cellular_bytes: cell_cap,
             browser_profile: profile,
             protocol_mode: proto,

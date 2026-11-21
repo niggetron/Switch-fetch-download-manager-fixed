@@ -579,7 +579,29 @@ impl NativeEngine {
             .store(ledger.contiguous_verified_offset, Ordering::Release);
 
         let data_file = Arc::new(data_file);
-        let verifier = Arc::new(Mutex::new(ContiguousSha256Verifier::new(total_bytes)));
+        // Seed the SHA-256 verifier for resumed transfers: bytes before the ledger's
+        // contiguous frontier are already on disk and must be part of the final digest.
+        let resume_frontier = ledger.contiguous_verified_offset.min(total_bytes);
+        let mut seeded_verifier = ContiguousSha256Verifier::with_offset(total_bytes, resume_frontier);
+        if resume_frontier > 0 {
+            #[cfg(unix)]
+            {
+                use std::os::fd::AsFd;
+                let mut prefix = vec![0u8; 256 * 1024];
+                let mut pos = 0u64;
+                while pos < resume_frontier {
+                    let n = (resume_frontier - pos).min(prefix.len() as u64) as usize;
+                    match rustix::io::pread(data_file.as_fd(), &mut prefix[..n], pos) {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => {
+                            seeded_verifier.seed_prefix(&prefix[..read]);
+                            pos += read as u64;
+                        }
+                    }
+                }
+            }
+        }
+        let verifier = Arc::new(Mutex::new(seeded_verifier));
         let written_total = Arc::new(AtomicU64::new(resumed_bytes));
         let wifi_bytes_total = Arc::new(AtomicU64::new(0));
         let wifi2_bytes_total = Arc::new(AtomicU64::new(0));
