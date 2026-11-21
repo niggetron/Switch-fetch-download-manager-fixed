@@ -2,6 +2,23 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.7] - 22-Agent Whole-System Audit (Android 16 speed + integrity)
+
+### Fixed
+- **Silent truncation**: a segment is now marked Done only after storing its full expected byte count; a short read fails and retries instead of reporting COMPLETED with a zero-filled file. The final COMPLETED gate also checks the on-disk file length against the declared total.
+- **False resume checksum**: SHA-256 finalization now re-hashes the entire file when the verifier frontier trails the Done set; a zero-byte `pread` while filling a verification gap is a hard error instead of an advanced frontier.
+- **Task-id reuse**: `start_task` cancels any superseded generation, and outcome/handle cleanup uses `Arc::ptr_eq` so a stale run cannot delete a newer run's handle.
+- **Byte accounting**: the throttled per-segment counter tail is flushed at range end (fixes under-reported progress and cellular-quota overshoot); misaligned BLAKE3 slab digests from bisected steals are skipped; the writer's local verifier frontier is used instead of a shared global telemetry slot.
+- **Storage durability**: `fdatasync` and ledger-persist failures now abort the writer and surface as FAILED instead of being discarded.
+- **HTTP**: a 206 response with an unknown total (`bytes x-y/*`) now uses stream-to-EOF instead of the partial `Content-Length`; `Retry-After` accepts HTTP-date as well as delta-seconds; DNS replies are validated (TXID / QR / rcode / source / question echo).
+- **JNI boundary**: all JNI allocations use non-panicking fallbacks; `nativeWarmup` has the correct `(JNIEnv*, JClass)` signature.
+- **CPU-headroom governor**: fixed the wrong reflection class (`android.os.health.CpuHeadroomParams` → `android.os.CpuHeadroomParams`), added a proactive 30 s thermal forecast with hysteresis and aligned the worker cap with the restored 128 ceiling.
+- **128-lane budget**: Kotlin no longer halves 65–128 worker settings at the JNI boundary; blocking range workers get a dedicated `Dispatchers.IO` view so high lane counts actually make progress without starving telemetry; the direct-slab pool no longer pins itself into permanent heap fallback.
+- **Telemetry integrity**: remote-ZIP cumulative progress is converted to deltas; interval/rate math uses a monotonic clock; the flight-sample gate is atomic across its two producers.
+
+### Added
+- DNS question-echo validation helper and a non-consuming verifier finalize path for shared verifiers.
+
 ## [9.2.6] - aria2-next Forensic Overhaul (12-agent audit)
 
 ### Added

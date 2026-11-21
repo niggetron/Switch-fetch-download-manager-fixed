@@ -131,6 +131,18 @@ These two P0s from the specialist audit were fixed after the history file was fi
 1. **Rust bulk socket binding**: interface names now flow from Kotlin `NetworkMonitor` through JNI into `BoundLinkState`; wreq bulk clients apply `.interface(name)` (SO_BINDTODEVICE) plus `local_address(ip)`. Network handle/interface changes invalidate cached clients; `bind_fd_to_network` uses `dlopen("libandroid_net.so")` with a diagnostic when unavailable. True netId binding for wreq 0.16 still requires a custom hyper connector, but device-level pinning is now active.
 2. **Rust bisection corruption**: `SplitState` tracks outstanding writers per fixed segment; Done is set only when all parts finish; any failure cancels siblings and rolls the segment back to Pending. Cuts are speed-weighted and 4096-aligned, with a real EWMA for laggard detection.
 
+## 22-agent coordinated whole-system audit (Android 16, stable average speed)
+
+Twelve code-audit agents (C1–C12) with disjoint file scopes and ten web-research agents (W1–W10) were dispatched in waves of 3–4. Every agent was told to re-read the *current* code, avoid re-reporting already-fixed items, and note cross-agent dependencies for consolidation. Research covered Android networking/ADPF APIs, transport protocols, scheduling algorithms, storage I/O, connection setup, competitor planners, HyperOS behaviour and trustworthy measurement methodology.
+
+Shipped from this wave (all pushed and built on GitHub Actions):
+- Rust integrity: short-read detection before marking a segment Done, full-file SHA-256 finalize on resume-gap, hard error on verification-gap EOF, completion gate on real file length.
+- Rust lifecycle: idempotent `start_task`, `Arc::ptr_eq` outcome/handle guard, cancelled sibling writers, fdatasync/ledger errors propagated, 206 unknown-length fix.
+- Rust accounting/validation: final `pending_bytes` flush, local verifier frontier, aligned slab digests, DNS TXID/QR/rcode/source/question validation.
+- Kotlin: 128-worker clamp restored, dedicated `Dispatchers.IO` view for blocking workers, slab pool accounting fix, `pendingSegments` drift guard, shared-dispatcher shutdown removed, Retry-After HTTP-date, CPU-headroom reflection fix + thermal forecast, JNI allocation panic safety, telemetry monotonic clocks and ZIP delta accounting.
+
+Still on the roadmap from this wave (documented, not yet implemented): true per-link `android_setsocknetwork` binding for Rust bulk sockets, UIDT jobs as the primary API-34+ transfer mechanism, `SO_MAX_PACING_RATE` pacing, ConnectivityDiagnosticsManager stall signals, Ghost-style acceleration stability gate, offset-sorted writer coalescing, and a trustworthy paired A/B benchmark harness.
+
 ## Bugs found but NOT yet fixed (carried forward)
 
 These were documented by the specialist audits and remain on the roadmap:
