@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# AetherIO v8.0 — Reproducible Device Benchmark & Thermal/Memory Audit Harness
+# AetherIO — Reproducible Device Benchmark & Thermal/Memory Audit Harness
 # Usage: ./scripts/bench_device.sh [IPERF3_SERVER_HOST] [TEST_DOWNLOAD_URL]
+# CI builds a UNIQUE package name per run (com.aistudio.aetherio.b<run>), so
+# auto-detect it instead of pinning a stale one (C12/W7).
 set -euo pipefail
 
-PKG="com.aistudio.aetherio.xkqmzp"
+PKG="${PKG:-$(adb shell pm list packages | grep -oE 'com\.aistudio\.aetherio[^ ]*' | head -n1)}"
+PKG="${PKG#package:}"
+if [ -z "$PKG" ]; then echo "No AetherIO package found on device" >&2; exit 1; fi
+echo "Detected package: $PKG"
 IPERF_HOST="${1:-iperf.he.net}"
 TEST_URL="${2:-https://speed.cloudflare.com/__down?bytes=524288000}"
 OUT_DIR="bench_results_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUT_DIR"
 
-echo "=== AetherIO v8.0 Hardware Benchmark Harness ==="
+echo "=== AetherIO Hardware Benchmark Harness ==="
 echo "Device: $(adb shell getprop ro.product.model) (Android $(adb shell getprop ro.build.version.release), SDK $(adb shell getprop ro.build.version.sdk))"
 echo "Output: $OUT_DIR"
 
@@ -19,7 +24,8 @@ adb shell dumpsys meminfo "$PKG" > "$OUT_DIR/meminfo_before.txt" || true
 
 echo "[2/5] Running iperf3 single-stream vs multi-stream baseline (if installed on device)..."
 if adb shell "command -v iperf3 >/dev/null 2>&1"; then
-  adb shell "iperf3 -c $IPERF_HOST -P 4 -t 10 -J" > "$OUT_DIR/iperf3_baseline.json" || true
+  # W7: omit 5 s of TCP slow start and sample a longer steady-state window.
+  adb shell "iperf3 -c $IPERF_HOST -P 4 -t 35 -O 5 -J" > "$OUT_DIR/iperf3_baseline.json" || true
 else
   echo "iperf3 not present on device; skipping baseline." > "$OUT_DIR/iperf3_baseline.txt"
 fi
