@@ -163,11 +163,13 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val storageStats: StateFlow<StorageStats> = repository.completedDownloads
-        .map { completed -> repository.queryStorageStats(completed) }
+        // M1: queryStorageStats does StatFs/mkdirs (blocking FUSE I/O) — stateIn
+        // collects on Main, so force the work onto IO.
+        .map { completed -> kotlinx.coroutines.withContext(Dispatchers.IO) { repository.queryStorageStats(completed) } }
         .stateIn(
             viewModelScope,
             SharingStarted.WhileSubscribed(5000),
-            repository.queryStorageStats(emptyList()),
+            StorageStats(0L, 0L, 0, 0L),
         )
 
     val settings: StateFlow<EngineSettings> = settingsRepo.settingsFlow
@@ -195,6 +197,17 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     fun setUiForeground(active: Boolean) {
         if (active) {
             if (telemetryPollJob?.isActive == true) return
+            // M1: refresh the cached aria2 status off Main so composition never
+            // re-enters the engine's synchronized monitor (which can hold a 5s RPC).
+            refreshAria2Status()
+            // Re-arm the Sim Lab jobs that ON_STOP cancelled, so backgrounding
+            // does not desync the simulation pill / auto-cycle state on return.
+            if (_simulationState.value.isRunning && simulationJob?.isActive != true) {
+                startSpeedSimulation(_simulationState.value.preset)
+            }
+            if (_simulationState.value.autoCycleSpeedometerLayouts && autoCycleLayoutsJob?.isActive != true) {
+                setAutoCycleSpeedometerLayouts(true)
+            }
             telemetryPollJob = viewModelScope.launch(Dispatchers.Default) {
                 var ticks = 0
                 while (isActive) {
@@ -217,8 +230,14 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } else {
-            telemetryPollJob?.cancel()
-            telemetryPollJob = null
+            // M3: only telemetryPollJob was cancelled. simulationJob (10 Hz),
+            // autoCycleLayoutsJob (DataStore write + binder + JNI on Main) and
+            // burstClearJob kept running while backgrounded, adding to the IO
+            // pressure and starving Main when the user returned and tapped.
+            telemetryPollJob?.cancel(); telemetryPollJob = null
+            simulationJob?.cancel(); simulationJob = null
+            autoCycleLayoutsJob?.cancel(); autoCycleLayoutsJob = null
+            burstClearJob?.cancel(); burstClearJob = null
         }
     }
 
@@ -637,17 +656,23 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     // ──────────────────────────────────────────────────────────────────────────
 
     fun copyDiagnosticsToClipboard() {
-        val report = DiagnosticsCenter.exportReport(
-            context = app,
-            backendLabel = AetherNativeBridge.engineBackendLabel,
-            telemetry = _realTelemetry.value,
-            networkState = networkMonitor.state.value,
-            shizukuState = dualWifiConnector.shizukuHelper.state.value,
-        )
-        _diagnosticsPreview.value = report
-        val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("AetherIO Diagnostics", report))
-        _snackbarEvents.tryEmit("Redacted diagnostics report copied to clipboard")
+        // M1: exportReport does asset reads + a full native log dump (JNI) — a
+        // Main click handler blocked here for seconds. Build on IO, post to Main.
+        viewModelScope.launch(Dispatchers.IO) {
+            val report = DiagnosticsCenter.exportReport(
+                context = app,
+                backendLabel = AetherNativeBridge.engineBackendLabel,
+                telemetry = _realTelemetry.value,
+                networkState = networkMonitor.state.value,
+                shizukuState = dualWifiConnector.shizukuHelper.state.value,
+            )
+            _diagnosticsPreview.value = report
+            withContext(Dispatchers.Main) {
+                val cm = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("AetherIO Diagnostics", report))
+                _snackbarEvents.tryEmit("Redacted diagnostics report copied to clipboard")
+            }
+        }
     }
 
     fun saveDiagnosticsTxtToUri(uri: Uri) {
@@ -747,7 +772,7 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
             _snackbarEvents.tryEmit("Enter a valid http:// or https:// URL")
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             if (!request.safUriString.isNullOrBlank()) {
                 runCatching {
                     val uri = Uri.parse(request.safUriString)
@@ -767,7 +792,9 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resumeDownload(id: String) {
-        engine.launchDownload(id)
+        // M1: launchDownload does native JNI + FGS binder + aria2 resume — all
+        // blocking. Running it on Main caused a 5 s input-dispatch ANR on tap.
+        viewModelScope.launch(Dispatchers.IO) { engine.launchDownload(id) }
     }
 
     fun switchTaskToKotlinAndResume(id: String) {
@@ -973,14 +1000,30 @@ class AetherViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateSettings(transform: (EngineSettings) -> EngineSettings) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             settingsRepo.update(transform)
             val updated = settingsRepo.current()
+            // M1: binder (requestNetwork), native JNI flags and aria2 RPC process
+            // start are all blocking — never on Main.
             networkMonitor.applyPolicy(updated)
             app.syncAria2RpcState(updated.enableAria2Rpc)
             _aria2Secret.value = app.aria2RpcSecret
+            refreshAria2Status()
         }
     }
 
-    fun aria2Status(): Pair<Boolean, String> = engine.aria2Status()
+    // M2: aria2Status() was called TWICE per composition from SpeedDashboardScreen,
+    // and engine.aria2Status() -> isAvailable() -> binaryFile() could block Main
+    // behind Aria2NextEngine's synchronized monitor (which holds a 5s-timeout RPC).
+    // Cache the result and refresh it only on IO.
+    @Volatile
+    private var cachedAria2Status: Pair<Boolean, String> = false to ""
+
+    fun refreshAria2Status() {
+        viewModelScope.launch(Dispatchers.IO) {
+            cachedAria2Status = engine.aria2Status()
+        }
+    }
+
+    fun aria2Status(): Pair<Boolean, String> = cachedAria2Status
 }

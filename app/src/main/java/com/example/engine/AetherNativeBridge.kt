@@ -28,24 +28,44 @@ object AetherNativeBridge {
     var loadError: String? = null
         private set
 
-    val isNativeLoaded: Boolean by lazy {
-        try {
-            System.loadLibrary("aether_core")
-            loadError = null
-            true
-        } catch (t: Throwable) {
-            loadError = t.message ?: t.javaClass.simpleName
-            false
+    // M1/M2: `by lazy` uses SYNCHRONIZED — if the background warmup coroutine is
+    // inside System.loadLibrary holding that lock, ANY main-thread read (e.g. a
+    // tap that calls enqueue()) blocks until it finishes -> 5s input ANR.
+    // Use a volatile flag loaded once at app startup; reads never take a lock.
+    @Volatile
+    var isNativeLoaded: Boolean = false
+        private set
+
+    @Volatile
+    private var loadAttempted = false
+
+    fun ensureLoaded() {
+        if (loadAttempted) return
+        synchronized(this) {
+            if (loadAttempted) return
+            loadAttempted = true
+            try {
+                System.loadLibrary("aether_core")
+                loadError = null
+                isNativeLoaded = true
+            } catch (t: Throwable) {
+                loadError = t.message ?: t.javaClass.simpleName
+                isNativeLoaded = false
+            }
         }
     }
 
-    val engineBackendLabel: String
-        get() = if (isNativeLoaded) {
+    // Memoize the JNI version string — UI reads this on Main during composition.
+    private val cachedBackendLabel: String by lazy {
+        if (isNativeLoaded) {
             runCatching { nativeEngineVersion() }
                 .getOrDefault("libaether_core.so v9.0 (Rust JNI Active)")
         } else {
             "Kotlin OkHttp Turbo Engine (Install GitHub Releases arm64 APK for bundled Rust libaether_core.so)"
         }
+        }
+
+    val engineBackendLabel: String get() = cachedBackendLabel
 
     fun updateLinkHandleSafe(
         linkKey: String,

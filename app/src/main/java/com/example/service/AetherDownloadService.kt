@@ -34,7 +34,11 @@ import kotlinx.coroutines.launch
 
 class AetherDownloadService : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // M2: this scope runs the 1 Hz monitor loop which calls sampleSnapshot()
+    // (JNI slabStats/connectionsList under sampleLock), Room .first() and
+    // notification updates. On Main.immediate that contended with input
+    // dispatch and contributed to the 5 s ANR. Notification APIs are thread-safe.
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var monitorJob: Job? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null

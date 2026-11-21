@@ -180,8 +180,13 @@ class Aria2NextEngine(
     /** Starts the daemon quickly, then waits for RPC readiness OUTSIDE the lock. */
     private fun ensureDaemon(): Boolean {
         val log = daemonLog
+        // M1: the reachability RPC has a 5 s read timeout. Calling it while
+        // holding the instance monitor let a Main-thread tap block on this lock
+        // for exactly the ANR's 5 s. Do it before the lock; inside the lock only
+        // a cheap volatile liveness check guards against double-spawn.
+        if (isProcessAlive() && rpcObject("aria2.getVersion", emptyList()) != null) return true
         val spawned = synchronized(this) {
-            if (isProcessAlive() && rpcObject("aria2.getVersion", emptyList()) != null) return true
+            if (isProcessAlive()) return@synchronized true
             val binary = binaryFile() ?: return false
             secret = UUID.randomUUID().toString().replace("-", "")
             val downloadDir = File(context.filesDir, "aria2-downloads").apply { mkdirs() }

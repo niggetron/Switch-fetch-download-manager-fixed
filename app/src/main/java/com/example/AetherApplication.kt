@@ -65,6 +65,12 @@ class AetherApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // M1/M2: load the .so ONCE here, before any UI can touch `isNativeLoaded`.
+        // This is a plain System.loadLibrary (a few ms), NOT the heavyweight
+        // NativeEngine construction (16 MiB slabs + TLS), which stays deferred in
+        // warmup() below. Doing it here removes the synchronized-lazy ANR where a
+        // main-thread tap blocked behind the background warmup thread's lock.
+        AetherNativeBridge.ensureLoaded()
         telemetryLedger.startCpuHeadroomMonitor(appScope)
         appScope.launch {
             // Keep every native entry point off the main startup path. If the .so
