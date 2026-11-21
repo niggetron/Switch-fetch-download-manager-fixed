@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Buf;
+use futures_util::StreamExt;
 use http::{HeaderMap, HeaderValue, Request, StatusCode};
 use rustls::ClientConfig;
 use rustls::client::Resumption;
