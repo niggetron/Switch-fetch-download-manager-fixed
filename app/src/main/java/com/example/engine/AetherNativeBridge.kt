@@ -86,7 +86,10 @@ object AetherNativeBridge {
 
     fun setThermalWorkerCapSafe(maxWorkers: Int) {
         if (!isNativeLoaded) return
-        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, 64)) }
+        // C10 audit: the public cap is 128 (DownloadModels.MAX_CONCURRENT_WORKERS_CAP)
+        // and Rust accepts 128. The old 64 clamp silently halved every 65-128 stream
+        // setting at the JNI boundary, capping the anti-dip/128-lane design.
+        runCatching { nativeSetThermalWorkerCap(maxWorkers.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP)) }
     }
 
     fun startDownloadSafe(
@@ -108,7 +111,7 @@ object AetherNativeBridge {
                 outputPath = outputPath,
                 ledgerPath = ledgerPath,
                 directFd = directFd,
-                maxWorkers = maxWorkers.coerceIn(1, 64),
+                maxWorkers = maxWorkers.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
                 maxCellularBytes = maxCellularBytes,
                 browserProfile = browserProfile,
                 protocolMode = protocolMode,

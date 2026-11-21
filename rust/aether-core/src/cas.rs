@@ -195,6 +195,19 @@ impl ContiguousSha256Verifier {
         Ok(self.finalize_hex())
     }
 
+    /// Finalize a digest through a shared reference by cloning the hasher state.
+    /// Used as a fallback when `Arc::try_unwrap` fails and the verifier is still
+    /// shared, where the consuming [`Self::finalize_hex`] cannot be called through
+    /// a `MutexGuard`.
+    pub fn finalize_hex_ref(&self) -> String {
+        self.hasher
+            .clone()
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
+    }
+
     pub fn finalize_hex(self) -> String {
         self.hasher
             .finalize()

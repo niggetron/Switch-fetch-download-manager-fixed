@@ -38,8 +38,17 @@ class SlabBufferPool(
     fun release(buffer: ByteBuffer) {
         activeInUseSlabs.updateAndGet { (it - 1).coerceAtLeast(0) }
         buffer.clear()
-        if (buffer.isDirect && freeList.size < maxSlabs) {
-            freeList.offer(buffer)
+        if (buffer.isDirect) {
+            if (freeList.size < maxSlabs) {
+                freeList.offer(buffer)
+            } else {
+                // C10 audit: a direct slab dropped because the free list is full must
+                // give its slot back to the accounting. Otherwise totalAllocatedSlabs
+                // stays pinned at maxSlabs and every later acquire() skips direct
+                // allocation and falls back to heap ByteBuffers forever, adding GC
+                // churn that depresses the stable average speed.
+                totalAllocatedSlabs.updateAndGet { (it - 1).coerceAtLeast(0) }
+            }
         }
     }
 

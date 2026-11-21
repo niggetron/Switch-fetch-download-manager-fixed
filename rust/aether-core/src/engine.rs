@@ -1564,7 +1564,7 @@ impl NativeEngine {
             Err(v) => Ok(v
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .finalize_hex()),
+                .finalize_hex_ref()),
         };
         let final_sha = match finalize_res {
             Ok(h) => h,
