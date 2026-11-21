@@ -209,8 +209,8 @@ mod tests {
         assert_eq!(lease.pinned_link, "wifi2:wlan1");
 
         let ctx = TransportContext::new();
-        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134", 0).is_ok());
-        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, "chrome134", 3).is_ok());
+        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, None, "chrome134", 0).is_ok());
+        assert!(ctx.get_or_build_wreq_client("wifi:wlan0", None, None, None, "chrome134", 3).is_ok());
     }
 
     #[test]

@@ -267,6 +267,7 @@ class NetworkMonitor(context: Context) {
             rttMs = 16L,
             isCellular = false,
             localIp = ip,
+            interfaceName = iface,
             proxyHost = "",
             proxyPort = 0,
         )
@@ -320,6 +321,7 @@ class NetworkMonitor(context: Context) {
             rttMs = 18L,
             isCellular = false,
             localIp = "",
+            interfaceName = "relay0",
             proxyHost = nativeProxyHost,
             proxyPort = port,
         )
@@ -415,6 +417,7 @@ class NetworkMonitor(context: Context) {
                 },
                 isCellular = isCell,
                 localIp = link.localIp,
+                interfaceName = link.interfaceName,
                 proxyHost = relayHost.ifBlank {
                     if (isCell) latestSettings.cellularProxyHost else latestSettings.proxyHost
                 },
@@ -578,6 +581,7 @@ class NetworkMonitor(context: Context) {
             },
             isCellular = isCell,
             localIp = localIp,
+            interfaceName = iface ?: "wlan0",
             proxyHost = pxHost,
             proxyPort = pxPort,
         )

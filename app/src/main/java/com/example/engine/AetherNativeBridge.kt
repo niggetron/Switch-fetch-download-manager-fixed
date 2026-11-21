@@ -54,6 +54,7 @@ object AetherNativeBridge {
         rttMs: Long,
         isCellular: Boolean,
         localIp: String,
+        interfaceName: String,
         proxyHost: String,
         proxyPort: Int,
     ) {
@@ -66,6 +67,7 @@ object AetherNativeBridge {
                 rttMs = rttMs,
                 isCellular = isCellular,
                 localIp = localIp,
+                interfaceName = interfaceName,
                 proxyHost = proxyHost,
                 proxyPort = proxyPort,
             )
@@ -238,6 +240,7 @@ object AetherNativeBridge {
         rttMs: Long,
         isCellular: Boolean,
         localIp: String,
+        interfaceName: String,
         proxyHost: String,
         proxyPort: Int,
     )

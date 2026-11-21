@@ -107,6 +107,16 @@ struct ActiveRangeState {
     last_progress_ms: AtomicU64,
 }
 
+/// Tracks the parallel writers of a single fixed ledger segment after anti-dip
+/// bisection. A segment can only be marked `Done` when ALL of its sub-ranges
+/// finish; if any one fails, the whole segment is rolled back to `Pending` and
+/// re-downloaded from scratch (no orphaned halves, no overlapping writes).
+#[derive(Debug, Clone, Copy)]
+struct SplitState {
+    parts: usize,
+    full_end: u64,
+}
+
 /// Work unit claimed either from the ledger or stolen via live range bisection.
 #[derive(Debug, Clone, Copy)]
 struct WorkUnit {
@@ -635,6 +645,7 @@ impl NativeEngine {
         let ledger_arc = Arc::new(Mutex::new(ledger));
         let breakers_arc = Arc::new(Mutex::new(HashMap::<String, LinkCircuitBreaker>::new()));
         let active_ranges = Arc::new(Mutex::new(HashMap::<String, Arc<ActiveRangeState>>::new()));
+        let splits = Arc::new(Mutex::new(HashMap::<usize, SplitState>::new()));
 
         // Spawn Decoupled Async Disk-Writer Task (batched fdatasync every 16 MiB or 2s!)
         let (disk_tx, mut disk_rx) = mpsc::channel::<DiskWriteJob>(16);
@@ -797,6 +808,7 @@ impl NativeEngine {
             let ledger_ref = ledger_arc.clone();
             let brk_ref = breakers_arc.clone();
             let rng_ref = active_ranges.clone();
+            let splits_ref = splits.clone();
             let tw_ref = target_workers.clone();
             let w_tot = written_total.clone();
             let wifi_tot = wifi_bytes_total.clone();
@@ -886,7 +898,7 @@ impl NativeEngine {
                             && (is_flag_enabled(FLAG_TAIL_HEDGE)
                                 || is_flag_enabled(FLAG_ANTI_DIP_WATCHDOG))
                         {
-                            try_steal_bisected_range(&rng_ref, task_epoch)
+                            try_steal_bisected_range(&rng_ref, &splits_ref, task_epoch)
                         } else {
                             None
                         }
@@ -1034,11 +1046,18 @@ impl NativeEngine {
                         .as_ref()
                         .map(|l| l.net_handle.load(Ordering::Relaxed))
                         .unwrap_or(0);
+                    let picked_iface = picked_link.as_ref().and_then(|l| {
+                        l.interface_name
+                            .read()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .clone()
+                    });
 
                     // 3. Use sharded persistent warm wreq::Client (independent TCP sockets!)
                     let res = match eng.transport.get_or_build_wreq_client(
                         &picked_key,
                         local_ip,
+                        picked_iface.as_deref(),
                         proxy_ov.as_ref(),
                         &profile,
                         worker_idx,
@@ -1197,13 +1216,23 @@ impl NativeEngine {
                                                     pending_bytes = 0;
                                                 }
                                                 let secs = seg_t0.elapsed().as_secs_f64().max(0.05);
-                                                let speed_bps =
+                                                let sample_bps =
                                                     (seg_bytes_written as f64 / secs) as u64;
-                                                active_state
+                                                // True EWMA (0.7 old / 0.3 new) so a speed
+                                                // collapse is visible to bisection within a
+                                                // few ticks. A lifetime average hid laggards.
+                                                let prev_bps = active_state
                                                     .ewma_bps
-                                                    .store(speed_bps, Ordering::Relaxed);
+                                                    .load(Ordering::Relaxed);
+                                                let ewma = if prev_bps == 0 {
+                                                    sample_bps
+                                                } else {
+                                                    ((prev_bps as f64 * 0.7)
+                                                        + (sample_bps as f64 * 0.3)) as u64
+                                                };
+                                                active_state.ewma_bps.store(ewma, Ordering::Relaxed);
                                                 if let Some(ref l) = picked_link {
-                                                    l.record_measured_bytes_per_sec(speed_bps);
+                                                    l.record_measured_bytes_per_sec(sample_bps);
                                                 }
                                                 eng.upsert_conn(ActiveConnectionSnapshot {
                                                     conn_id: conn_id.clone(),
@@ -1225,7 +1254,7 @@ impl NativeEngine {
                                                         .end_offset
                                                         .load(Ordering::Relaxed),
                                                     bytes_pulled: seg_bytes_written,
-                                                    speed_bps,
+                                                    speed_bps: ewma,
                                                     ttfb_ms,
                                                     blocked_reason: "NONE".into(),
                                                 });
@@ -1258,10 +1287,30 @@ impl NativeEngine {
                                             }
                                         }
 
-                                        // Send final partial slab for this range
-                                        let mark_done = io_err.is_none()
+                                        // A bisected segment has multiple writers. Only the
+                                        // LAST one to finish may mark the fixed ledger segment
+                                        // Done; otherwise a crash/resume would skip the other
+                                        // half's unwritten bytes.
+                                        let ok = io_err.is_none()
                                             && !h.cancelled.load(Ordering::Acquire)
                                             && !h.paused.load(Ordering::Acquire);
+                                        let last_part = if ok {
+                                            let mut sg =
+                                                splits_ref.lock().unwrap_or_else(|p| p.into_inner());
+                                            if let Some(state) = sg.get_mut(&unit.seg_idx) {
+                                                state.parts -= 1;
+                                                if state.parts == 0 {
+                                                    sg.remove(&unit.seg_idx);
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                !unit.is_bisected_steal
+                                            }
+                                        } else {
+                                            false
+                                        };
                                         if let Some(rem_slab) = current_slab.take() {
                                             if tx
                                                 .send(DiskWriteJob {
@@ -1269,15 +1318,14 @@ impl NativeEngine {
                                                     offset: slab_start_offset,
                                                     len: slab_fill,
                                                     seg_idx: unit.seg_idx,
-                                                    mark_seg_done: mark_done
-                                                        && !unit.is_bisected_steal,
+                                                    mark_seg_done: last_part,
                                                 })
                                                 .await
                                                 .is_err()
                                             {
                                                 io_err = Some("Disk writer closed".into());
                                             }
-                                        } else if mark_done && !unit.is_bisected_steal {
+                                        } else if last_part {
                                             let mut lg = ledger_ref
                                                 .lock()
                                                 .unwrap_or_else(|p| p.into_inner());
@@ -1316,13 +1364,12 @@ impl NativeEngine {
                             if h.cancelled.load(Ordering::Acquire)
                                 || h.paused.load(Ordering::Acquire)
                             {
-                                if !unit.is_bisected_steal {
-                                    let mut lg =
-                                        ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
-                                    if unit.seg_idx < lg.states.len() {
-                                        lg.states[unit.seg_idx] = SegmentStatus::Pending as u8;
-                                    }
-                                }
+                                unwind_failed_segment(
+                                    unit.seg_idx,
+                                    &splits_ref,
+                                    &rng_ref,
+                                    &ledger_ref,
+                                );
                                 break;
                             }
                             brk_ref
@@ -1345,12 +1392,12 @@ impl NativeEngine {
                                 "SEG_ERR",
                                 &format!("Segment {} on {picked_key}: {err}", unit.seg_idx),
                             );
-                            if !unit.is_bisected_steal {
-                                let mut lg = ledger_ref.lock().unwrap_or_else(|p| p.into_inner());
-                                if unit.seg_idx < lg.states.len() {
-                                    lg.states[unit.seg_idx] = SegmentStatus::Pending as u8;
-                                }
-                            }
+                            unwind_failed_segment(
+                                unit.seg_idx,
+                                &splits_ref,
+                                &rng_ref,
+                                &ledger_ref,
+                            );
                             brk_ref
                                 .lock()
                                 .unwrap_or_else(|p| p.into_inner())
@@ -1510,9 +1557,15 @@ impl NativeEngine {
                 .clone()
         });
         let local_ip = link.and_then(|l| *l.local_ip.read().unwrap_or_else(|p| p.into_inner()));
+        let iface = link.and_then(|l| {
+            l.interface_name
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        });
         let client = self
             .transport
-            .get_or_build_wreq_client(lkey, local_ip, proxy_ov.as_ref(), profile, 0)
+            .get_or_build_wreq_client(lkey, local_ip, iface.as_deref(), proxy_ov.as_ref(), profile, 0)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         let resp = send_wreq_range_request(&client, url, Some("bytes=0-16383"))
@@ -1539,10 +1592,35 @@ impl NativeEngine {
     }
 }
 
+/// Roll back a bisected segment after any part fails or is cancelled:
+/// cancel every sibling range, restore the ledger state to Pending so the
+/// whole fixed segment is re-downloaded from scratch. This is the key safety
+/// net that prevents orphaned unwritten halves and overlapping pwrites.
+fn unwind_failed_segment(
+    seg_idx: usize,
+    splits: &Mutex<HashMap<usize, SplitState>>,
+    active_ranges: &Mutex<HashMap<String, Arc<ActiveRangeState>>>,
+    ledger: &Mutex<AetherLedger>,
+) {
+    splits
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(&seg_idx);
+    active_ranges
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|_, st| st.seg_idx != seg_idx);
+    let mut lg = ledger.lock().unwrap_or_else(|p| p.into_inner());
+    if seg_idx < lg.states.len() {
+        lg.states[seg_idx] = SegmentStatus::Pending as u8;
+    }
+}
+
 /// Atomically bisects the slowest or largest remaining active worker range so idle workers
 /// immediately steal its trailing half instead of letting throughput dip from 400 Mbps to 3 Mbps!
 fn try_steal_bisected_range(
     rng_ref: &Arc<Mutex<HashMap<String, Arc<ActiveRangeState>>>>,
+    splits: &Arc<Mutex<HashMap<usize, SplitState>>>,
     task_epoch: Instant,
 ) -> Option<WorkUnit> {
     let now_ms = task_epoch.elapsed().as_millis() as u64;
@@ -1583,6 +1661,29 @@ fn try_steal_bisected_range(
     }
 
     let (_, victim) = best?;
+    // Speed-weighted cut (aria2-next style): give the faster link more bytes.
+    // `typical` is the median measured speed of the healthy active ranges, so
+    // the victim keeps `share = own / (own + typical)` of the remainder. Both
+    // halves are clamped to at least MIN_BISECT_REMAINING_BYTES and the split
+    // point is rounded down to 4096 to keep slab/digest boundaries aligned.
+    let measured: Vec<f64> = candidates
+        .iter()
+        .map(|s| s.ewma_bps.load(Ordering::Relaxed) as f64)
+        .filter(|&v| v > 65_536.0)
+        .collect();
+    let typical = if measured.is_empty() {
+        1_000_000.0
+    } else {
+        let mut m = measured.clone();
+        m.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        m[m.len() / 2]
+    };
+    let own = victim.ewma_bps.load(Ordering::Relaxed) as f64;
+    let share = if own > 65_536.0 {
+        (own / (own + typical)).clamp(0.25, 0.75)
+    } else {
+        0.5 // no measurement yet - split evenly
+    };
     loop {
         let cur = victim.current_offset.load(Ordering::Acquire);
         let old_end = victim.end_offset.load(Ordering::Acquire);
@@ -1593,7 +1694,14 @@ fn try_steal_bisected_range(
         if rem < STALL_BISECT_REMAINING_BYTES {
             return None;
         }
-        let mid = cur + (rem / 2);
+        let min_half = MIN_BISECT_REMAINING_BYTES.min(rem / 2);
+        let mut mid = cur + (rem as f64 * share) as u64;
+        mid = mid.clamp(cur + min_half, old_end - min_half + 1);
+        mid -= mid % 4096; // 4 KiB alignment keeps slabs and digests aligned
+        if mid <= cur || mid > old_end {
+            mid = cur + rem / 2;
+            mid -= mid % 4096;
+        }
         let new_victim_end = mid.saturating_sub(1);
         if new_victim_end <= cur || mid > old_end {
             return None;
@@ -1603,6 +1711,16 @@ fn try_steal_bisected_range(
             .compare_exchange(old_end, new_victim_end, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
         {
+            // Register the second writer so Done is gated on BOTH halves.
+            {
+                let mut sg = splits.lock().unwrap_or_else(|p| p.into_inner());
+                let entry = sg.entry(victim.seg_idx).or_insert(SplitState {
+                    parts: 1,
+                    full_end: old_end,
+                });
+                entry.parts += 1;
+                entry.full_end = entry.full_end.max(old_end);
+            }
             live_telemetry_page()
                 .anti_dip_rescues
                 .fetch_add(1, Ordering::Relaxed);

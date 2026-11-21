@@ -78,6 +78,11 @@ pub struct BoundLinkState {
     pub rtt_ms: AtomicU64,
     pub is_cellular: bool,
     pub local_ip: RwLock<Option<IpAddr>>,
+    /// Linux/Android interface name (e.g. `wlan0`, `rmnet_data3`). wreq's
+    /// `.interface()` uses SO_BINDTODEVICE so bulk sockets egress this device
+    /// rather than the default network. Combined with `local_ip`, this gives
+    /// device-level pinning for secondary Wi-Fi / cellular links.
+    pub interface_name: RwLock<Option<String>>,
     pub proxy_override: RwLock<Option<ProxyOverride>>,
     pub failure_streak: AtomicI32,
     pub circuit_open_until_ms: AtomicU64,
@@ -92,6 +97,7 @@ impl BoundLinkState {
         rtt_ms: u64,
         is_cellular: bool,
         local_ip: Option<IpAddr>,
+        interface_name: Option<String>,
         proxy_override: Option<ProxyOverride>,
     ) -> Self {
         // Cap initial unmeasured bootstrap EWMA at 10 MB/s (80 Mbps) so Android's fake 866 Mbps
@@ -107,6 +113,7 @@ impl BoundLinkState {
             rtt_ms: AtomicU64::new(rtt_ms.max(8)),
             is_cellular,
             local_ip: RwLock::new(local_ip),
+            interface_name: RwLock::new(interface_name),
             proxy_override: RwLock::new(proxy_override),
             failure_streak: AtomicI32::new(0),
             circuit_open_until_ms: AtomicU64::new(0),
@@ -120,6 +127,7 @@ impl BoundLinkState {
         downstream_kbps: u64,
         rtt_ms: u64,
         local_ip: Option<IpAddr>,
+        interface_name: Option<String>,
     ) {
         self.net_handle.store(new_handle, Ordering::Release);
         self.downstream_kbps
@@ -127,6 +135,12 @@ impl BoundLinkState {
         self.rtt_ms.store(rtt_ms.max(8), Ordering::Relaxed);
         if let Some(ip) = local_ip {
             *self.local_ip.write().unwrap_or_else(|p| p.into_inner()) = Some(ip);
+        }
+        if let Some(name) = interface_name {
+            *self
+                .interface_name
+                .write()
+                .unwrap_or_else(|p| p.into_inner()) = Some(name);
         }
         self.failure_streak.store(0, Ordering::Relaxed);
         self.circuit_open_until_ms.store(0, Ordering::Release);
@@ -281,18 +295,22 @@ impl TransportContext {
         rtt_ms: u64,
         is_cellular: bool,
         local_ip: Option<IpAddr>,
+        interface_name: Option<String>,
         proxy_override: Option<ProxyOverride>,
     ) -> bool {
         let mut guard = self.links.write().unwrap_or_else(|p| p.into_inner());
         let ip_changed_or_new = if let Some(existing) = guard.get(&link_key) {
             let prev_ip = *existing.local_ip.read().unwrap_or_else(|p| p.into_inner());
             let prev_px = existing.proxy_override.read().unwrap_or_else(|p| p.into_inner()).clone();
-            existing.update_handle(net_handle, downstream_kbps, rtt_ms, local_ip);
+            let prev_handle = existing.net_handle.load(Ordering::Relaxed);
+            existing.update_handle(net_handle, downstream_kbps, rtt_ms, local_ip, interface_name.clone());
             *existing
                 .proxy_override
                 .write()
                 .unwrap_or_else(|p| p.into_inner()) = proxy_override.clone();
-            if prev_ip != local_ip || prev_px != proxy_override {
+            // A rotated Network handle or interface name makes cached clients
+            // (whose sockets are bound to the OLD network) stale - invalidate.
+            if prev_ip != local_ip || prev_px != proxy_override || prev_handle != net_handle {
                 self.invalidate_client_pool_for_link(&link_key);
             }
             false
@@ -306,6 +324,7 @@ impl TransportContext {
                     rtt_ms,
                     is_cellular,
                     local_ip,
+                    interface_name,
                     proxy_override,
                 )),
             );
@@ -337,6 +356,7 @@ impl TransportContext {
         &self,
         link_key: &str,
         local_ip: Option<IpAddr>,
+        interface_name: Option<&str>,
         proxy: Option<&ProxyOverride>,
         profile: &str,
         shard_id: usize,
@@ -348,8 +368,9 @@ impl TransportContext {
         let ip_tag = local_ip
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "any".to_string());
+        let iface_tag = interface_name.unwrap_or("any");
         let cache_key = format!(
-            "{link_key}|{ip_tag}|{px_tag}|{profile}|{}|s{effective_shard}",
+            "{link_key}|{ip_tag}|{iface_tag}|{px_tag}|{profile}|{}|s{effective_shard}",
             is_flag_enabled(FLAG_WREQ_EMULATION)
         );
 
@@ -363,7 +384,13 @@ impl TransportContext {
             return Ok(cached);
         }
 
-        let built = build_wreq_link_client(local_ip, proxy, profile, effective_shard > 0)?;
+        let built = build_wreq_link_client(
+            local_ip,
+            interface_name,
+            proxy,
+            profile,
+            effective_shard > 0,
+        )?;
         self.wreq_pool
             .write()
             .unwrap_or_else(|p| p.into_inner())
@@ -387,12 +414,32 @@ pub fn bind_fd_to_network(fd: i32, net_handle: u64) -> Result<(), i32> {
         return Ok(());
     }
     type SetSockNetFn = unsafe extern "C" fn(network: u64, fd: libc::c_int) -> libc::c_int;
-    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"android_setsocknetwork".as_ptr()) };
+    // `android_setsocknetwork` may live in libandroid_net.so, which is not
+    // always loaded into RTLD_DEFAULT. Try the global namespace first, then
+    // explicitly dlopen the library. Never silently claim success when the
+    // symbol is unavailable - callers must know the socket is unbound.
+    let mut sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"android_setsocknetwork".as_ptr()) };
+    let mut handle: *mut libc::c_void = std::ptr::null_mut();
     if sym.is_null() {
-        return Ok(());
+        handle = unsafe { libc::dlopen(c"libandroid_net.so".as_ptr(), libc::RTLD_LAZY) };
+        if !handle.is_null() {
+            sym = unsafe { libc::dlsym(handle, c"android_setsocknetwork".as_ptr()) };
+        }
+    }
+    if sym.is_null() {
+        record_diag(
+            "NET_BIND_UNAVAILABLE",
+            "android_setsocknetwork not found; socket is using default route",
+        );
+        return Err(-1);
     }
     let func: SetSockNetFn = unsafe { std::mem::transmute(sym) };
     let rc = unsafe { func(net_handle, fd) };
+    if !handle.is_null() {
+        // Keep the library loaded: closing it would invalidate the function
+        // pointer for future sockets. Process-lifetime leak is intentional.
+        std::mem::forget(handle);
+    }
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
@@ -657,6 +704,7 @@ async fn connect_socket_bound(addr: SocketAddr, net_handle: u64) -> std::io::Res
 /// Build a persistent sharded, link-isolated `wreq::Client` with keep-alive + independent sockets.
 pub fn build_wreq_link_client(
     local_ip: Option<IpAddr>,
+    interface_name: Option<&str>,
     proxy: Option<&ProxyOverride>,
     profile: &str,
     _separate_shard: bool,
@@ -678,6 +726,16 @@ pub fn build_wreq_link_client(
 
     if let Some(ip) = local_ip {
         builder = builder.local_address(ip);
+    }
+    // Device-level egress pinning: wreq's `.interface()` sets SO_BINDTODEVICE
+    // on Android/Linux so bulk range sockets leave via `wlan0` / `rmnet_dataX`
+    // rather than the default network. Combined with local_address(ip) this is
+    // the strongest binding available through wreq's public API (true netId
+    // binding would need a custom hyper connector calling android_setsocknetwork).
+    if let Some(name) = interface_name {
+        if !name.is_empty() {
+            builder = builder.interface(name.to_string());
+        }
     }
 
     if let Some(px) = proxy {

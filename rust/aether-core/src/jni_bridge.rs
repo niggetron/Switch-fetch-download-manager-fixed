@@ -96,6 +96,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeUpdateLi
     rtt_ms: jlong,
     is_cellular: jboolean,
     local_ip: JString,
+    interface_name: JString,
     proxy_host: JString,
     proxy_port: jint,
 ) {
@@ -106,6 +107,15 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeUpdateLi
         }
         let ip_str: String = env.get_string(&local_ip).map(Into::into).unwrap_or_default();
         let parsed_ip: Option<IpAddr> = ip_str.trim().parse().ok();
+        let iface: String = env
+            .get_string(&interface_name)
+            .map(Into::into)
+            .unwrap_or_default();
+        let iface_opt = if iface.trim().is_empty() {
+            None
+        } else {
+            Some(iface.trim().to_string())
+        };
         let px_host_raw: String = env.get_string(&proxy_host).map(Into::into).unwrap_or_default();
         let px_trimmed = px_host_raw.trim();
         let proxy = if !px_trimmed.is_empty() && proxy_port > 0 {
@@ -138,6 +148,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeUpdateLi
             rtt_ms.max(10) as u64,
             is_cellular == JNI_TRUE,
             parsed_ip,
+            iface_opt,
             proxy,
         );
         if is_new {
