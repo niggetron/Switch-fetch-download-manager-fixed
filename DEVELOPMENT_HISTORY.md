@@ -143,6 +143,28 @@ Shipped from this wave (all pushed and built on GitHub Actions):
 
 Still on the roadmap from this wave (documented, not yet implemented): true per-link `android_setsocknetwork` binding for Rust bulk sockets, UIDT jobs as the primary API-34+ transfer mechanism, `SO_MAX_PACING_RATE` pacing, ConnectivityDiagnosticsManager stall signals, Ghost-style acceleration stability gate, offset-sorted writer coalescing, and a trustworthy paired A/B benchmark harness.
 
+## 40-agent bug-hunt + acceleration campaign (C13–C32, W11–W30)
+
+Ten more waves of four agents (24 code + 16 research) with disjoint scopes and
+cross-agent notes. Highlights shipped from this campaign (all built on GitHub Actions):
+
+- Kotlin: short-read detection, representation-change checkpoint reset, console-free
+  0-byte write guard, sibling-call cancellation on terminal errors, monotonic telemetry
+  clocks, ZIP progress deltas, dedicated 128-lane dispatcher view, retry-after overflow
+  guard, Retry-After HTTP-date, network-flap classification, MediaStore dedup name.
+- Rust: random DNS TXID + response validation, SOCKS5 timeout, H3 0-RTT confirmation,
+  interface-rotation pool invalidation, CV-gated governor, per-slab BLAKE3 removal,
+  telemetry memfd idempotence, slab-pool backoff, NEON flag consolidation.
+- aria2-next: identity encoding, synchronized daemon start, exec-bit restore,
+  thread-safe log, 128-lane cap, per-task worker count.
+- Platform: FGS-start failure degrades safely, default-network onLost no longer kills
+  live links, benchmark harness wired to MainActivity, 16 KB alignment hardening queued.
+
+Research-only findings kept on the roadmap: UIDT jobs as primary API-34+ transfer,
+real per-link `android_setsocknetwork` binding, `SO_MAX_PACING_RATE`, ConnectivityDiagnosticsManager,
+endgame duplicate racing, offset-sorted writer coalescing, DoH fallback, and a
+trustworthy paired A/B harness.
+
 ## Bugs found but NOT yet fixed (carried forward)
 
 These were documented by the specialist audits and remain on the roadmap:

@@ -2,6 +2,35 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.8] - 40-Agent Whole-System Bug Hunt + Acceleration Campaign
+
+### Fixed
+- **Kotlin short-read detection**: a segment can no longer be marked COMMITTED on a
+  truncated body; representation changes now clear the stale bitfield/ledger.
+- **Validator-aware resume**: `reconcileBitfield` discards the Room checkpoint when the
+  probe validator changed, preventing same-length representation splicing.
+- **Terminal cancellation**: cancelled siblings are aborted immediately (no 30 s
+  per-lane drain); `CancellationException` is never rewritten as a link failure or FAILED.
+- **HTTP/Retry**: `Retry-After` overflow clamped; DNS TXID randomized; SOCKS5 handshake
+  and H3 0-RTT bounded; network-flap classification extended to timeouts/EOF.
+- **aria2-next**: gzip disabled on ranged requests (corruption + segmentation loss),
+  executable bit restored on cached binary, daemon start synchronized, stderr drain
+  uses the correct process, worker cap aligned to 128 and per-task count.
+- **Telemetry**: ZIP progress converted from cumulative to deltas; monotonic clocks for
+  all interval math; atomic flight-sample gating; memfd creation idempotent.
+- **Stability governor**: CV gate over 5 raw goodput samples on both engines suppresses
+  add/shed oscillation; only gain-driven steps are gated, safety sheds stay immediate.
+- **Throughput**: 128-worker budget restored; blocking range workers get a dedicated
+  dispatcher view; slab-pool accounting fixed; per-slab BLAKE3 removed from the writer
+  hot path (digests are unused); Rust slab acquire no longer busy-spins.
+- **Storage/UI**: 0-byte positional writes fail instead of spinning; MediaStore display
+  name uses the deduped path; default-network `onLost` no longer kills live links.
+
+### Added
+- Benchmark harness now consumes its intent extras; package auto-detected; iperf3
+  warm-up exclusion. CI surfaces Kotlin/Rust compile errors as annotations.
+- Raw DNS response validation (TXID/QR/rcode/source/question), random TXID.
+
 ## [9.2.7] - 22-Agent Whole-System Audit (Android 16 speed + integrity)
 
 ### Fixed
