@@ -596,15 +596,89 @@ async fn udp_dns_a_query(
 
     udp.send_to(&pkt, server).await?;
     let mut resp = [0u8; 512];
-    let (n, _) = tokio::time::timeout(Duration::from_millis(1200), udp.recv_from(&mut resp))
+    let (n, from) = tokio::time::timeout(Duration::from_millis(1200), udp.recv_from(&mut resp))
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "DNS UDP timeout"))??;
+
+    // P2 (C2 audit): validate the response before trusting any A record. Previously
+    // a fixed TXID plus no validation meant any on-path/rogue responder on the same
+    // Wi-Fi could inject an address, redirecting SOCKS/HTTP relay and H3 probe
+    // traffic and defeating per-link isolation. TLS still protects plain HTTPS, but
+    // the relay path connects by raw IP and would leak to the attacker.
+    if from != server
+        || n < 12
+        || resp[0] != 0xAE || resp[1] != 0x71 // echoed TXID
+        || (resp[2] & 0x80) == 0 // QR bit: must be a response
+        || (resp[3] & 0x0F) != 0 // rcode: NOERROR only
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DNS response failed header/source validation",
+        ));
+    }
+    let qdcount = u16::from_be_bytes([resp[4], resp[5]]);
+    if qdcount == 0 || !dns_question_matches_host(&resp[..n], &host) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DNS response question does not match query",
+        ));
+    }
 
     if let Some(ip) = parse_dns_first_a_record(&resp[..n]) {
         Ok(SocketAddr::new(IpAddr::V4(ip), port))
     } else {
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "No A record in DNS response"))
     }
+}
+
+/// Decode the first question's QNAME (honouring compression pointers) and compare
+/// it case-insensitively with the hostname we queried. Used to reject DNS responses
+/// that answer a different question than the one we asked.
+fn dns_question_matches_host(buf: &[u8], host: &str) -> bool {
+    if buf.len() < 13 {
+        return false;
+    }
+    let mut labels: Vec<&[u8]> = Vec::new();
+    let mut pos = 12usize;
+    let mut hops = 0usize;
+    loop {
+        if pos >= buf.len() || hops > 64 {
+            return false;
+        }
+        let len = buf[pos];
+        if len == 0 {
+            pos += 1;
+            break;
+        }
+        if (len & 0xC0) == 0xC0 {
+            if pos + 1 >= buf.len() {
+                return false;
+            }
+            let ptr = (((len & 0x3F) as usize) << 8) | buf[pos + 1] as usize;
+            if ptr < 12 {
+                return false; // compression pointers must point backwards into the message
+            }
+            pos = ptr;
+            hops += 1;
+            continue;
+        }
+        pos += 1;
+        if pos + len as usize > buf.len() {
+            return false;
+        }
+        labels.push(&buf[pos..pos + len as usize]);
+        pos += len as usize;
+    }
+    let queried: Vec<&str> = host
+        .trim_end_matches('.')
+        .split('.')
+        .filter(|s| !s.is_empty())
+        .collect();
+    labels.len() == queried.len()
+        && labels
+            .iter()
+            .zip(queried.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b.as_bytes()))
 }
 
 fn parse_dns_first_a_record(buf: &[u8]) -> Option<Ipv4Addr> {

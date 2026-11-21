@@ -130,11 +130,17 @@ impl ContiguousSha256Verifier {
                 {
                     let mut pos = read_from;
                     let mut rem = to_read;
+                    let mut hit_eof = false;
                     while rem > 0 {
                         let chunk = rem.min(scratch.len() as u64) as usize;
                         let n = rustix::io::pread(file.as_fd(), &mut scratch[..chunk], pos)
                             .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
                         if n == 0 {
+                            // P1 (C2 audit): a zero-byte pread means EOF/short file. The old
+                            // code `break`-ed and still advanced contiguous_offset to `end`,
+                            // claiming bytes were hashed when they were not. Fail loudly so
+                            // the transfer is reported incomplete rather than with a false hash.
+                            hit_eof = true;
                             break;
                         }
                         self.hasher.update(&scratch[..n]);
@@ -142,12 +148,51 @@ impl ContiguousSha256Verifier {
                         rem -= n as u64;
                     }
                     advise_dontneed(file, read_from, to_read);
+                    if hit_eof {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "short read while filling SHA-256 verification gap",
+                        ));
+                    }
                 }
             }
             self.contiguous_offset = end;
         }
         let _ = self.total_len;
         Ok(())
+    }
+
+    /// Finalize the digest, guaranteeing it covers the whole declared file even when
+    /// the contiguous frontier trails the set of `Done` segments.
+    ///
+    /// P1 (C2 audit): on resume, segments that finished beyond a frontier gap were
+    /// skipped by the workers (they are already `Done`) and never fed into this
+    /// verifier, so `finalize_hex()` returned the hash of only `[0, frontier)` while
+    /// the outcome still reported COMPLETED. When the frontier is short, re-hash the
+    /// entire file from a fresh digest — the only way to be sure every byte is counted
+    /// exactly once when out-of-order ranges may also be recorded.
+    pub fn finalize_hex_from_file(mut self, file: &File) -> io::Result<String> {
+        if self.total_len > 0 && self.contiguous_offset < self.total_len {
+            self.hasher = Sha256::new();
+            let mut scratch = vec![0u8; 256 * 1024];
+            let mut pos = 0u64;
+            while pos < self.total_len {
+                let chunk = (self.total_len - pos).min(scratch.len() as u64) as usize;
+                let n = rustix::io::pread(file.as_fd(), &mut scratch[..chunk], pos)
+                    .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
+                if n == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "file shorter than declared total during SHA-256 finalize",
+                    ));
+                }
+                self.hasher.update(&scratch[..n]);
+                pos += n as u64;
+            }
+            self.contiguous_offset = self.total_len;
+            self.completed_ranges.clear();
+        }
+        Ok(self.finalize_hex())
     }
 
     pub fn finalize_hex(self) -> String {

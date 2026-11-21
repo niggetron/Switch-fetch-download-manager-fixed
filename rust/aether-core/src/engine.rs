@@ -222,16 +222,34 @@ impl NativeEngine {
     }
 
     pub fn start_task(self: &Arc<Self>, cfg: NativeDownloadTaskConfig) {
-        let handle = Arc::new(TaskRuntimeHandle {
-            cancelled: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-            updated_urls: RwLock::new(cfg.urls.clone()),
-            hotplug_notify: Arc::new(Notify::new()),
-        });
-        self.tasks
+        // P2 (C2/C3/C7 audits): `start_task` must be idempotent per task id. A
+        // pause/resume or quota handoff could otherwise spawn a SECOND writer for
+        // the same output file + ledger (two coroutines both writing the same
+        // offsets), and a stale run's cleanup would delete the new run's handle.
+        // Cancel any live generation before replacing it.
+        if let Some(old) = self
+            .tasks
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(cfg.task_id.clone(), handle.clone());
+            .insert(cfg.task_id.clone(), Arc::new(TaskRuntimeHandle {
+                cancelled: AtomicBool::new(false),
+                paused: AtomicBool::new(false),
+                updated_urls: RwLock::new(cfg.urls.clone()),
+                hotplug_notify: Arc::new(Notify::new()),
+            }))
+        {
+            // Signal the previous generation to stop; the new handle is already
+            // installed so the old run's `Arc::ptr_eq` cleanup guard (below) is a no-op.
+            old.cancelled.store(true, Ordering::Release);
+            old.hotplug_notify.notify_waiters();
+        }
+        let handle = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&cfg.task_id)
+            .cloned()
+            .expect("just inserted");
 
         let engine = self.clone();
         self.runtime.spawn(async move {
@@ -665,11 +683,13 @@ impl NativeEngine {
                         *writer_err.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.to_string());
                         break;
                     }
+                    let mut local_verified_off = None;
                     if let Ok(verified_off) = writer_verifier
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .record_and_advance(job.offset, slice, Some(&writer_file))
                     {
+                        local_verified_off = Some(verified_off);
                         live_telemetry_page()
                             .contiguous_verified_offset
                             .store(verified_off, Ordering::Release);
@@ -677,10 +697,19 @@ impl NativeEngine {
                     {
                         let mut lg = writer_ledger.lock().unwrap_or_else(|p| p.into_inner());
                         let slab_idx = (job.offset / SLAB_BYTES as u64) as usize;
-                        lg.record_slab_digest(slab_idx, slab_b3);
-                        lg.contiguous_verified_offset = live_telemetry_page()
-                            .contiguous_verified_offset
-                            .load(Ordering::Relaxed);
+                        // P3 (C2 audit): only record full, aligned slab digests. A bisected
+                        // steal begins at a 4 KiB-aligned `mid`, so hashing its partial slab
+                        // would overwrite the victim's aligned digest in the same bucket.
+                        if job.offset % SLAB_BYTES as u64 == 0 && job.len as usize == SLAB_BYTES {
+                            lg.record_slab_digest(slab_idx, slab_b3);
+                        }
+                        // P2 (C2 audit): use this writer's LOCAL frontier directly. Reading
+                        // it back from the global telemetry page lets a concurrent task's
+                        // writer overwrite the slot between the store above and this load,
+                        // persisting the wrong frontier into our ledger on resume.
+                        if let Some(v) = local_verified_off {
+                            lg.contiguous_verified_offset = v;
+                        }
                         if job.mark_seg_done && job.seg_idx < lg.states.len() {
                             lg.states[job.seg_idx] = SegmentStatus::Done as u8;
                         }
@@ -698,9 +727,20 @@ impl NativeEngine {
                 if bytes_since_sync >= DISK_BATCH_FLUSH_BYTES
                     || last_sync.elapsed() >= DISK_BATCH_FLUSH_INTERVAL
                 {
-                    let _ = flush_fdatasync(&writer_file);
+                    // P2 (C2 audit): surface durability failures. Previously these errors
+                    // were discarded while segments were already recorded Done, so after a
+                    // crash the ledger claimed bytes were durable when they were not.
+                    if let Err(e) = flush_fdatasync(&writer_file) {
+                        *writer_err.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(format!("fdatasync failed: {e}"));
+                        break;
+                    }
                     let lg = writer_ledger.lock().unwrap_or_else(|p| p.into_inner());
-                    let _ = lg.persist(&writer_ldg_path, Some(&writer_file));
+                    if let Err(e) = lg.persist(&writer_ldg_path, Some(&writer_file)) {
+                        *writer_err.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(format!("ledger persist failed: {e}"));
+                        break;
+                    }
                     live_telemetry_page()
                         .consumer_seq
                         .fetch_add(1, Ordering::Relaxed);
@@ -1287,10 +1327,74 @@ impl NativeEngine {
                                             }
                                         }
 
+                                        // C6 audit: final flush of the sub-interval byte tail.
+                                        // `pending_bytes` is only published by the throttled
+                                        // ~120 ms telemetry block above. Short adaptive segments
+                                        // often complete faster than that, so their bytes were
+                                        // silently dropped from `w_tot`/per-link counters and
+                                        // the cellular quota was never enforced for them.
+                                        if pending_bytes > 0 {
+                                            let tot = w_tot
+                                                .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                + pending_bytes;
+                                            page.total_written.store(tot, Ordering::Release);
+                                            page.producer_seq.fetch_add(1, Ordering::Relaxed);
+                                            if picked_key.starts_with("cell:") {
+                                                let cb = cell_tot
+                                                    .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                    + pending_bytes;
+                                                page.cell_bytes_total.store(cb, Ordering::Release);
+                                                page.cellular_quota_remaining.store(
+                                                    max_cell.saturating_sub(cb),
+                                                    Ordering::Release,
+                                                );
+                                            } else if picked_key.starts_with("wifi2:") {
+                                                let w2b = wifi2_tot
+                                                    .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                    + pending_bytes;
+                                                page.wifi2_bytes_total.store(w2b, Ordering::Release);
+                                            } else if picked_key.starts_with("eth:")
+                                                || picked_key.starts_with("usb:")
+                                            {
+                                                let eb = usb_tot
+                                                    .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                    + pending_bytes;
+                                                page.eth_bytes_total.store(eb, Ordering::Release);
+                                            } else {
+                                                let wb = wifi_tot
+                                                    .fetch_add(pending_bytes, Ordering::Relaxed)
+                                                    + pending_bytes;
+                                                page.wifi_bytes_total.store(wb, Ordering::Release);
+                                            }
+                                            pending_bytes = 0;
+                                        }
+
                                         // A bisected segment has multiple writers. Only the
                                         // LAST one to finish may mark the fixed ledger segment
                                         // Done; otherwise a crash/resume would skip the other
                                         // half's unwritten bytes.
+                                        // P1 (C2 audit): never mark a segment Done on a short
+                                        // read. A server that closes the body early, or a 206
+                                        // with a bogus Content-Range, previously produced a
+                                        // zero-filled file reported as COMPLETED. Compare the
+                                        // bytes this writer actually stored against its FINAL
+                                        // dynamic range end (bisection shrinks `end_offset`
+                                        // for the victim, so `unit.end` is NOT authoritative).
+                                        let final_end =
+                                            active_state.end_offset.load(Ordering::Acquire);
+                                        let expected_len = if total_bytes > 0 {
+                                            final_end.saturating_sub(unit.start).saturating_add(1)
+                                        } else {
+                                            0 // unknown-length stream-to-EOF has no fixed count
+                                        };
+                                        let short_read =
+                                            expected_len > 0 && seg_bytes_written < expected_len;
+                                        if short_read && io_err.is_none() {
+                                            io_err = Some(format!(
+                                                "SHORT_READ: wrote {} of {} bytes for segment {}",
+                                                seg_bytes_written, expected_len, unit.seg_idx
+                                            ));
+                                        }
                                         let ok = io_err.is_none()
                                             && !h.cancelled.load(Ordering::Acquire)
                                             && !h.paused.load(Ordering::Acquire);
@@ -1444,10 +1548,31 @@ impl NativeEngine {
         }
         let _ = writer_handle.await;
 
-        let _ = flush_fdatasync(&data_file);
-        let final_sha = match Arc::try_unwrap(verifier) {
-            Ok(m) => m.into_inner().unwrap().finalize_hex(),
-            Err(_) => String::new(),
+        // P2 (C2 audit): surface the final durability failure too, so a truncated
+        // file cannot be reported COMPLETED with a hash of bytes never flushed.
+        if let Err(e) = flush_fdatasync(&data_file) {
+            *disk_io_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some(format!("final fdatasync failed: {e}"));
+        }
+        // P1 (C2 audit): finalize from the backing file so a resume frontier that
+        // trails the Done set still yields a SHA-256 over the entire declared file.
+        let finalize_res = match Arc::try_unwrap(verifier) {
+            Ok(m) => m
+                .into_inner()
+                .unwrap_or_else(|p| p.into_inner())
+                .finalize_hex_from_file(&data_file),
+            Err(v) => Ok(v
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .finalize_hex()),
+        };
+        let final_sha = match finalize_res {
+            Ok(h) => h,
+            Err(e) => {
+                *disk_io_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(format!("SHA-256 finalize failed: {e}"));
+                String::new()
+            }
         };
 
         let paused = handle.paused.load(Ordering::Acquire);
@@ -1461,6 +1586,16 @@ impl NativeEngine {
             let lg = ledger_arc.lock().unwrap_or_else(|p| p.into_inner());
             lg.states.is_empty() || lg.states.iter().all(|&s| s == SegmentStatus::Done as u8)
         };
+        // P1 defense-in-depth (C2 audit): a segment can now only be marked Done after its
+        // writer stored the full expected byte count, but also confirm the on-disk file
+        // actually reaches the declared total before reporting COMPLETED. Uses cheap
+        // metadata, not the throttled `written_total` counter (which flushes only every
+        // ~120 ms and would false-negative at completion).
+        let file_len_ok = total_bytes == 0
+            || data_file
+                .metadata()
+                .map(|m| m.len() >= total_bytes)
+                .unwrap_or(false);
         let last_err = disk_err
             .or_else(|| {
                 last_error_msg
@@ -1483,7 +1618,7 @@ impl NativeEngine {
                     last_err
                 },
             )
-        } else if all_segments_done && last_err.is_empty() {
+        } else if all_segments_done && file_len_ok && last_err.is_empty() {
             let _ = std::fs::remove_file(&ledger_path);
             ("COMPLETED", String::new())
         } else {
@@ -1497,25 +1632,38 @@ impl NativeEngine {
             )
         };
 
-        self.set_outcome(TaskOutcomeEvent {
-            task_id: task_id.clone(),
-            state: final_state.into(),
-            file_name,
-            mime_type,
-            downloaded_bytes: written_total.load(Ordering::Acquire),
-            total_bytes,
-            wifi_bytes: wifi_bytes_total.load(Ordering::Acquire),
-            wifi2_bytes: wifi2_bytes_total.load(Ordering::Acquire),
-            cell_bytes: cell_bytes_total.load(Ordering::Acquire),
-            usb_bytes: usb_bytes_total.load(Ordering::Acquire),
-            sha256_hex: final_sha,
-            ttfb_ms,
-            error_message: final_err,
-        });
-        self.tasks
+        // P2 (C2 audit): only the generation still installed in `tasks` may publish
+        // an outcome or remove the handle. A superseded run (cancel-then-restart under
+        // the same id) must not delete the new run's handle or overwrite its STREAMING
+        // outcome with a stale terminal one.
+        let is_current = self
+            .tasks
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(&task_id);
+            .get(&task_id)
+            .map(|h| Arc::ptr_eq(h, &handle))
+            .unwrap_or(false);
+        if is_current {
+            self.set_outcome(TaskOutcomeEvent {
+                task_id: task_id.clone(),
+                state: final_state.into(),
+                file_name,
+                mime_type,
+                downloaded_bytes: written_total.load(Ordering::Acquire),
+                total_bytes,
+                wifi_bytes: wifi_bytes_total.load(Ordering::Acquire),
+                wifi2_bytes: wifi2_bytes_total.load(Ordering::Acquire),
+                cell_bytes: cell_bytes_total.load(Ordering::Acquire),
+                usb_bytes: usb_bytes_total.load(Ordering::Acquire),
+                sha256_hex: final_sha,
+                ttfb_ms,
+                error_message: final_err,
+            });
+            self.tasks
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&task_id);
+        }
     }
 
     async fn execute_single_probe(
@@ -1754,6 +1902,11 @@ fn empty_outcome(task_id: String, state: &str, err: &str) -> TaskOutcomeEvent {
 
 fn parse_total_length(headers: &http::HeaderMap, status: u16) -> Option<u64> {
     if status == 206 {
+        // P2 (C2 audit): a 206 MUST get its entity size from Content-Range. If the
+        // total is unknown (`bytes 0-16383/*`) or the header is missing, fall through
+        // to the unknown-length path (`total_bytes = 0`, stream to EOF). Previously
+        // this fell back to Content-Length — which on a 206 is only the partial body
+        // length — producing a tiny bogus "total" and a silent truncated COMPLETED.
         if let Some(cr) = headers.get("content-range").and_then(|v| v.to_str().ok()) {
             if let Some(slash) = cr.rsplit('/').next() {
                 if let Ok(len) = slash.trim().parse::<u64>() {
@@ -1761,6 +1914,7 @@ fn parse_total_length(headers: &http::HeaderMap, status: u16) -> Option<u64> {
                 }
             }
         }
+        return None;
     }
     headers
         .get("content-length")

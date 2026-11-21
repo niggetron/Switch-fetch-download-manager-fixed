@@ -601,7 +601,17 @@ internal class KotlinOkHttpTransferRunner(
                                             }
                                             siblingCalls.forEach { runCatching { it.cancel() } }
                                             bitMutex.withLock {
-                                                if (SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED) {
+                                                val current = SegmentState.fromCode(bitChars[unit.segIndex])
+                                                // Only transition to PENDING (and increment the
+                                                // counter) from an ACTIVE state. Re-setting an
+                                                // already-PENDING segment double-counts it and
+                                                // makes parked workers spin forever in awaitAll.
+                                                // Bisected steals own no pending accounting.
+                                                if (!unit.isBisectedSteal &&
+                                                    current != SegmentState.PENDING &&
+                                                    current != SegmentState.COMMITTED &&
+                                                    current != SegmentState.VERIFIED
+                                                ) {
                                                     bitChars[unit.segIndex] = SegmentState.PENDING.code
                                                     pendingSegments.incrementAndGet()
                                                 }
@@ -1524,7 +1534,10 @@ internal class KotlinOkHttpTransferRunner(
             stale.forEach { key ->
                 clientPool.remove(key)?.let { old ->
                     runCatching { old.connectionPool.evictAll() }
-                    runCatching { old.dispatcher.executorService.shutdown() }
+                    // Every sharded client shares `sharedDispatcher`, so shutting down
+                    // `old.dispatcher.executorService` here would disable the executor for
+                    // ALL live clients, not just the evicted one (C1 audit). Dropping the
+                    // connection pool is sufficient; the dispatcher threads are shared.
                 }
             }
         }
