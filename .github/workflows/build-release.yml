@@ -212,7 +212,7 @@ jobs:
         run: |
           set -o pipefail
           gradle :app:testDebugUnitTest -PskipRustBuild=true --stacktrace 2>&1 | tee /tmp/android_test.log || {
-            python3 -c "d=open('/tmp/android_test.log').read()[-6000:]; print('::error::'+d.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))"
+            python3 -c "d=open('/tmp/android_test.log').read(); import re; lines=[l for l in d.splitlines() if l.startswith('e: ')]; print('::error::'+('\\n'.join(lines[:30]) if lines else d[:8000]).replace('%','%25').replace('\r','%0D').replace('\n','%0A'))"
             exit 1
           }
           gradle :app:lintVitalRelease -PskipRustBuild=true --stacktrace
