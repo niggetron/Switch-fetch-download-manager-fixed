@@ -126,7 +126,7 @@ jobs:
         run: |
           set -o pipefail
           cargo test --lib 2>&1 | tee /tmp/rust_test.log || {
-            grep -E '^(error|failures:|test result:|test [^ ]+ \.\.\. FAILED|thread .* panicked|---- |assertion|left:|right:|warning: unused|  = note)' /tmp/rust_test.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done
+            python3 -c "d=open('/tmp/rust_test.log').read()[-5000:]; print('::error::'+d.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))"
             exit 1
           }
 
