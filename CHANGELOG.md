@@ -2,6 +2,17 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.6] - aria2-next Forensic Overhaul (12-agent audit)
+
+### Added
+- `config/aria2-next.lock`: pinned aria2-next v3.1.1 version, exact size (19,512,136 B) and SHA-256 committed as the trust anchor. CI now verifies against this committed digest (fail-closed), and the app verifies the exact AArch64 ELF + SHA-256 at runtime before executing the binary.
+- `ValidatorRules.kt`: strong ETag (reject `W/`, quote bare tags) and strong Last-Modified (only when `Date >= LM + 60s`) adapted from aria2-next, shared by the Kotlin OkHttp engine.
+
+### Fixed
+- **aria2-next was completely broken**: the JSON-RPC token had a trailing colon (`token:<secret>:`), so EVERY authenticated call failed `Unauthorized`. `addUri` also used unknown/retired options (`enable-http2` was fatal, `disk-cache`/`uri-selector`/`optimize-concurrent-downloads`/`always-resume` were ignored). Both fixed — aria2-next can now actually start and complete downloads.
+- aria2 JSON-RPC: single mutation attempt (no duplicate downloads on a lost reply), monotonic request ids, server error code/message surfaced.
+- Kotlin OkHttp: segment GETs now carry `If-Range` with the normalized probe validator; HTTP 412/416 and 200-to-range are classified as representation changes that restart cleanly instead of splicing stale bytes.
+
 ## [9.2.5] - Rust Network Binding & Safe Bisection
 
 ### Fixed
