@@ -60,8 +60,8 @@ import kotlin.math.ceil
 private const val OKHTTP_STALL_WATCHDOG_MS = 4_500L
 private const val OKHTTP_MAX_SEGMENT_RETRIES = 5
 private const val OKHTTP_MIN_EXTENT_BYTES = 1L * 1024L * 1024L
-private const val OKHTTP_SLAB_FLUSH_THRESHOLD = 448 * 1024 // Coalesce ~448–512 KiB per pwrite
-private const val OKHTTP_TELEMETRY_THROTTLE_MS = 150L
+private const val OKHTTP_SLAB_FLUSH_THRESHOLD = 256 * 1024 // Slab size; flush on full slab
+private const val OKHTTP_TELEMETRY_THROTTLE_MS = 450L
 private const val OKHTTP_MIN_BISECT_BYTES = 2L * 1024L * 1024L
 private const val OKHTTP_STALL_BISECT_BYTES = 1L * 1024L * 1024L
 private const val OKHTTP_TCP_RCVBUF_BYTES = 4 * 1024 * 1024
@@ -91,6 +91,7 @@ internal class KotlinOkHttpTransferRunner(
     // segment is marked COMMITTED only when BOTH halves are actually on disk.
     private val bisectParts = ConcurrentHashMap<String, ConcurrentHashMap<Int, AtomicInteger>>()
     private val hostLimits = HostLimits()
+    private var pendingSegments = AtomicInteger(0)
 
     private val sharedDispatcher = Dispatcher().apply {
         maxRequests = 128
@@ -101,11 +102,15 @@ internal class KotlinOkHttpTransferRunner(
         .dispatcher(sharedDispatcher)
         .connectionPool(ConnectionPool(64, 5, TimeUnit.MINUTES))
         .protocols(listOf(Protocol.HTTP_1_1))
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(18, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
-        .retryOnConnectionFailure(true)
+        // We own retry/backoff (and Idempotency of Range requests). OkHttp's
+        // built-in retry would silently re-issue range requests behind our back.
+        .retryOnConnectionFailure(false)
         .build()
 
     // Persistent sharded warm client cache per (linkKey, netHandle, proxySpec, shardId)
@@ -325,6 +330,7 @@ internal class KotlinOkHttpTransferRunner(
         val startTimeMs = System.currentTimeMillis()
         val bitChars = bitfield.toCharArray()
         val bitMutex = Mutex()
+        pendingSegments = AtomicInteger(bitChars.count { it == SegmentState.PENDING.code })
         val committedBytes = AtomicLong(
             bitChars.indices.sumOf { idx ->
                 val state = SegmentState.fromCode(bitChars[idx])
@@ -487,10 +493,10 @@ internal class KotlinOkHttpTransferRunner(
                                 async(Dispatchers.IO) {
                                     while (isActive && failureReason == null) {
                                         if (workerId >= targetWorkers.get()) {
-                                            val hasMore = bitMutex.withLock {
-                                                bitChars.any { SegmentState.fromCode(it) == SegmentState.PENDING }
-                                            } || activeRanges.isNotEmpty()
-                                            if (!hasMore) break
+                                            // O(1) pending check instead of scanning the whole
+                                            // (possibly 16k-entry) bitfield every 150 ms under
+                                            // the global claim mutex.
+                                            if (pendingSegments.get() <= 0 && activeRanges.isEmpty()) break
                                             delay(150L)
                                             continue
                                         }
@@ -555,11 +561,29 @@ internal class KotlinOkHttpTransferRunner(
                                                 .incrementAndGet()
                                             val canRetry = attempts < OKHTTP_MAX_SEGMENT_RETRIES &&
                                                 (ex is LinkStallException || isNetworkFlap(ex) || ex is IOException)
-                                            if (!unit.isBisectedSteal) {
-                                                bitMutex.withLock {
-                                                    if (SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED) {
-                                                        bitChars[unit.segIndex] = SegmentState.PENDING.code
+                                            // Unwind bisection bookkeeping on failure so the
+                                            // segment can be re-claimed cleanly and does not
+                                            // stay permanently un-COMMITTABLE.
+                                            val partsForSeg = bisectParts[id]?.get(unit.segIndex)
+                                            if (partsForSeg != null) {
+                                                partsForSeg.decrementAndGet()
+                                                bisectParts[id]?.remove(unit.segIndex)
+                                                activeRanges.values.firstOrNull { it.segIndex == unit.segIndex }
+                                                    ?.let { range ->
+                                                        val s = unit.segIndex.toLong() * segSize
+                                                        val e = minOf(s + segSize - 1L, totalBytes - 1L)
+                                                        range.endOffset.set(e)
                                                     }
+                                            }
+                                            val otherHalfActive = activeRanges.values.any {
+                                                it !== null && it.segIndex == unit.segIndex
+                                            }
+                                            bitMutex.withLock {
+                                                if (!otherHalfActive &&
+                                                    SegmentState.fromCode(bitChars[unit.segIndex]) != SegmentState.COMMITTED
+                                                ) {
+                                                    bitChars[unit.segIndex] = SegmentState.PENDING.code
+                                                    pendingSegments.incrementAndGet()
                                                 }
                                             }
                                             if (canRetry) {
@@ -928,6 +952,7 @@ internal class KotlinOkHttpTransferRunner(
         val stalledOut = AtomicBoolean(false)
         val segStartNs = System.nanoTime()
         var segWritten = 0L
+        var chunkBytes = 0L
         var lastTelemetryPushMs = 0L
         var retryAfterMs = 0L
 
@@ -1000,23 +1025,27 @@ internal class KotlinOkHttpTransferRunner(
                         reservedRemaining -= dec
                         queueCounter?.addAndGet(-dec)
 
-                        liveWrittenBytes.addAndGet(read.toLong())
-                        when {
-                            isCell -> taskCellBytes.addAndGet(read.toLong())
-                            isWifi2 -> taskWifi2Bytes.addAndGet(read.toLong())
-                            isEth -> taskUsbBytes.addAndGet(read.toLong())
-                            else -> taskWifiBytes.addAndGet(read.toLong())
-                        }
-                        telemetryLedger.recordLinkBytesWritten(pinnedLinkKeyId, read.toLong())
+                        // Coalesce all per-chunk byte accounting into the slab flush.
+                        // Previously these 4-6 atomics ran per socket read (often 8-64 KiB),
+                        // which is thousands of contended RMWs/sec at 128 workers.
+                        chunkBytes += read.toLong()
 
-                        // Coalesce up to ~448-512 KiB per positional pwrite syscall!
-                        if (slab.position() >= OKHTTP_SLAB_FLUSH_THRESHOLD || !slab.hasRemaining() || offset > activeState.endOffset.get()) {
+                        if (!slab.hasRemaining() || offset > activeState.endOffset.get()) {
                             slab.flip()
                             dest.writeAt(slab, slabWriteOffset)
                             slabWriteOffset = offset
                             slab.clear()
                             syscallBatches.incrementAndGet()
                             telemetryLedger.recordSyscallWriteBatch()
+                            liveWrittenBytes.addAndGet(chunkBytes)
+                            when {
+                                isCell -> taskCellBytes.addAndGet(chunkBytes)
+                                isWifi2 -> taskWifi2Bytes.addAndGet(chunkBytes)
+                                isEth -> taskUsbBytes.addAndGet(chunkBytes)
+                                else -> taskWifiBytes.addAndGet(chunkBytes)
+                            }
+                            telemetryLedger.recordLinkBytesWritten(pinnedLinkKeyId, chunkBytes)
+                            chunkBytes = 0L
                         }
 
                         if (tickNow - lastTelemetryPushMs >= OKHTTP_TELEMETRY_THROTTLE_MS) {
@@ -1054,6 +1083,18 @@ internal class KotlinOkHttpTransferRunner(
                     syscallBatches.incrementAndGet()
                     telemetryLedger.recordSyscallWriteBatch()
                 }
+                // Account any tail bytes not covered by a full-slab flush.
+                if (chunkBytes > 0L) {
+                    liveWrittenBytes.addAndGet(chunkBytes)
+                    when {
+                        isCell -> taskCellBytes.addAndGet(chunkBytes)
+                        isWifi2 -> taskWifi2Bytes.addAndGet(chunkBytes)
+                        isEth -> taskUsbBytes.addAndGet(chunkBytes)
+                        else -> taskWifiBytes.addAndGet(chunkBytes)
+                    }
+                    telemetryLedger.recordLinkBytesWritten(pinnedLinkKeyId, chunkBytes)
+                    chunkBytes = 0L
+                }
 
                 val parts = bisectParts[taskId]?.get(unit.segIndex)
                 val fullyDone = if (parts == null) {
@@ -1063,6 +1104,7 @@ internal class KotlinOkHttpTransferRunner(
                 }
                 if (fullyDone) {
                     bisectParts[taskId]?.remove(unit.segIndex)
+                    segmentRetries.remove(unit.segIndex) // reset so a recovered segment isn't failed later
                     bitMutex.withLock {
                         if (unit.segIndex < bitChars.size) {
                             bitChars[unit.segIndex] = SegmentState.COMMITTED.code
@@ -1111,6 +1153,9 @@ internal class KotlinOkHttpTransferRunner(
             }
             if (retryAfterMs > 0) {
                 DiagnosticsCenter.log("RETRY_AFTER", "Server asked for ${retryAfterMs}ms backoff")
+                // Stop the watchdog before sleeping: otherwise a Retry-After longer
+                // than the stall threshold trips the breaker for a compliant server.
+                watchdogJob.cancel()
                 delay(retryAfterMs)
             }
             if (stalledOut.get()) throw LinkStallException(pinnedLinkKeyId ?: "unknown")
@@ -1425,7 +1470,23 @@ internal class KotlinOkHttpTransferRunner(
         }
 
         val effectiveShard = shardId.coerceIn(0, 15)
-        val cacheKey = "${endpoint?.linkKey?.id ?: "default"}|${endpoint?.netHandle ?: 0L}|$proxyType|$resolvedHost:$resolvedPort|s$effectiveShard"
+        val linkId = endpoint?.linkKey?.id ?: "default"
+        val handle = endpoint?.netHandle ?: 0L
+
+        // Evict clients bound to an older Network handle. OkHttpClients created via
+        // newBuilder() share the base pool, but we give each shard its own pool, so
+        // stale entries otherwise leak sockets/threads on every Wi-Fi/5G reconnect.
+        if (handle != 0L && (activeWorkersByLink[linkId]?.get() ?: 0) == 0) {
+            val stale = clientPool.keys.filter { it.startsWith("$linkId|") && !it.contains("|$handle|") }
+            stale.forEach { key ->
+                clientPool.remove(key)?.let { old ->
+                    runCatching { old.connectionPool().evictAll() }
+                    runCatching { old.dispatcher().executorService().shutdown() }
+                }
+            }
+        }
+
+        val cacheKey = "$linkId|$handle|$proxyType|$resolvedHost:$resolvedPort|s$effectiveShard"
         return clientPool.computeIfAbsent(cacheKey) {
             val builder = baseClient.newBuilder()
                 .connectionPool(ConnectionPool(64, 5, TimeUnit.MINUTES))
@@ -1718,7 +1779,11 @@ internal class KotlinOkHttpTransferRunner(
             while (true) {
                 val idx = cursor.getAndIncrement()
                 if (idx >= len) return@withLock -1
-                if (SegmentState.fromCode(bitChars[idx]) == SegmentState.PENDING) return@withLock idx
+                if (SegmentState.fromCode(bitChars[idx]) == SegmentState.PENDING) {
+                    pendingSegments.decrementAndGet()
+                    bitChars[idx] = SegmentState.ACTIVE_WIFI.code
+                    return@withLock idx
+                }
             }
             @Suppress("UNREACHABLE_CODE")
             -1
@@ -1730,7 +1795,8 @@ internal class KotlinOkHttpTransferRunner(
         else -> "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/134.0.6998.95 Mobile Safari/537.36"
     }
 
-    private fun isNetworkFlap(ex: Exception): Boolean = ex is UnknownHostException || ex is SocketException
+    private fun isNetworkFlap(ex: Exception): Boolean =
+        ex is UnknownHostException || ex is SocketException || ex is LinkStallException
 
     private fun guessMimeType(fileName: String): String {
         val ext = fileName.substringAfterLast('.', "").lowercase()
