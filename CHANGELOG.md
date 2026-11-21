@@ -2,6 +2,21 @@
 
 All notable changes to **AetherIO** are documented in this file. GitHub Releases are generated from the actual commits between tags (`Added`/`Fixed`/`Upgraded & Enhanced`/`Changed`/`Removed`) plus the comparison link — this file is the human-readable history.
 
+## [9.2.4] - Rust Engine Correctness, Architecture & Onboarding
+
+### Added
+- `ARCHITECTURE.md` and `CONTRIBUTING.md`: 5-minute onboarding path, ASCII data-flow diagram, canonical constants table, build/test commands and consistency checklist.
+- Module-level Rust docs for `scheduler`, `storage_and_telemetry` and `jni_bridge`; honest feature claims throughout.
+
+### Fixed
+- **CRITICAL:** resumed downloads now seed the sequential SHA-256 verifier from the ledger's contiguous frontier; a fully-resumed file no longer reports the hash of an empty string while marking COMPLETED.
+- JNI FFI-abort class: `new_string`/`new_long_array` no longer `.expect()` across the `extern "system"` boundary; worker and thermal caps raised from 64 to 128 to match Kotlin.
+- DNS race now drives all three resolvers to first success (`select_ok`) instead of returning on first completion (often an Err) then falling through to an unbound lookup.
+- AETHLDG2 slab digest granularity matched to the 256 KiB I/O slab (previously sized for 512 KiB and indexed at 256 KiB, dropping half the digests).
+
+### Upgraded & Enhanced
+- Scheduler/storage comment sweep: stale "24/64 lanes", "12 MiB slabs", "512 KiB slabs" and probe-only H3 claims corrected; JNI version banner now honest.
+
 ## [9.2.3] - OkHttp Engine Hot-Path Optimisation
 
 ### Upgraded & Enhanced
