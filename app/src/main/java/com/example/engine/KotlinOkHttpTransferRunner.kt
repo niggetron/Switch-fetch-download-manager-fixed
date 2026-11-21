@@ -1850,7 +1850,7 @@ internal class KotlinOkHttpTransferRunner(
     private class LinkStallException(linkKeyId: String) : IOException("Zero-byte stall >= ${OKHTTP_STALL_WATCHDOG_MS}ms on $linkKeyId")
     /** The representation changed mid-download (412/416/200-to-range); restart cleanly. */
     private class RepresentationChangedException(msg: String) : IOException(msg)
-    /** HTTP 416 with bytes */0 - the remote file is genuinely empty. */
+    /** HTTP 416 with an empty unsatisfied range - the remote file is genuinely empty. */
     private class EmptyFileException : IOException("Remote file is empty (bytes */0)")
     private data class PreflightProbeResult(val totalBytes: Long, val supportsRange: Boolean, val ttfbMs: Long, val eTag: String?, val suggestedFileName: String?)
     private data class VerifyResult(val fileSha256: String, val dedupMatchingBytes: Long)
