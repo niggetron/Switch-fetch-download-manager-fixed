@@ -349,14 +349,16 @@ pub fn preallocate_file(file: &File, total_len: u64) -> io::Result<()> {
     }
     #[cfg(unix)]
     {
-        check_free_space_for_fd(file.as_raw_fd(), total_len)?;
-        match fallocate(file.as_fd(), FallocateFlags::empty(), 0, total_len) {
-            Ok(()) => return Ok(()),
-            Err(err) if err.raw_os_error() == libc::ESPIPE => {
-                return Err(io::Error::from_raw_os_error(libc::ESPIPE));
-            }
-            Err(_) => {}
-        }
+        // T2: a full fallocate on a multi-GB file blocks one of the engine's
+        // only four Tokio worker threads before ANY range worker can connect —
+        // that is the "Rust starts late" symptom. Free space is already checked
+        // at enqueue on the Kotlin side; use a sparse set_len here so workers
+        // start immediately and blocks are materialized by pwrite as bytes land.
+        // Keep the ESPIPE guard for non-seekable descriptors (SAF/MediaStore fds).
+        // Sparse sizing: reserve the logical length only. Physical blocks are
+        // allocated by pwrite as bytes arrive, so the 4-thread Tokio runtime is
+        // not blocked for seconds on a multi-GB fallocate at startup.
+        let _ = check_free_space_for_fd(file.as_raw_fd(), total_len);
     }
     file.set_len(total_len)
 }

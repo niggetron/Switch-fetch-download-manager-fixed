@@ -411,12 +411,25 @@ impl NativeEngine {
             None
         };
         let page = live_telemetry_page();
-        page.total_written.store(0, Ordering::Release);
-        page.wifi_bytes_total.store(0, Ordering::Release);
-        page.wifi2_bytes_total.store(0, Ordering::Release);
-        page.cell_bytes_total.store(0, Ordering::Release);
-        page.eth_bytes_total.store(0, Ordering::Release);
-        page.anti_dip_rescues.store(0, Ordering::Release);
+        // T1: the memfd page is process-global. Resetting it on every task start
+        // zeroed another in-flight task's published cumulative byte counters, so
+        // Kotlin's per-link totals collapsed and speed figures became inconsistent.
+        // Reset only when this is the sole active task; otherwise leave the
+        // counters monotonic (per-task truth still comes from the outcome event).
+        let sole_task = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len()
+            <= 1;
+        if sole_task {
+            page.total_written.store(0, Ordering::Release);
+            page.wifi_bytes_total.store(0, Ordering::Release);
+            page.wifi2_bytes_total.store(0, Ordering::Release);
+            page.cell_bytes_total.store(0, Ordering::Release);
+            page.eth_bytes_total.store(0, Ordering::Release);
+            page.anti_dip_rescues.store(0, Ordering::Release);
+        }
         page.cellular_quota_remaining
             .store(cfg.max_cellular_bytes, Ordering::Release);
 
@@ -607,7 +620,13 @@ impl NativeEngine {
             })
             .sum();
 
-        page.total_written.store(resumed_bytes, Ordering::Release);
+        // T1: with concurrent tasks the global page must stay monotonic; adding
+        // avoids overwriting another task's published progress.
+        if sole_task {
+            page.total_written.store(resumed_bytes, Ordering::Release);
+        } else {
+            page.total_written.fetch_add(resumed_bytes, Ordering::Release);
+        }
         page.contiguous_verified_offset
             .store(ledger.contiguous_verified_offset, Ordering::Release);
 
@@ -1142,6 +1161,10 @@ impl NativeEngine {
                                     } else {
                                         let mut cursor = unit.start;
                                         let mut seg_bytes_written = 0u64;
+                                        // T1: segment-lifetime bytes at the last
+                                        // telemetry push — needed for a true per-tick
+                                        // rate instead of a lifetime average.
+                                        let mut last_pub_bytes = 0u64;
                                         let mut io_err: Option<String> = None;
                                         let mut last_ui_push = Instant::now();
                                         // Accumulate locally; publishing atomics per network
@@ -1277,9 +1300,17 @@ impl NativeEngine {
                                                     }
                                                     pending_bytes = 0;
                                                 }
-                                                let secs = seg_t0.elapsed().as_secs_f64().max(0.05);
-                                                let sample_bps =
-                                                    (seg_bytes_written as f64 / secs) as u64;
+                                                // T1: measure the RATE over this tick
+                                                // (delta bytes / delta time). The old
+                                                // seg_bytes_written/seg_t0.elapsed() was
+                                                // a lifetime average that lagged every
+                                                // speed collapse and made the UI's
+                                                // "instant" speed disagree with reality.
+                                                let secs = last_ui_push.elapsed().as_secs_f64().max(0.05);
+                                                let interval_bytes =
+                                                    seg_bytes_written.saturating_sub(last_pub_bytes);
+                                                last_pub_bytes = seg_bytes_written;
+                                                let sample_bps = (interval_bytes as f64 / secs) as u64;
                                                 // True EWMA (0.7 old / 0.3 new) so a speed
                                                 // collapse is visible to bisection within a
                                                 // few ticks. A lifetime average hid laggards.
@@ -1696,6 +1727,13 @@ impl NativeEngine {
         profile: &str,
         protocol_mode: &str,
     ) -> std::io::Result<(u16, http::HeaderMap, Vec<u8>)> {
+        // T2: only manifest URLs need a body sniff. For ordinary binary files a
+        // headers-only `bytes=0-0` probe is enough (Kotlin already does this), so
+        // workers can start one full 16 KiB transfer earlier.
+        let url_path = url.split('?').next().unwrap_or(url).to_ascii_lowercase();
+        let need_body = url_path.ends_with(".m3u8") || url_path.ends_with(".mpd");
+        let probe_range = if need_body { "bytes=0-16383" } else { "bytes=0-0" };
+        let probe_len: usize = if need_body { 16384 } else { 1 };
         if (protocol_mode == "h3_quic" || is_flag_enabled(FLAG_HTTP3_QUIC))
             && url.starts_with("https://")
         {
@@ -1708,8 +1746,8 @@ impl NativeEngine {
                 lkey,
                 handle,
                 url,
-                Some("bytes=0-16383"),
-                16384,
+                Some(probe_range),
+                probe_len,
             )
             .await
             {
@@ -1739,7 +1777,7 @@ impl NativeEngine {
             .get_or_build_wreq_client(lkey, local_ip, iface.as_deref(), proxy_ov.as_ref(), profile, 0)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-        let resp = send_wreq_range_request(&client, url, Some("bytes=0-16383"))
+        let resp = send_wreq_range_request(&client, url, Some(probe_range))
             .await
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
@@ -1748,14 +1786,18 @@ impl NativeEngine {
             .fetch_or(1 << 11, Ordering::AcqRel);
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
+        if !need_body {
+            // T2: drop the response without draining a body we never asked for.
+            return Ok((status, headers, Vec::new()));
+        }
         let mut snippet = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk_res) = stream.next().await {
             let chunk = chunk_res
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-            let take = chunk.len().min(16384usize.saturating_sub(snippet.len()));
+            let take = chunk.len().min(probe_len.saturating_sub(snippet.len()));
             snippet.extend_from_slice(&chunk[..take]);
-            if snippet.len() >= 16384 {
+            if snippet.len() >= probe_len {
                 break;
             }
         }

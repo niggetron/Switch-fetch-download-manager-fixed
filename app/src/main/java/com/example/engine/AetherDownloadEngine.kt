@@ -506,6 +506,14 @@ class AetherDownloadEngine(
         }
 
         val startMs = System.currentTimeMillis()
+        // T1: `taskOutcomeSafe.downloaded_bytes` is a CUMULATIVE task counter
+        // (seeded with resumed bytes by Rust). Dividing it by the time since this
+        // polling loop started produced absurd averages (e.g. 4.5 MB / 250 ms =
+        // 144 Mbps) while MAX came from a different, instantaneous signal — the
+        // reported "MAX 40 / AVG 143" contradiction. Track deltas instead.
+        var lastBytes = -1L
+        var lastTickMs = startMs
+        var smoothRateBps = 0L
         try {
             while (coroutineScopeIsActive()) {
                 delay(250L)
@@ -513,17 +521,36 @@ class AetherDownloadEngine(
                 val current = repository.getById(id) ?: break
                 val total = outcome.totalBytes.takeIf { it > 0L } ?: current.totalBytes
 
+                // T1: instantaneous rate from cumulative-byte deltas. Both AVG
+                // and MAX below are derived from this same signal, so AVG can
+                // never exceed MAX. The very first poll (no baseline yet) yields
+                // 0 and is skipped rather than producing an inflated number.
+                val nowTickMs = System.currentTimeMillis()
+                val deltaBytes = if (lastBytes >= 0L) (outcome.downloadedBytes - lastBytes).coerceAtLeast(0L) else 0L
+                val deltaMs = (nowTickMs - lastTickMs).coerceAtLeast(1L)
+                val instantRate = if (lastBytes >= 0L) (deltaBytes * 1000L) / deltaMs else 0L
+                lastBytes = outcome.downloadedBytes
+                lastTickMs = nowTickMs
+                if (instantRate > 0L) {
+                    smoothRateBps = if (smoothRateBps <= 0L) instantRate else (smoothRateBps * 7L + instantRate) / 8L
+                }
+
                 when (outcome.state) {
                     "COMPLETED" -> {
                         val resolvedFileName = outcome.fileName.ifBlank { current.fileName }
                         val resolvedMimeType = outcome.mimeType.ifBlank { current.mimeType }
                         val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
-                        val avgBps = (total.coerceAtLeast(outcome.downloadedBytes) * 1000L) / elapsed
+                        // T1: use the smoothed delta-rate series for AVG too, so
+                        // AVG and MAX come from the same estimator (no more
+                        // "AVG 143 / MAX 40" from mixing cumulative/session math).
+                        val avgBps = if (smoothRateBps > 0L) smoothRateBps
+                            else (outcome.downloadedBytes * 1000L) / (current.activeDownloadMs + elapsed).coerceAtLeast(1L)
+                        val truePeakBps = maxOf(current.peakSpeedBps, smoothRateBps, avgBps)
                         val hashOk = entity.expectedSha256.isNullOrBlank() ||
                             entity.expectedSha256.equals(outcome.sha256Hex, ignoreCase = true)
 
                         if (hashOk) {
-                            telemetryLedger.recordEnginePeak(ResolvedEngineBackend.RUST_LIBAETHER_CORE, avgBps)
+                            telemetryLedger.recordEnginePeak(ResolvedEngineBackend.RUST_LIBAETHER_CORE, truePeakBps)
                             mediaStoreTarget?.let { target ->
                                 StoragePlacementHelper.finalizePendingMediaStoreDownload(
                                     context = context,
@@ -559,7 +586,7 @@ class AetherDownloadEngine(
                                 actualSha256 = outcome.sha256Hex.ifBlank { current.actualSha256 },
                                 ttfbMs = outcome.ttfbMs.takeIf { it > 0L } ?: current.ttfbMs,
                                 avgSpeedBps = avgBps,
-                                peakSpeedBps = maxOf(current.peakSpeedBps, avgBps),
+                                peakSpeedBps = truePeakBps,
                                 activeDownloadMs = current.activeDownloadMs + elapsed,
                                 maxConnectionsUsed = maxOf(current.maxConnectionsUsed, current.workerCount),
                                 status = if (hashOk) DownloadStatus.COMPLETED.name else DownloadStatus.FAILED.name,
@@ -636,7 +663,11 @@ class AetherDownloadEngine(
                     }
                     else -> {
                         val elapsed = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
-                        val liveAvg = (outcome.downloadedBytes * 1000L) / elapsed
+                        // T1: use the delta-rate estimator for both AVG and MAX
+                        // (the global snapshot is process-wide and could absorb
+                        // another task's traffic into this task's MAX).
+                        val liveAvg = if (smoothRateBps > 0L) smoothRateBps
+                            else (outcome.downloadedBytes * 1000L) / (current.activeDownloadMs + elapsed).coerceAtLeast(1L)
                         val snap = telemetryLedger.latestSnapshot()
                         repository.update(
                             current.copy(
@@ -647,7 +678,7 @@ class AetherDownloadEngine(
                                 cellBytes = outcome.cellBytes,
                                 ttfbMs = outcome.ttfbMs.takeIf { it > 0L } ?: current.ttfbMs,
                                 avgSpeedBps = liveAvg,
-                                peakSpeedBps = maxOf(current.peakSpeedBps, snap.instantBps),
+                                peakSpeedBps = maxOf(current.peakSpeedBps, smoothRateBps),
                                 activeDownloadMs = elapsed,
                                 maxConnectionsUsed = maxOf(current.maxConnectionsUsed, snap.activeWorkers),
                                 status = DownloadStatus.STREAMING.name,

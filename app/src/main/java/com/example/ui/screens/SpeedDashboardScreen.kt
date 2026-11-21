@@ -262,11 +262,10 @@ fun SpeedDashboardScreen(
 }
 
 private fun formatSpeed(bps: Long, useMBps: Boolean): String =
-    if (useMBps) {
-        String.format("%.2f MB/s", bps / 8_000_000f)
-    } else {
-        String.format("%.1f Mbps", bps / 1_000_000f)
-    }
+    // T1: bps here is BYTES/sec (telemetry.instantBps etc). The old local
+    // formatter treated it as bits/sec, showing 8x-too-low speeds. Delegate
+    // to the single shared formatter used everywhere else.
+    com.example.util.Formatters.formatSpeed(bps, useMBps)
 
 private data class GeoInfo(
     val city: String,

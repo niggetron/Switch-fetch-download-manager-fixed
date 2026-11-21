@@ -212,7 +212,9 @@ fun TransfersScreen(
             downloadedBytes = done,
             status = DownloadStatus.STREAMING.name,
             routeMode = NetworkRouteMode.AUTO_MULTIPATH.name,
-            workerCount = telemetry.activeWorkers.coerceAtLeast(32),
+            // T3: do not fabricate a 32-worker floor in the simulated preview —
+            // it made real and simulated cards both look stuck at 32.
+            workerCount = telemetry.activeWorkers,
             destinationUri = "/storage/emulated/0/Download/AetherIO/AetherOS_v9.1_4K_HDR_Demo.mkv",
             isSafDestination = false,
             supportsRange = true,

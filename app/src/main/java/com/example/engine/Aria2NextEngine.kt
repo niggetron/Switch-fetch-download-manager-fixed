@@ -54,6 +54,17 @@ class Aria2NextEngine(
     var lastError: String = ""
         private set
 
+    // T2: cache the verified binary. `isAvailable()` is called for EVERY download
+    // during backend selection, and verifiedBinary() hashed all 19.5 MB on each
+    // call — a noticeable stall before Rust/Kotlin downloads too. Cache keyed by
+    // path + size + mtime so any real change re-triggers full verification.
+    @Volatile
+    private var cachedVerifiedFile: File? = null
+    @Volatile
+    private var cachedVerifiedSize: Long = -1L
+    @Volatile
+    private var cachedVerifiedMtime: Long = -1L
+
     fun isAvailable(): Boolean = binaryFile() != null
 
     companion object {
@@ -103,13 +114,24 @@ class Aria2NextEngine(
         // C15: also restore the executable bit on the CACHED path — a restore or a
         // crash between rename and chmod leaves a verified-but-unexecutable binary.
         val target = File(context.filesDir, "aria2-next")
+        val stamp = if (target.exists()) target.lastModified() else -1L
+        val size = if (target.exists()) target.length() else -1L
+        if (cachedVerifiedFile == target && cachedVerifiedSize == size &&
+            cachedVerifiedMtime == stamp && target.canExecute()
+        ) {
+            return target // cheap cached path — no full-file hash
+        }
         if (verifiedBinary(target)) {
             if (!target.canExecute() && !target.setExecutable(true, false)) {
                 lastError = "Cannot restore execute bit on cached aria2-next binary"
                 return null
             }
+            cachedVerifiedFile = target
+            cachedVerifiedSize = size
+            cachedVerifiedMtime = stamp
             return target
         }
+        cachedVerifiedFile = null
         return try {
             val tmp = File(context.filesDir, "aria2-next.tmp")
             context.assets.open("aria2-next").use { input ->
@@ -201,13 +223,17 @@ class Aria2NextEngine(
         }
         if (!spawned) return false
 
-        repeat(40) {
+        // T2: the old 40 x 200 ms (up to 8 s) blocking sleep delayed the first
+        // byte whenever the daemon was cold. A local process answers in tens of
+        // milliseconds; 30 x 50 ms keeps the same retry count budget while cutting
+        // the worst-case wait to ~1.5 s.
+        repeat(30) {
             if (rpcObject("aria2.getVersion", emptyList()) != null) {
                 lastError = ""
                 DiagnosticsCenter.log("ARIA2_READY", "aria2-next JSON-RPC online on 127.0.0.1:$rpcPort")
                 return true
             }
-            Thread.sleep(200)
+            Thread.sleep(50)
         }
         lastError = "aria2-next did not answer JSON-RPC on 127.0.0.1:$rpcPort. ${log.toString().takeLast(400)}"
         DiagnosticsCenter.log("ARIA2_ERROR", lastError)
@@ -349,6 +375,11 @@ class Aria2NextEngine(
 
         val startedAt = System.currentTimeMillis()
         var peak = 0L
+        // T1: completedLength is cumulative; dividing it by session time inflated
+        // AVG. Track a smoothed delta-rate and derive both AVG and MAX from it.
+        var lastDone = -1L
+        var lastTickMs = startedAt
+        var smoothRateBps = 0L
         val fields = JSONArray(
             listOf("status", "completedLength", "totalLength", "downloadSpeed", "errorMessage")
         )
@@ -360,9 +391,20 @@ class Aria2NextEngine(
                 val done = state.optLong("completedLength")
                 val total = state.optLong("totalLength").takeIf { it > 0L } ?: entity.totalBytes
                 val speed = state.optLong("downloadSpeed")
-                peak = maxOf(peak, speed)
                 val now = System.currentTimeMillis()
-                val avg = if (now > startedAt) (done * 1000L) / (now - startedAt) else 0L
+                val deltaBytes = if (lastDone >= 0L) (done - lastDone).coerceAtLeast(0L) else 0L
+                val deltaMs = (now - lastTickMs).coerceAtLeast(1L)
+                val instantRate = if (lastDone >= 0L) (deltaBytes * 1000L) / deltaMs else speed
+                lastDone = done
+                lastTickMs = now
+                if (instantRate > 0L) {
+                    smoothRateBps = if (smoothRateBps <= 0L) instantRate else (smoothRateBps * 7L + instantRate) / 8L
+                }
+                // aria2's own downloadSpeed is a real instantaneous rate — keep
+                // it for MAX; AVG now comes from the delta-rate series.
+                peak = maxOf(peak, speed, instantRate)
+                val avg = if (smoothRateBps > 0L) smoothRateBps
+                    else if (now > startedAt) (done * 1000L) / (now - startedAt) else 0L
 
                 repository.update(
                     entity.copy(
@@ -374,7 +416,7 @@ class Aria2NextEngine(
                         totalBytes = total,
                         downloadedBytes = done,
                         avgSpeedBps = avg,
-                        peakSpeedBps = maxOf(peak, avg),
+                        peakSpeedBps = maxOf(peak, avg), // peak now includes aria2's real speed + delta rate
                         errorMessage = state.optString("errorMessage").ifBlank { null },
                         updatedAt = now,
                         completedAt = if (status == "complete") now else entity.completedAt,

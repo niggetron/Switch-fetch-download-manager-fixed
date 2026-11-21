@@ -187,6 +187,7 @@ class TelemetryLedger(
         if (!headroomStarted.compareAndSet(false, true)) return
         if (Build.VERSION.SDK_INT < 36) return
         headroomJob = scope.launch {
+        try {
             val shm = runCatching { context.getSystemService("systemhealth") }.getOrNull() ?: return@launch
             val minIntervalMs = runCatching {
                 val m = shm.javaClass.getMethod("getCpuHeadroomMinIntervalMillis")
@@ -253,6 +254,14 @@ class TelemetryLedger(
                 }
                 delay(sleepMs)
             }
+        } finally {
+            // T3: a transient CRITICAL/forecast>=0.95 reading (or a monitor that
+            // stops on UnsupportedOperationException) previously left the global
+            // cap pinned at 32 forever. Restore the safe maximum on every exit.
+            AetherNativeBridge.setThermalWorkerCapSafe(
+                com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
+            )
+        }
         }
     }
 

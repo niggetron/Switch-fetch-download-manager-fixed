@@ -386,14 +386,21 @@ internal class KotlinOkHttpTransferRunner(
                 }
 
                 val activeLanes = LinkScheduler.filterLanesByMode(networkMonitor.state.value, entity.routeModeEnum)
-                val maxCap = when (settings.throughputProfile) {
-                    ThroughputProfile.TURBO_ANTI_DIP -> 96
-                    ThroughputProfile.MAX_MULTI_SOCKET -> 128
+                // T3: the profile-only ceiling ignored the user's worker-count
+                // slider (TURBO_ANTI_DIP pinned every download to 96 even when 128
+                // was selected). The setting is now the ceiling; the profile only
+                // shapes ramp/anti-dip behaviour and SUSTAINED still lowers the cap.
+                val profileCeiling = when (settings.throughputProfile) {
                     ThroughputProfile.SUSTAINED_ANTI_DIP -> 64
+                    else -> com.example.data.model.MAX_CONCURRENT_WORKERS_CAP
                 }
+                val maxCap = minOf(
+                    entity.workerCount.coerceIn(1, com.example.data.model.MAX_CONCURRENT_WORKERS_CAP),
+                    profileCeiling,
+                ).coerceAtLeast(1)
                 val downloadHost = runCatching { java.net.URL(entity.url).host }.getOrNull().orEmpty()
                 val learnedCap = downloadHost.takeIf { it.isNotBlank() }?.let { hostLimits.cap(it) }
-                val effectiveMaxCap = if (learnedCap != null) minOf(maxCap, learnedCap) else maxCap
+                val effectiveMaxCap = if (learnedCap != null) minOf(maxCap, learnedCap).coerceAtLeast(1) else maxCap
                 if (learnedCap != null) {
                     DiagnosticsCenter.log(
                         "HOST_LIMIT",
@@ -519,7 +526,10 @@ internal class KotlinOkHttpTransferRunner(
                                 segmentBitfield = snapshotBits,
                                 syscallWriteBatches = syscallBatches.get(),
                                 avgSpeedBps = liveAvgBps,
-                                peakSpeedBps = peakSpeed.get(),
+                                // T1: guarantee the same invariant as the other
+                                // engines — a lifetime AVG can otherwise exceed
+                                // a short-window MAX after an early burst.
+                                peakSpeedBps = maxOf(peakSpeed.get(), liveAvgBps),
                                 workerCount = targetWorkers.get(),
                                 activeDownloadMs = elapsedTotalMs,
                                 maxConnectionsUsed = maxOf(maxConnsObserved.get(), targetWorkers.get()),
