@@ -190,28 +190,54 @@ class TelemetryLedger(
             }.getOrDefault(1000L)
             val sleepMs = maxOf(minIntervalMs, 1000L)
 
+            // C3/W4 audit: the parameter class is android.os.CpuHeadroomParams, NOT
+            // android.os.health.CpuHeadroomParams. The wrong name made Class.forName
+            // throw and the whole monitor exit, so CPU-headroom-based worker scaling
+            // never ran. (With compileSdk 36 this could be a direct typed call; we keep
+            // reflection for consistent OEM compatibility handling.)
             val getHeadroomMethod = runCatching {
-                val paramsCls = Class.forName("android.os.health.CpuHeadroomParams")
+                val paramsCls = Class.forName("android.os.CpuHeadroomParams")
                 shm.javaClass.getMethod("getCpuHeadroom", paramsCls) to paramsCls
             }.getOrNull() ?: return@launch
+
+            // W4: proactive thermal forecast (API 30+). Google recommends polling
+            // getThermalHeadroom no more than once per 10s; the loop below ticks at
+            // >=1s, so sample every 10th tick. Float.NaN means "unsupported".
+            val getThermalHeadroom = runCatching {
+                powerManager.javaClass.getMethod("getThermalHeadroom", Int::class.javaPrimitiveType)
+            }.getOrNull()
+            var tick = 0
+            var thermalForecast = Float.NaN
 
             while (isActive) {
                 runCatching {
                     val value = getHeadroomMethod.first.invoke(shm, null) as? Number
-                    // getCpuHeadroom may return milliwatts, not a percentage. Only
-                    // trust values that are plausibly 0..100; otherwise fall back
-                    // to PowerManager's thermal status instead of blindly capping
-                    // the native engine at 16 workers.
+                    // SystemHealthManager.getCpuHeadroom returns 0..100 (NaN if the
+                    // sample is temporarily unavailable) — NOT milliwatts.
                     val raw = value?.toFloat()
                     val pct = raw?.takeIf { it in 0f..100f }?.toInt()
                     cachedCpuHeadroomPct = pct
+
+                    if (getThermalHeadroom != null && tick % 10 == 0) {
+                        thermalForecast = runCatching {
+                            (getThermalHeadroom.invoke(powerManager, 30) as? Number)?.toFloat()
+                        }.getOrNull() ?: Float.NaN
+                    }
+                    tick++
+
                     val thermal = powerManager.currentThermalStatus
+                    // Fast down / slow up with hysteresis: cuts apply on a single
+                    // signal, recovery only when all signals are clear. Forecast
+                    // bands (0.85 / 0.95) are Google's starting guidance. Never
+                    // exceed 128 — the restored public cap (C10).
                     val cap = when {
                         thermal >= PowerManager.THERMAL_STATUS_CRITICAL -> 32
                         thermal >= PowerManager.THERMAL_STATUS_SEVERE -> 48
-                        thermal >= PowerManager.THERMAL_STATUS_MODERATE -> 80
-                        pct != null && pct < 15 -> 48
-                        pct != null && pct < 35 -> 80
+                        thermalForecast >= 0.95f -> 32
+                        thermal >= PowerManager.THERMAL_STATUS_MODERATE -> 64
+                        thermalForecast >= 0.85f -> 64
+                        pct != null && pct < 15 -> 64
+                        pct != null && pct < 35 -> 96
                         else -> 128
                     }
                     AetherNativeBridge.setThermalWorkerCapSafe(cap)

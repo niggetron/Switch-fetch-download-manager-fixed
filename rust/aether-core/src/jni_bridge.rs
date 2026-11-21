@@ -9,6 +9,7 @@ use std::net::IpAddr;
 use std::os::fd::IntoRawFd;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::ptr::null_mut;
 use std::sync::{Arc, OnceLock};
 
 use jni::JNIEnv;
@@ -59,7 +60,12 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeEngineVe
 /// Pre-build the Tokio runtime / TLS pools / slab arena so the first real
 /// download does not pay the initialization cost and appear to "queue".
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeWarmup() {
+pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeWarmup(
+    _env: JNIEnv,
+    _class: JClass,
+) {
+    // C10 audit: JNI always passes (JNIEnv*, jclass) even for no-arg methods;
+    // omitting them is an ABI mismatch (harmless on AArch64 AAPCS64, UB in principle).
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let _ = engine();
     }));
@@ -338,7 +344,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeTaskOutc
     }))
     .unwrap_or_else(|_| "{}".to_string());
     env.new_string(json)
-        .expect("Failed to allocate outcome JSON string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }
 
 #[unsafe(no_mangle)]
@@ -349,7 +355,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeConnecti
     let json = catch_unwind(AssertUnwindSafe(|| engine().connections_json()))
         .unwrap_or_else(|_| "[]".to_string());
     env.new_string(json)
-        .expect("Failed to allocate connections JSON string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }
 
 #[unsafe(no_mangle)]
@@ -359,7 +365,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeDiagnost
 ) -> JString<'local> {
     let log = catch_unwind(AssertUnwindSafe(export_diagnostics_text)).unwrap_or_default();
     env.new_string(log)
-        .expect("Failed to allocate diagnostics log string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }
 
 #[unsafe(no_mangle)]
@@ -383,7 +389,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeStartAri
     }))
     .unwrap_or_default();
     env.new_string(secret)
-        .expect("Failed to allocate rpc secret string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }
 
 #[unsafe(no_mangle)]
@@ -416,7 +422,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSlabStat
 
     let arr = env
         .new_long_array(3)
-        .expect("Failed to allocate JNI long array");
+        .unwrap_or_else(|_| null_mut());
     let _ = env.set_long_array_region(&arr, 0, &stats);
     arr.into_raw()
 }
@@ -471,7 +477,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeBlake3He
     }))
     .unwrap_or_default();
     env.new_string(hex)
-        .expect("Failed to allocate BLAKE3 JNI string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }
 
 #[unsafe(no_mangle)]
@@ -486,5 +492,5 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSha256He
     }))
     .unwrap_or_default();
     env.new_string(hex)
-        .expect("Failed to allocate SHA-256 JNI string")
+        .unwrap_or_else(|_| unsafe { JString::from_raw(null_mut()) })
 }

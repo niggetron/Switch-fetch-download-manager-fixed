@@ -21,7 +21,8 @@ object ValidatorRules {
         return if (now - lm >= 60_000L) lastModified else null
     }
 
-    private fun parseHttpDate(value: String): Long? = try {
+    /** Parse an HTTP-date (RFC 9110) to epoch millis; null when unparseable. */
+    fun parseHttpDate(value: String): Long? = try {
         java.time.ZonedDateTime.parse(
             value,
             java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME,

@@ -1020,8 +1020,16 @@ internal class KotlinOkHttpTransferRunner(
                 activeState.lastProgressMs.set(System.currentTimeMillis())
                 if (resp.code == 429 || resp.code == 503) {
                     // aria2-next/MDM rule: Retry-After is a floor, never shortened.
-                    retryAfterMs = resp.header("Retry-After")?.toLongOrNull()
-                        ?.let { (it * 1000L).coerceIn(0L, 600_000L) } ?: 0L
+                    // RFC 9110 permits BOTH delta-seconds and an HTTP-date; the date
+                    // form was previously ignored (parsed as null -> 0 backoff), so a
+                    // compliant server's backoff was silently dropped and we hammered
+                    // it. Clamp the date delta to 0..600_000 to absorb clock skew.
+                    retryAfterMs = resp.header("Retry-After")?.let { raw ->
+                        raw.toLongOrNull()?.let { (it * 1000L).coerceIn(0L, 600_000L) }
+                            ?: ValidatorRules.parseHttpDate(raw)?.let { target ->
+                                (target - System.currentTimeMillis()).coerceIn(0L, 600_000L)
+                            }
+                    } ?: 0L
                 }
                 if (resp.code == 403 || resp.code == 410) throw HttpAuthExpiredException(resp.code)
                 if (resp.code == 412) throw RepresentationChangedException("HTTP 412 - If-Range validator no longer matches")
