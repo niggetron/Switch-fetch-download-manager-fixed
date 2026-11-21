@@ -1,3 +1,11 @@
+//! Storage substrate and shared telemetry for the Rust data plane.
+//!
+//! Owns: the fixed-size slab pool, the 4 KiB memfd telemetry page, and the
+//! pwrite / fdatasync / ENOSPC helpers. Does NOT decide which bytes to write.
+//! INVARIANT: `TelemetryPage` byte offsets are an ABI shared with Kotlin's
+//! `MemfdTelemetryReader` - never reorder fields. `probe_io_uring_supported()`
+//! always returns false (Android seccomp kills syscall 425).
+
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
@@ -189,14 +197,6 @@ impl Drop for SlabLeaseGuard {
         }
     }
 }
-
-//! Storage substrate and shared telemetry for the Rust data plane.
-//!
-//! Owns: the fixed-size slab pool, the 4 KiB memfd telemetry page, and the
-//! pwrite / fdatasync / ENOSPC helpers. Does NOT decide which bytes to write.
-//! INVARIANT: `TelemetryPage` byte offsets are an ABI shared with Kotlin's
-//! `MemfdTelemetryReader` - never reorder fields. `probe_io_uring_supported()`
-//! always returns false (Android seccomp kills syscall 425).
 
 /// Lock-free Semaphore-gated BoundedSlabPool (64 × 256 KiB = 16 MiB hard cap).
 pub struct BoundedSlabPool {
