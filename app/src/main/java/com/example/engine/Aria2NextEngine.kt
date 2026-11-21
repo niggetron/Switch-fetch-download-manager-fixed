@@ -56,15 +56,41 @@ class Aria2NextEngine(
 
     fun isAvailable(): Boolean = binaryFile() != null
 
-    private fun isElf(file: File): Boolean {
-        if (!file.exists() || file.length() < 4096L) return false
+    companion object {
+        // Pinned from config/aria2-next.lock (aria2-next v3.1.1 arm64 release).
+        // The upstream asset is mutable, so we verify the exact digest + size at
+        // runtime before executing it. A mismatch means we refuse to run.
+        private const val PINNED_SHA256 =
+            "8f06939d8786c06204a099a3b9ff19d76ce063f62781eed155d9f3dbf04ea973"
+        private const val PINNED_SIZE = 19_512_136L
+        // ELF64 little-endian AArch64 magic: class=2, data=1, machine=183 (0xB7)
+        private val AARCH64_MAGIC = byteArrayOf(
+            0x7f, 'E'.toByte(), 'L'.toByte(), 'F'.toByte(), 2, 1, 1, 0,
+        )
+    }
+
+    /** Verify exact size, SHA-256 and ELF64/AArch64 header before trusting the binary. */
+    private fun verifiedBinary(file: File): Boolean {
+        if (!file.exists() || file.length() != PINNED_SIZE) return false
         return try {
             FileInputStream(file).use { input ->
-                val magic = ByteArray(4)
-                if (input.read(magic) != 4) return false
-                magic[0] == 0x7f.toByte() && magic[1] == 'E'.toByte() &&
-                    magic[2] == 'L'.toByte() && magic[3] == 'F'.toByte()
+                val header = ByteArray(18)
+                if (input.read(header) != header.size) return false
+                // e_machine is at offset 0x12 (bytes 18..19); read 2 more.
+                val machine = ByteArray(2)
+                if (input.read(machine) != 2) return false
+                if (!AARCH64_MAGIC.contentEquals(header.copyOf(8))) return false
+                val em = (machine[0].toInt() and 0xFF) or ((machine[1].toInt() and 0xFF) shl 8)
+                if (em != 183) return false // EM_AARCH64
             }
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            FileInputStream(file).use { input ->
+                val buf = ByteArray(64 * 1024)
+                var n: Int
+                while (input.read(buf).also { n = it } > 0) digest.update(buf, 0, n)
+            }
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            actual.equals(PINNED_SHA256, ignoreCase = true)
         } catch (t: Throwable) {
             false
         }
@@ -72,20 +98,27 @@ class Aria2NextEngine(
 
     private fun binaryFile(): File? {
         val target = File(context.filesDir, "aria2-next")
-        if (isElf(target)) return target
+        if (verifiedBinary(target)) return target
         return try {
+            val tmp = File(context.filesDir, "aria2-next.tmp")
             context.assets.open("aria2-next").use { input ->
-                FileOutputStream(target).use { out -> input.copyTo(out) }
+                FileOutputStream(tmp).use { out -> input.copyTo(out) }
+            }
+            if (!verifiedBinary(tmp)) {
+                tmp.delete()
+                lastError = "Bundled aria2-next failed pinned digest/ABI verification"
+                DiagnosticsCenter.log("ARIA2_ERROR", lastError)
+                return null
+            }
+            if (target.exists()) target.delete()
+            if (!tmp.renameTo(target)) {
+                lastError = "Cannot install verified aria2-next binary"
+                DiagnosticsCenter.log("ARIA2_ERROR", lastError)
+                return null
             }
             target.setExecutable(true, false)
-            if (isElf(target)) {
-                lastError = ""
-                target
-            } else {
-                lastError = "Extracted aria2-next asset is not a valid ELF (${target.length()} bytes)"
-                DiagnosticsCenter.log("ARIA2_ERROR", lastError)
-                null
-            }
+            lastError = ""
+            target
         } catch (t: Throwable) {
             lastError = "Cannot extract aria2-next: ${t.message ?: t.javaClass.simpleName}"
             DiagnosticsCenter.log("ARIA2_ERROR", lastError)
@@ -104,6 +137,7 @@ class Aria2NextEngine(
     }
 
     private val daemonLog = StringBuilder()
+    private val rpcId = java.util.concurrent.atomic.AtomicLong(1)
 
     /** Starts the daemon quickly, then waits for RPC readiness OUTSIDE the lock. */
     private fun ensureDaemon(): Boolean {
@@ -162,26 +196,36 @@ class Aria2NextEngine(
 
     /** JSON-RPC results are not always objects: addUri returns a string GID. */
     private fun rpcResult(method: String, params: List<Any>): Any? {
-        val token = if (secret.isBlank()) "" else "token:$secret:"
-        val attempts = if (token.isEmpty()) listOf(params) else listOf(listOf(token) + params, params)
-        for (callParams in attempts) {
-            val body = JSONObject().apply {
-                put("jsonrpc", "2.0")
-                put("id", System.nanoTime() and 0x7FFFFFFF)
-                put("method", method)
-                put("params", JSONArray(callParams))
-            }.toString().toRequestBody("application/json".toMediaType())
-            try {
-                client.newCall(Request.Builder().url(rpcUrl).post(body).build()).execute().use { resp ->
-                    val payload = resp.body?.string().orEmpty()
-                    if (payload.isBlank()) return@use
-                    val obj = JSONObject(payload)
-                    if (obj.has("error") && !obj.isNull("error")) return@use
-                    if (obj.has("result")) return obj.opt("result")
+        // aria2-next strips the literal "token:" prefix and uses the remainder
+        // verbatim as the secret. A trailing colon (the old bug) made EVERY
+        // authenticated call fail with code 1 "Unauthorized", so readiness never
+        // succeeded and aria2 was permanently unavailable. Never retry mutations:
+        // a lost reply could otherwise add the download twice.
+        val callParams = if (secret.isBlank()) {
+            params
+        } else {
+            listOf("token:$secret") + params
+        }
+        val body = JSONObject().apply {
+            put("jsonrpc", "2.0")
+            put("id", rpcId.getAndIncrement())
+            put("method", method)
+            put("params", JSONArray(callParams))
+        }.toString().toRequestBody("application/json".toMediaType())
+        try {
+            client.newCall(Request.Builder().url(rpcUrl).post(body).build()).execute().use { resp ->
+                val payload = resp.body?.string().orEmpty()
+                if (payload.isBlank()) return null
+                val obj = JSONObject(payload)
+                if (!obj.isNull("error")) {
+                    val err = obj.getJSONObject("error")
+                    lastError = "${err.optInt("code")}: ${err.optString("message")}"
+                    return null
                 }
-            } catch (t: Throwable) {
-                lastError = "RPC $method: ${t.message ?: t.javaClass.simpleName}"
+                if (obj.has("result")) return obj.opt("result")
             }
+        } catch (t: Throwable) {
+            lastError = "RPC $method: ${t.message ?: t.javaClass.simpleName}"
         }
         return null
     }
@@ -194,29 +238,37 @@ class Aria2NextEngine(
     private fun addUri(entity: DownloadEntity, settings: EngineSettings): String? {
         val parent = runCatching { File(entity.destinationUri).parentFile?.absolutePath }.getOrNull()
             ?: repository.getDownloadsDirectory().absolutePath
+        // Options are validated STRICTLY by aria2-next: an unknown name (e.g.
+        // the old "enable-http2") makes the entire addUri call fail with code 1;
+        // retired names ("disk-cache", "uri-selector", "optimize-concurrent-downloads",
+        // "always-resume") are silently ignored. Only real Task-scope options below.
+        // HTTP/2 is decided internally: h1 for parallel ranges, 2TLS otherwise.
+        val lanes = settings.maxConcurrentWorkers.coerceIn(1, 256)
         val options = JSONObject().apply {
             put("out", entity.fileName)
             put("dir", parent)
             put("continue", "true")
-            put("split", settings.maxConcurrentWorkers.coerceIn(8, 128).toString())
-            put("max-connection-per-server", "128")
-            put("max-overall-upload-limit", "0")
-            put("min-split-size", "1M")
+            put("split", lanes.toString())
+            put("max-connection-per-server", lanes.toString())
+            put("min-split-size", "2M")
             put("connect-timeout", "15")
             put("timeout", "30")
             put("lowest-speed-limit", "0")
-            put("min-split-size", "1M")
             put("file-allocation", "none")
-            put("disk-cache", "64M")
-            put("enable-http2", "true")
-            put("uri-selector", "inorder")
-            put("optimize-concurrent-downloads", "true")
             put("retry-wait", "2")
             put("max-tries", "5")
-            put("always-resume", "true")
+            put("check-certificate", "true")
+            put("min-tls-version", "TLSv1.2")
+            put("enable-http-keep-alive", "true")
+            put("http-accept-gzip", "true")
             put("user-agent", "AetherIO-Omega/9.2 Android")
-            put("allow-overwrite", "true")
-            put("auto-file-renaming", "false")
+            put("allow-overwrite", "false")
+            put("auto-file-renaming", "true")
+            put("incomplete-suffix", ".part")
+            if (!entity.expectedSha256.isNullOrBlank()) {
+                put("check-integrity", "true")
+                put("checksum", "sha-256=${entity.expectedSha256}")
+            }
         }
         val result = rpcResult("aria2.addUri", listOf(JSONArray(entity.allUrls.ifEmpty { listOf(entity.url) }), options))
             ?: return null

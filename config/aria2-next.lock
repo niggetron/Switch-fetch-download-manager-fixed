@@ -1,0 +1,7 @@
+{
+  "version": "3.1.1",
+  "asset": "aria2-next-3.1.1-android-arm64",
+  "size": 19512136,
+  "sha256": "8f06939d8786c06204a099a3b9ff19d76ce063f62781eed155d9f3dbf04ea973",
+  "note": "Pinned from the aria2-next v3.1.1 GitHub Release (tag commit 1b8fb72). The published asset is mutable upstream (gh release upload --clobber), so this committed digest is the trust anchor: CI fails if the downloaded bytes differ, and the app verifies the extracted ELF against it at runtime. Refresh deliberately when upgrading."
+}

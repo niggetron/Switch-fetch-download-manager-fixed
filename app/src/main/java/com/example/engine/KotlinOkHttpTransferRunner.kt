@@ -550,6 +550,7 @@ internal class KotlinOkHttpTransferRunner(
                                                 activeWorkersByLink = activeWorkersByLink,
                                                 activeRanges = activeRanges,
                                                 callsForTask = callsForTask,
+                                                ifRange = probeResult.eTag,
                                             )
                                         } catch (ce: CancellationException) {
                                             throw ce
@@ -562,6 +563,14 @@ internal class KotlinOkHttpTransferRunner(
                                                 "SAF permission lost during write (EBADF)."
                                             break
                                         } catch (ex: Exception) {
+                                            // Representation changed (412/416/200-to-range):
+                                            // the checkpoint no longer applies. Fail the task
+                                            // cleanly so it restarts from byte 0 rather than
+                                            // splicing stale bytes into a new version.
+                                            if (ex is RepresentationChangedException || ex is EmptyFileException) {
+                                                failureReason = DownloadStatus.FAILED to ex.message.orEmpty()
+                                                break
+                                            }
                                             val attempts = segmentRetries
                                                 .computeIfAbsent(unit.segIndex) { AtomicInteger(0) }
                                                 .incrementAndGet()
@@ -868,6 +877,7 @@ internal class KotlinOkHttpTransferRunner(
         activeWorkersByLink: ConcurrentHashMap<String, AtomicInteger>,
         activeRanges: ConcurrentHashMap<String, ActiveOkHttpRange>,
         callsForTask: MutableList<Call>,
+        ifRange: String? = null,
     ): Boolean {
         val startOffset = unit.startOffset
         val initialEndOffset = unit.endOffset
@@ -983,6 +993,12 @@ internal class KotlinOkHttpTransferRunner(
                 .header("Range", "bytes=$startOffset-$initialEndOffset")
                 .header("Accept-Encoding", "identity")
                 .header("User-Agent", userAgentForProfile(browserProfile))
+                .apply {
+                    // If-Range makes a 206 conditional on the representation still
+                    // being the one we probed; a changed file returns 200 and we
+                    // restart cleanly instead of splicing stale bytes.
+                    if (!ifRange.isNullOrBlank()) header("If-Range", ifRange)
+                }
                 .build()
             val call = client.newCall(req)
             callRef = call
@@ -998,9 +1014,20 @@ internal class KotlinOkHttpTransferRunner(
                         ?.let { (it * 1000L).coerceIn(0L, 600_000L) } ?: 0L
                 }
                 if (resp.code == 403 || resp.code == 410) throw HttpAuthExpiredException(resp.code)
+                if (resp.code == 412) throw RepresentationChangedException("HTTP 412 - If-Range validator no longer matches")
+                if (resp.code == 416) {
+                    // bytes */0 means an empty file; otherwise the resume offset is
+                    // stale and the whole transfer must restart from zero.
+                    val empty = resp.header("Content-Range")?.contains("bytes */0", ignoreCase = true) == true
+                    if (empty) throw EmptyFileException()
+                    throw RepresentationChangedException("HTTP 416 - range not satisfiable")
+                }
                 // A server that answers a Range request with 200 sends the WHOLE
-                // file; writing it at `startOffset` silently corrupts the file.
+                // file; with If-Range this means the representation changed.
                 if (resp.code == 200 && req.header("Range") != null) {
+                    if (!ifRange.isNullOrBlank()) {
+                        throw RepresentationChangedException("Server ignored Range/If-Range (HTTP 200) - file may have changed")
+                    }
                     throw IOException("Server ignored Range (HTTP 200) on segment ${unit.segIndex}")
                 }
                 if (!resp.isSuccessful && resp.code != 206) throw IOException("HTTP ${resp.code} on segment ${unit.segIndex}")
@@ -1306,7 +1333,15 @@ internal class KotlinOkHttpTransferRunner(
             }
             val supportsRange = resp.code == 206 || resp.header("Accept-Ranges").equals("bytes", ignoreCase = true)
             val dispName = StoragePlacementHelper.parseContentDispositionFilename(resp.header("Content-Disposition"))
-            return PreflightProbeResult(total, supportsRange, ttfb, resp.header("ETag"), dispName)
+            // Normalize the validator exactly like aria2-next: reject W/ ETags,
+            // quote bare ones, and only accept Last-Modified when Date >= LM + 60s.
+            // Segment GETs will carry this value as If-Range.
+            val validator = ValidatorRules.preferred(
+                resp.header("ETag"),
+                resp.header("Last-Modified"),
+                resp.header("Date"),
+            )
+            return PreflightProbeResult(total, supportsRange, ttfb, validator, dispName)
         }
     }
 
@@ -1813,6 +1848,10 @@ internal class KotlinOkHttpTransferRunner(
 
     private class HttpAuthExpiredException(val code: Int) : IOException("HTTP $code")
     private class LinkStallException(linkKeyId: String) : IOException("Zero-byte stall >= ${OKHTTP_STALL_WATCHDOG_MS}ms on $linkKeyId")
+    /** The representation changed mid-download (412/416/200-to-range); restart cleanly. */
+    private class RepresentationChangedException(msg: String) : IOException(msg)
+    /** HTTP 416 with bytes */0 - the remote file is genuinely empty. */
+    private class EmptyFileException : IOException("Remote file is empty (bytes */0)")
     private data class PreflightProbeResult(val totalBytes: Long, val supportsRange: Boolean, val ttfbMs: Long, val eTag: String?, val suggestedFileName: String?)
     private data class VerifyResult(val fileSha256: String, val dedupMatchingBytes: Long)
 

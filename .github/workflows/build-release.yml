@@ -39,19 +39,31 @@ jobs:
 
       - name: Bundle aria2-next (Rayburst engine) arm64 executable
         run: |
+          set -euo pipefail
           mkdir -p app/src/main/assets
-          VER="3.1.1"
+          # Trust anchor is config/aria2-next.lock committed in THIS repo. The
+          # upstream release asset is mutable (gh release upload --clobber), so
+          # fetching the checksum from the same origin is not sufficient.
+          VER="$(python3 -c 'import json;print(json.load(open("config/aria2-next.lock"))["version"])')"
+          ASSET="$(python3 -c 'import json;print(json.load(open("config/aria2-next.lock"))["asset"])')"
+          EXPECT_SHA="$(python3 -c 'import json;print(json.load(open("config/aria2-next.lock"))["sha256"])')"
+          EXPECT_SIZE="$(python3 -c 'import json;print(json.load(open("config/aria2-next.lock"))["size"])')"
           BASE="https://github.com/AnInsomniacy/aria2-next/releases/download/v${VER}"
-          curl -fsSL -o app/src/main/assets/aria2-next \
-            "${BASE}/aria2-next-${VER}-android-arm64"
-          curl -fsSL -o /tmp/aria2-checksums.sha256 "${BASE}/aria2-next-${VER}-checksums.sha256"
-          EXPECTED="$(awk '$2 ~ /android-arm64$/ {print $1}' /tmp/aria2-checksums.sha256)"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o app/src/main/assets/aria2-next \
+            "${BASE}/${ASSET}"
           ACTUAL="$(sha256sum app/src/main/assets/aria2-next | awk '{print $1}')"
-          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error::aria2-next checksum mismatch"; exit 1
+          FILE_SIZE="$(stat -c%s app/src/main/assets/aria2-next)"
+          if [ "$EXPECT_SHA" != "$ACTUAL" ]; then
+            echo "::error::aria2-next checksum mismatch (expected $EXPECT_SHA, got $ACTUAL)"; exit 1
           fi
+          if [ "$EXPECT_SIZE" != "$FILE_SIZE" ]; then
+            echo "::error::aria2-next size mismatch (expected $EXPECT_SIZE, got $FILE_SIZE)"; exit 1
+          fi
+          # Structural sanity: must be a 64-bit AArch64 ELF linked only to Bionic.
+          file app/src/main/assets/aria2-next
+          readelf -h app/src/main/assets/aria2-next | grep -E 'Class:.*ELF64|Machine:.*AArch64'
           chmod +x app/src/main/assets/aria2-next
-          echo "Bundled aria2-next ${VER} (${ACTUAL})"
+          echo "Bundled aria2-next ${VER} (${ACTUAL}, ${FILE_SIZE} bytes) - pinned digest verified"
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
