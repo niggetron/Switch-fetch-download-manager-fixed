@@ -133,7 +133,26 @@ pub fn live_telemetry_page() -> &'static TelemetryPage {
 }
 
 #[cfg(unix)]
+static TELEMETRY_MEMFD: std::sync::OnceLock<OwnedFd> = std::sync::OnceLock::new();
+
+#[cfg(unix)]
+fn dup_owned(fd: &OwnedFd) -> io::Result<OwnedFd> {
+    let raw = unsafe { libc::dup(fd.as_raw_fd()) };
+    if raw < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+#[cfg(unix)]
 pub fn create_telemetry_memfd() -> io::Result<OwnedFd> {
+    // C10 audit: idempotent creation. Previously every call allocated a NEW memfd,
+    // zeroed a fresh TelemetryPage, swapped SHARED_PAGE_PTR and unmapped the old one
+    // — so a re-attach (or a second reader) silently reset all live counters and
+    // left the first reader frozen on the old page. Return a dup of the original fd.
+    if let Some(existing) = TELEMETRY_MEMFD.get() {
+        return dup_owned(existing);
+    }
     let fd = memfd_create(c"aether_telemetry", MemfdFlags::CLOEXEC)
         .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
     ftruncate(&fd, 4096).map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))?;
@@ -146,15 +165,21 @@ pub fn create_telemetry_memfd() -> io::Result<OwnedFd> {
             fd.as_raw_fd(),
             0,
         );
-        if mapped != libc::MAP_FAILED {
-            let page_ptr = mapped.cast::<TelemetryPage>();
-            page_ptr.write(TelemetryPage::new());
-            let prev = SHARED_PAGE_PTR.swap(page_ptr, Ordering::AcqRel);
-            if !prev.is_null() {
-                libc::munmap(prev.cast(), 4096);
-            }
+        if mapped == libc::MAP_FAILED {
+            // Propagate failure instead of returning an fd to an all-zero page
+            // while writes silently go to FALLBACK_PAGE.
+            return Err(io::Error::last_os_error());
+        }
+        let page_ptr = mapped.cast::<TelemetryPage>();
+        page_ptr.write(TelemetryPage::new());
+        let prev = SHARED_PAGE_PTR.swap(page_ptr, Ordering::AcqRel);
+        if !prev.is_null() {
+            libc::munmap(prev.cast(), 4096);
         }
     }
+    // Cache a dup so later attachments share this page.
+    let cached = dup_owned(&fd)?;
+    let _ = TELEMETRY_MEMFD.set(cached);
     Ok(fd)
 }
 
@@ -257,7 +282,11 @@ impl BoundedSlabPool {
             if let Some(g) = self.try_acquire_guard() {
                 return g;
             }
-            std::thread::yield_now();
+            // W13/C10: the old yield_now() spun a full core while all slabs were
+            // held (reachable from the blocking JNI copy path), adding CPU heat
+            // and scheduling jitter that depresses stable average throughput.
+            // A 1 ms park backs off without changing the semaphore semantics.
+            std::thread::park_timeout(std::time::Duration::from_millis(1));
         }
     }
 

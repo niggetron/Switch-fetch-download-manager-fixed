@@ -53,7 +53,11 @@ data class DownloadEntity(
     val streamType: String = "DIRECT",
 ) {
     val statusEnum: DownloadStatus
-        get() = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.QUEUED)
+        get() = runCatching { DownloadStatus.valueOf(status) }.getOrDefault(DownloadStatus.FAILED)
+        // C11 audit: an unrecognised status (downgrade, restored backup, DB
+        // corruption) must NOT silently become QUEUED, which is an ACTIVE state —
+        // that made reconcile/FGS/WorkManager treat a broken row as a live transfer.
+        // FAILED is inert and forces an explicit user action.
 
     val routeModeEnum: NetworkRouteMode
         get() = runCatching { NetworkRouteMode.valueOf(routeMode) }

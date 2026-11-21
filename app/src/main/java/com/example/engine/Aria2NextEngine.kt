@@ -96,9 +96,20 @@ class Aria2NextEngine(
         }
     }
 
+    @Synchronized
     private fun binaryFile(): File? {
+        // C15/C9: several callers reach this concurrently (UI availability check +
+        // IO daemon start). Without @Synchronized they race on aria2-next.tmp.
+        // C15: also restore the executable bit on the CACHED path — a restore or a
+        // crash between rename and chmod leaves a verified-but-unexecutable binary.
         val target = File(context.filesDir, "aria2-next")
-        if (verifiedBinary(target)) return target
+        if (verifiedBinary(target)) {
+            if (!target.canExecute() && !target.setExecutable(true, false)) {
+                lastError = "Cannot restore execute bit on cached aria2-next binary"
+                return null
+            }
+            return target
+        }
         return try {
             val tmp = File(context.filesDir, "aria2-next.tmp")
             context.assets.open("aria2-next").use { input ->
@@ -116,7 +127,10 @@ class Aria2NextEngine(
                 DiagnosticsCenter.log("ARIA2_ERROR", lastError)
                 return null
             }
-            target.setExecutable(true, false)
+            if (!target.setExecutable(true, false)) {
+                lastError = "Cannot set execute bit on aria2-next binary"
+                return null
+            }
             lastError = ""
             target
         } catch (t: Throwable) {
@@ -136,7 +150,9 @@ class Aria2NextEngine(
         }
     }
 
-    private val daemonLog = StringBuilder()
+    // C15: the drain thread appends while callers read takeLast() — StringBuffer
+    // is synchronized, avoiding corrupted/interleaved log text.
+    private val daemonLog = StringBuffer()
     private val rpcId = java.util.concurrent.atomic.AtomicLong(1)
 
     /** Starts the daemon quickly, then waits for RPC readiness OUTSIDE the lock. */
@@ -149,7 +165,7 @@ class Aria2NextEngine(
             val downloadDir = File(context.filesDir, "aria2-downloads").apply { mkdirs() }
             try {
                 process?.destroy()
-                process = ProcessBuilder(
+                val proc = ProcessBuilder(
                     binary.absolutePath,
                     "--enable-rpc=true",
                     "--rpc-listen-all=false",
@@ -161,9 +177,13 @@ class Aria2NextEngine(
                     "--summary-interval=0",
                     "--console-log-level=warn",
                 ).redirectErrorStream(true).start()
+                process = proc
                 Thread {
                     try {
-                        process?.inputStream?.bufferedReader()?.use { reader ->
+                        // C15: capture the LOCAL process. Reading the mutable field
+                        // here could attach to a later process after a restart, leaving
+                        // this one's pipe undrained (deadlock once its buffer fills).
+                        proc.inputStream.bufferedReader().use { reader ->
                             reader.forEachLine { line ->
                                 if (log.length < 8_000) log.append(line).append('\n')
                             }
@@ -260,7 +280,11 @@ class Aria2NextEngine(
             put("check-certificate", "true")
             put("min-tls-version", "TLSv1.2")
             put("enable-http-keep-alive", "true")
-            put("http-accept-gzip", "true")
+            // W14: gzip on ranged requests corrupts raw byte ranges (RFC 9110
+            // §14.1.2 ranges apply to the ENCODED bytes) and aria2 disables
+            // segmented download when a coding is seen — plus it double-inflates
+            // already-compressed .gz/APK payloads. Always identity.
+            put("http-accept-gzip", "false")
             put("user-agent", "AetherIO-Omega/9.2 Android")
             put("allow-overwrite", "false")
             put("auto-file-renaming", "true")

@@ -37,7 +37,9 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.EOFException
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.io.RandomAccessFile
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -136,6 +138,12 @@ internal class KotlinOkHttpTransferRunner(
         var entity = entityInput
         val id = entity.id
         val callsForTask = mutableListOf<Call>()
+        // C13: on a terminal failure, cancel every sibling call immediately.
+        // Otherwise jobs.awaitAll() waits for up to the 30 s read timeout on each
+        // of 128 lanes — a needless multi-second-to-minute failure drain.
+        fun cancelAllCallsForTask() {
+            synchronized(callsForTask) { callsForTask.forEach { runCatching { it.cancel() } } }
+        }
         activeCalls[id] = callsForTask
         val urls = entity.allUrls.ifEmpty { listOf(entity.url) }
         val useStagedSaf = entity.isSafDestination && settings.stagedSafPlacement
@@ -359,6 +367,10 @@ internal class KotlinOkHttpTransferRunner(
         val activeRanges = ConcurrentHashMap<String, ActiveOkHttpRange>()
         val segmentRetries = ConcurrentHashMap<Int, AtomicInteger>()
         var failureReason: Pair<DownloadStatus, String>? = null
+        // C13: a 412/416/200-to-range means the remote representation changed.
+        // The persisted checkpoint (bitfield + eTag + ledger) is then stale and
+        // must be discarded, otherwise a same-length new version splices old bytes.
+        var representationChanged = false
         val baseActiveMs = entity.activeDownloadMs
 
         try {
@@ -564,10 +576,12 @@ internal class KotlinOkHttpTransferRunner(
                                         } catch (authEx: HttpAuthExpiredException) {
                                             failureReason = DownloadStatus.TOKEN_EXPIRED_R2 to
                                                 "HTTP ${authEx.code} signed token expired. Update URL to resume."
+                                            cancelAllCallsForTask()
                                             break
                                         } catch (sec: SecurityException) {
                                             failureReason = DownloadStatus.SAF_EBADF_R5 to
                                                 "SAF permission lost during write (EBADF)."
+                                            cancelAllCallsForTask()
                                             break
                                         } catch (ex: Exception) {
                                             // Representation changed (412/416/200-to-range):
@@ -575,7 +589,9 @@ internal class KotlinOkHttpTransferRunner(
                                             // cleanly so it restarts from byte 0 rather than
                                             // splicing stale bytes into a new version.
                                             if (ex is RepresentationChangedException || ex is EmptyFileException) {
+                                                representationChanged = true
                                                 failureReason = DownloadStatus.FAILED to ex.message.orEmpty()
+                                                cancelAllCallsForTask()
                                                 break
                                             }
                                             val attempts = segmentRetries
@@ -628,11 +644,15 @@ internal class KotlinOkHttpTransferRunner(
                                                 delay(120L)
                                                 continue
                                             }
-                                            failureReason = if (isNetworkFlap(ex)) {
-                                                DownloadStatus.LINK_MIGRATE_R1 to
-                                                    "Radio link interrupted — awaiting Wi-Fi/5G/USB migration"
-                                            } else {
-                                                DownloadStatus.FAILED to (ex.message ?: "Segment ${unit.segIndex} failed")
+                                            // C13: a sibling cancelled by a terminal failure
+                                            // must not overwrite the more specific first reason.
+                                            if (failureReason == null) {
+                                                failureReason = if (isNetworkFlap(ex)) {
+                                                    DownloadStatus.LINK_MIGRATE_R1 to
+                                                        "Radio link interrupted — awaiting Wi-Fi/5G/USB migration"
+                                                } else {
+                                                    DownloadStatus.FAILED to (ex.message ?: "Segment ${unit.segIndex} failed")
+                                                }
                                             }
                                             break
                                         }
@@ -722,12 +742,21 @@ internal class KotlinOkHttpTransferRunner(
                     downloadedBytes = liveWrittenBytes.get(),
                     wifiBytes = taskWifiBytes.get(),
                     cellBytes = taskCellBytes.get(),
-                    segmentBitfield = String(bitChars),
+                    // C13: discard the stale checkpoint so the next run re-probes
+                    // and starts from byte 0 instead of splicing old bytes into a
+                    // same-length new representation.
+                    segmentBitfield = if (representationChanged) "" else String(bitChars),
+                    eTag = if (representationChanged) null else entity.eTag,
+                    totalBytes = if (representationChanged) -1L else entity.totalBytes,
                     syscallWriteBatches = syscallBatches.get(),
                     errorMessage = fail.second,
                     updatedAt = System.currentTimeMillis(),
                 )
             )
+            if (representationChanged) {
+                runCatching { ledgerFileProvider(id).delete() }
+                bisectParts.remove(id)
+            }
             return
         }
 
@@ -1032,7 +1061,9 @@ internal class KotlinOkHttpTransferRunner(
                     // compliant server's backoff was silently dropped and we hammered
                     // it. Clamp the date delta to 0..600_000 to absorb clock skew.
                     retryAfterMs = resp.header("Retry-After")?.let { raw ->
-                        raw.toLongOrNull()?.let { (it * 1000L).coerceIn(0L, 600_000L) }
+                        // C13: clamp BEFORE multiplying — a hostile/overflowing
+                        // delta would wrap negative and coerce to 0 (no backoff).
+                        raw.toLongOrNull()?.let { (it.coerceIn(0L, 600L) * 1000L) }
                             ?: ValidatorRules.parseHttpDate(raw)?.let { target ->
                                 (target - System.currentTimeMillis()).coerceIn(0L, 600_000L)
                             }
@@ -1136,6 +1167,18 @@ internal class KotlinOkHttpTransferRunner(
                     }
                 }
 
+                // C13 audit: a prematurely closed body makes Okio return -1, not
+                // throw. Without this check the partial bytes were flushed and the
+                // whole segment marked COMMITTED, producing a file with holes that
+                // was reported COMPLETED. Compare against the range this worker's
+                // HTTP request actually covers (bisection may shrink endOffset).
+                val finalExpectedEnd = minOf(initialEndOffset, activeState.endOffset.get())
+                if (offset <= finalExpectedEnd) {
+                    throw IOException(
+                        "Short read seg ${unit.segIndex}: got $offset of $finalExpectedEnd"
+                    )
+                }
+
                 // Flush remaining coalesced slab bytes
                 if (slab.position() > 0) {
                     slab.flip()
@@ -1185,13 +1228,15 @@ internal class KotlinOkHttpTransferRunner(
                 return true
             }
         } catch (ce: CancellationException) {
+            // C13: never convert a coroutine cancellation into an IOException —
+            // that escaped the worker's CancellationException catch, was classified
+            // as LINK_MIGRATE and re-entered run() on an already-cancelled task.
+            // Keep the breaker telemetry, then always rethrow the cancellation.
             if (stalledOut.get()) {
                 pinnedLinkKeyId?.let {
-                    // Non-immediate trip (requires 3 consecutive failures) kills Wi-Fi <-> 5G flip-flopping!
                     networkMonitor.breakerRegistry[it]?.recordFailureOrStall(immediateTrip = false)
                     networkMonitor.publishState()
                 }
-                throw LinkStallException(pinnedLinkKeyId ?: "unknown")
             }
             throw ce
         } catch (ex: Exception) {
@@ -1867,7 +1912,12 @@ internal class KotlinOkHttpTransferRunner(
     }
 
     private fun isNetworkFlap(ex: Exception): Boolean =
-        ex is UnknownHostException || ex is SocketException || ex is LinkStallException
+        ex is UnknownHostException || ex is SocketException || ex is LinkStallException ||
+            // C13: timeouts/EOF are radio handoffs, not terminal failures. The old
+            // mapping left them FAILED, which `resumeAll` does NOT auto-resume —
+            // a transient 30 s read timeout became a permanent manual-retry task.
+            // ProtocolException and verified TLS failures stay terminal.
+            ex is SocketTimeoutException || ex is InterruptedIOException || ex is EOFException
 
     private fun guessMimeType(fileName: String): String {
         val ext = fileName.substringAfterLast('.', "").lowercase()
@@ -1930,7 +1980,12 @@ internal class KotlinOkHttpTransferRunner(
         fun writeAt(buffer: ByteBuffer, offset: Long) {
             var pos = offset
             while (buffer.hasRemaining()) {
-                pos += channel.write(buffer, pos)
+                // C14: a 0-byte positional write (non-seekable SAF/FUSE fd) used to
+                // spin forever on an IO worker, so awaitAll() never returned and
+                // the whole transfer hung with no watchdog. Fail loudly instead.
+                val n = channel.write(buffer, pos)
+                if (n <= 0) throw IOException("Destination write made no progress at offset $pos")
+                pos += n
             }
         }
 
