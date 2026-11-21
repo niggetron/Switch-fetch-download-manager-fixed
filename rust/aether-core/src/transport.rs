@@ -647,8 +647,7 @@ fn dns_question_matches_host(buf: &[u8], host: &str) -> bool {
         }
         let len = buf[pos];
         if len == 0 {
-            pos += 1;
-            break;
+            break; // end of QNAME; trailing QTYPE/QCLASS are not needed
         }
         if (len & 0xC0) == 0xC0 {
             if pos + 1 >= buf.len() {

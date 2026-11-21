@@ -1366,7 +1366,8 @@ impl NativeEngine {
                                                     + pending_bytes;
                                                 page.wifi_bytes_total.store(wb, Ordering::Release);
                                             }
-                                            pending_bytes = 0;
+                                            // No reset needed: this is the final flush and the
+                                            // variable goes out of scope at the end of the range.
                                         }
 
                                         // A bisected segment has multiple writers. Only the

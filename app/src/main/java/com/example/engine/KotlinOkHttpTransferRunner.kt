@@ -382,6 +382,13 @@ internal class KotlinOkHttpTransferRunner(
                         "Using learned connection cap $learnedCap for $downloadHost",
                     )
                 }
+                // W8 audit: Dispatchers.IO defaults to max(64, cores) threads. With
+                // 128 blocking `call.execute()` workers, only ~64 made socket progress
+                // while the flusher (governor/Room/ledger) and 128 stall watchdogs
+                // competed for the same pool — depressing stable average speed.
+                // A dedicated view at the effective cap lets the governor actually
+                // reach 65-128 lanes without starving telemetry.
+                val laneDispatcher = Dispatchers.IO.limitedParallelism(effectiveMaxCap)
                 val baseDesired = LinkScheduler.effectiveWorkerCount(entity.workerCount, activeLanes.size)
                 val boostedDesired = if (settings.enableAutoSpeedUp || settings.throughputProfile != ThroughputProfile.SUSTAINED_ANTI_DIP) {
                     maxOf(baseDesired, (activeLanes.size * 6).coerceAtMost(effectiveMaxCap))
@@ -496,7 +503,7 @@ internal class KotlinOkHttpTransferRunner(
                             // Parked workers exit when there is no work left AND the
                             // governor target has not grown beyond their index.
                             val jobs = (0 until maxPoolCoroutines).map { workerId ->
-                                async(Dispatchers.IO) {
+                                async(laneDispatcher) {
                                     while (isActive && failureReason == null) {
                                         if (workerId >= targetWorkers.get()) {
                                             // O(1) pending check instead of scanning the whole

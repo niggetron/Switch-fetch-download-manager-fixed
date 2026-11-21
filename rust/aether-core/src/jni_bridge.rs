@@ -13,7 +13,7 @@ use std::ptr::null_mut;
 use std::sync::{Arc, OnceLock};
 
 use jni::JNIEnv;
-use jni::objects::{JByteArray, JClass, JString};
+use jni::objects::{JByteArray, JClass, JPrimitiveArray, JString};
 use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jlongArray};
 use tokio::sync::mpsc;
 
@@ -422,7 +422,7 @@ pub extern "system" fn Java_com_example_engine_AetherNativeBridge_nativeSlabStat
 
     let arr = env
         .new_long_array(3)
-        .unwrap_or_else(|_| null_mut());
+        .unwrap_or_else(|_| unsafe { JPrimitiveArray::from_raw(null_mut()) });
     let _ = env.set_long_array_region(&arr, 0, &stats);
     arr.into_raw()
 }
