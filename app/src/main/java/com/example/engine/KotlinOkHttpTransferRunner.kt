@@ -583,7 +583,7 @@ internal class KotlinOkHttpTransferRunner(
                                                 if (range.segIndex == unit.segIndex) {
                                                     range.endOffset.set(fullEnd)
                                                     synchronized(callsForTask) {
-                                                        callsForTask.firstOrNull { it.request().header("Range")?.contains("${range.startOffset}-") == true }?.let { siblingCalls.add(it) }
+                                                        callsForTask.firstOrNull { it.request().header("Range")?.contains("${range.start}-") == true }?.let { siblingCalls.add(it) }
                                                     }
                                                     true
                                                 } else false
